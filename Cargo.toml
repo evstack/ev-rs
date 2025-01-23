@@ -1,0 +1,26 @@
+[package]
+name = "evolve"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+[workspace]
+resolver = "2"
+
+members = [
+    "crates/sdk/core",
+]
+
+[workspace.package]
+repository = "https://github.com/01builders/evolve"
+license = "Apache-2.0"
+rust-version = "1.81.0"
+
+[workspace.dependencies]
+
+[workspace.lints.rust]
+missing_docs = "deny"
+
+[workspace.lints.rustdoc]
+broken_intra_doc_links = "deny"
+private_intra_doc_links = "deny"
