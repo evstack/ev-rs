@@ -1,16 +1,27 @@
 mod checkpoint;
 
 use crate::checkpoint::Checkpoint;
-use evolve_core::{AccountId, Context, InvokeRequest, InvokeResponse, Invoker, SdkResult};
+use evolve_core::well_known::ACCOUNT_IDENTIFIER_PREFIX;
+use evolve_core::{
+    AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait, SdkResult,
+};
 use evolve_server_core::{AccountsCodeStorage, ReadonlyKV, Transaction};
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
+#[derive(Debug)]
 pub enum Error {
     SdkError(evolve_core::ErrorCode),
     StorageError(),
 }
+
+impl From<evolve_core::ErrorCode> for Error {
+    fn from(code: evolve_core::ErrorCode) -> Self {
+        Error::SdkError(code)
+    }
+}
+
 pub type StfResult<T> = Result<T, Error>;
 
 pub struct TxResult {}
@@ -18,7 +29,7 @@ pub struct TxResult {}
 pub struct Stf<Tx>(PhantomData<Tx>);
 
 impl<T> Stf<T> {
-    fn apply_tx<'a, S: ReadonlyKV, A: AccountsCodeStorage<ExecCtx<'a, S>>, Tx: Transaction>(
+    fn apply_tx<'a, S: ReadonlyKV, A: AccountsCodeStorage<Invoker<'a, S>>, Tx: Transaction>(
         storage: &'a S,
         account_storage: &mut A,
         tx: &Tx,
@@ -26,7 +37,7 @@ impl<T> Stf<T> {
         todo!("impl")
     }
 
-    fn exec<'a, S: ReadonlyKV, A: AccountsCodeStorage<ExecCtx<'a, S>>>(
+    fn exec<'a, S: ReadonlyKV, A: AccountsCodeStorage<Invoker<'a, S>>>(
         storage: &'a S,
         account_storage: &mut A,
         from: AccountId,
@@ -40,32 +51,39 @@ impl<T> Stf<T> {
         let account = account_storage.get(&identifier).unwrap().unwrap();
 
         let checkpoint = Checkpoint::new(storage);
-
     }
 
-    fn get_account_code_identifier_for_account(
+    fn get_account_code_identifier_for_account<S: ReadonlyKV>(
         account: AccountId,
-        storage: impl ReadonlyKV,
+        storage: &S,
     ) -> Result<Option<String>, Error> {
-        todo!("impl")
+        let key = Self::get_account_code_identifier_for_account_key(account);
+        Ok(storage.get(&key)?.map(|e| String::from_utf8_lossy(&e).to_string())) // TODO
     }
 
-    fn set_account_code_identifier_for_account<S>(
+    fn set_account_code_identifier_for_account<S: ReadonlyKV>(
         account: AccountId,
         account_identifier: &'static str,
-        storage: Checkpoint<S>,
-    ) -> Result<String, Error> {
+        storage: &mut Checkpoint<S>,
+    ) -> Result<(), Error> {
+        let key = Self::get_account_code_identifier_for_account_key(account);
+        Ok(storage.set(&key, account_identifier.as_bytes().to_vec())?)
+    }
+
+    fn get_account_code_identifier_for_account_key(account: AccountId) -> Vec<u8> {
+        let mut key = vec![ACCOUNT_IDENTIFIER_PREFIX];
+        key.extend_from_slice(&account.as_bytes());
+        key
     }
 }
 
-struct ExecCtx<'a, S: ReadonlyKV> {
-    whoami: AccountId,
+struct Invoker<'a, S: ReadonlyKV> {
     gas_limit: u64,
     gas_used: RefCell<Rc<u64>>,
     storage: Checkpoint<'a, S>,
 }
 
-impl<S: ReadonlyKV> Invoker for ExecCtx<'_, S> {
+impl<S: ReadonlyKV> InvokerTrait for Invoker<'_, S> {
     fn do_query(
         &self,
         ctx: &Context,

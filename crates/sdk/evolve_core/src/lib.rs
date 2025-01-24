@@ -1,8 +1,16 @@
+pub mod well_known;
+
 pub type ErrorCode = u64;
 
 pub type SdkResult<T> = Result<T, ErrorCode>;
 
 pub struct AccountId(u128);
+
+impl AccountId {
+    pub fn as_bytes(&self) -> Vec<u8> {
+        self.0.to_be_bytes().into()
+    }
+}
 
 enum InnerMessage {
     OwnedBytes(Vec<u8>),

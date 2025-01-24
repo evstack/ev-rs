@@ -66,7 +66,7 @@ impl<'a, S: ReadonlyKV> Checkpoint<'a, S> {
         self.storage.get(key)
     }
 
-    pub(crate) fn set(&mut self, key: &[u8], value: &[u8]) -> Result<(), ErrorCode> {
+    pub(crate) fn set(&mut self, key: &[u8], value: Vec<u8>) -> Result<(), ErrorCode> {
         todo!("impl")
     }
 }
