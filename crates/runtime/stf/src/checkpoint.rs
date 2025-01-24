@@ -48,11 +48,11 @@ impl StateChange<'_> {
 pub(crate) struct Checkpoint<'a, S> {
     map: HashMap<Vec<u8>, Vec<u8>>,
     change_list: Vec<StateChange<'a>>,
-    storage: S,
+    storage: &'a S,
 }
 
-impl<S> Checkpoint<'_, S> {
-    pub(crate) fn new(storage: S) -> Self {
+impl<'a, S> Checkpoint<'a, S> {
+    pub(crate) fn new(storage: &'a S) -> Self {
         Self {
             storage,
             map: HashMap::new(),
@@ -61,7 +61,7 @@ impl<S> Checkpoint<'_, S> {
     }
 }
 
-impl<S: ReadonlyKV> Checkpoint<'_, S> {
+impl<'a, S: ReadonlyKV> Checkpoint<'a, S> {
     pub(crate) fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
         self.storage.get(key)
     }

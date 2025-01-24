@@ -19,11 +19,14 @@ pub struct Stf<Tx>(PhantomData<Tx>);
 
 impl<T> Stf<T> {
     fn apply_tx<'a, S: ReadonlyKV, A: AccountsCodeStorage<ExecCtx<'a, S>>, Tx: Transaction>(
+        storage: &'a S,
         account_storage: &mut A,
         tx: &Tx,
     ) -> SdkResult<()> {
         todo!("impl")
     }
+
+
 }
 
 struct ExecCtx<'a, S: ReadonlyKV> {
