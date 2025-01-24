@@ -1,4 +1,4 @@
-use evolve_core::{AccountCode, AccountId, Invoker, Message};
+use evolve_core::{AccountCode, AccountId, ErrorCode, Invoker, Message};
 
 pub trait Transaction {
     fn sender(&self) -> AccountId;
@@ -9,13 +9,11 @@ pub trait Transaction {
 
 /// Stores account code.
 pub trait AccountsCodeStorage<I: Invoker> {
-    type Error;
     /// TODO: this probably needs to consume gas, and should accept gas.
-    fn get(&self, identifier: &str) -> Result<Option<Box<dyn AccountCode<I>>>, Self::Error>;
-    fn add_account(&mut self, account_code: I) -> Result<(), Self::Error>;
+    fn get(&self, identifier: &str) -> Result<Option<Box<dyn AccountCode<I>>>, ErrorCode>;
+    fn add_account(&mut self, account_code: I) -> Result<(), ErrorCode>;
 }
 
 pub trait ReadonlyKV {
-    type Error;
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Self::Error>;
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode>;
 }

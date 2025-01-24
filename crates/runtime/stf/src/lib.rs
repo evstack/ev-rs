@@ -1,14 +1,15 @@
 mod checkpoint;
 
-use std::cell::RefCell;
+use crate::checkpoint::Checkpoint;
 use evolve_core::{AccountId, Context, InvokeRequest, InvokeResponse, Invoker, SdkResult};
 use evolve_server_core::{AccountsCodeStorage, ReadonlyKV, Transaction};
+use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
 
 pub enum Error {
     SdkError(evolve_core::ErrorCode),
-    StorageError()
+    StorageError(),
 }
 pub type StfResult<T> = Result<T, Error>;
 
@@ -17,7 +18,7 @@ pub struct TxResult {}
 pub struct Stf<Tx>(PhantomData<Tx>);
 
 impl<T> Stf<T> {
-    fn apply_tx<S: ReadonlyKV, A: AccountsCodeStorage<ExecCtx>, Tx: Transaction>(
+    fn apply_tx<'a, S: ReadonlyKV, A: AccountsCodeStorage<ExecCtx<'a, S>>, Tx: Transaction>(
         account_storage: &mut A,
         tx: &Tx,
     ) -> SdkResult<()> {
@@ -25,20 +26,21 @@ impl<T> Stf<T> {
     }
 }
 
-struct ExecCtx {
+struct ExecCtx<'a, S: ReadonlyKV> {
     whoami: AccountId,
     gas_limit: u64,
     gas_used: RefCell<Rc<u64>>,
+    storage: Checkpoint<'a, S>,
 }
 
-impl Invoker for ExecCtx {
+impl<S: ReadonlyKV> Invoker for ExecCtx<'_, S> {
     fn do_query(
         &self,
         ctx: &Context,
         to: AccountId,
         data: InvokeRequest,
     ) -> SdkResult<InvokeResponse> {
-        todo!()
+        todo!("impl")
     }
 
     fn do_exec(
