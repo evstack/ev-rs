@@ -35,7 +35,7 @@ impl<T> Stf<T> {
         A: AccountsCodeStorage<Invoker<'a, S>>,
         Tx: Transaction,
     >(
-        storage: &'a S,
+        checkpoint: &mut Checkpoint<S>,
         account_codes: &'a A,
         from: AccountId,
         identifier: &str,
@@ -43,8 +43,18 @@ impl<T> Stf<T> {
     ) -> Result<(AccountId, InvokeResponse), Error> {
         let request = InvokeRequest::new(0, Message::from(msg.into()));
         let account = account_codes.get(identifier).unwrap().unwrap();
+        let new_id = Self::next_account_number(checkpoint)?;
+        let mut ctx = Context::new(from, new_id);
 
-        todo!()
+        let mut invoker = Invoker {
+            gas_limit: 0,
+            gas_used: RefCell::new(Rc::new(0)),
+            storage: checkpoint,
+        };
+
+        Ok(account
+            .execute(&mut invoker, &mut ctx, request)
+            .map(|v| (new_id, v))?)
     }
     fn apply_tx<'a, S: ReadonlyKV, A: AccountsCodeStorage<Invoker<'a, S>>, Tx: Transaction>(
         storage: &'a S,
@@ -98,7 +108,7 @@ impl<T> Stf<T> {
         key
     }
 
-    fn next_account_number<S: ReadonlyKV>(storage: Checkpoint<S>) -> StfResult<AccountId> {
+    fn next_account_number<S: ReadonlyKV>(storage: &mut Checkpoint<S>) -> StfResult<AccountId> {
         let last = storage
             .get(&vec![ACCOUNT_IDENTIFIER_SINGLETON_PREFIX])?
             .unwrap_or(u16::MAX.to_be_bytes().into());
@@ -110,7 +120,7 @@ impl<T> Stf<T> {
 struct Invoker<'a, S: ReadonlyKV> {
     gas_limit: u64,
     gas_used: RefCell<Rc<u64>>,
-    storage: Checkpoint<'a, S>,
+    storage: &'a mut Checkpoint<'a, S>,
 }
 
 impl<S: ReadonlyKV> InvokerTrait for Invoker<'_, S> {
