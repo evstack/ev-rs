@@ -1,7 +1,9 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/sdk/evolve_core"
+    "crates/runtime/stf",
+    "crates/sdk/evolve_core",
+    "crates/sdk/evolve_server_core",
 ]
 
 [workspace.package]
