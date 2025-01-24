@@ -26,7 +26,36 @@ impl<T> Stf<T> {
         todo!("impl")
     }
 
+    fn exec<'a, S: ReadonlyKV, A: AccountsCodeStorage<ExecCtx<'a, S>>>(
+        storage: &'a S,
+        account_storage: &mut A,
+        from: AccountId,
+        to: AccountId,
+        req: InvokeRequest,
+    ) {
+        let identifier = Self::get_account_code_identifier_for_account(to, storage)
+            .unwrap()
+            .unwrap();
+        // load account
+        let account = account_storage.get(&identifier).unwrap().unwrap();
 
+        let checkpoint = Checkpoint::new(storage);
+
+    }
+
+    fn get_account_code_identifier_for_account(
+        account: AccountId,
+        storage: impl ReadonlyKV,
+    ) -> Result<Option<String>, Error> {
+        todo!("impl")
+    }
+
+    fn set_account_code_identifier_for_account<S>(
+        account: AccountId,
+        account_identifier: &'static str,
+        storage: Checkpoint<S>,
+    ) -> Result<String, Error> {
+    }
 }
 
 struct ExecCtx<'a, S: ReadonlyKV> {
