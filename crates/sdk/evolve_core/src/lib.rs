@@ -1,10 +1,22 @@
+use std::fmt::Error;
+
 pub mod well_known;
 
 pub type ErrorCode = u64;
+pub const ENCODING_ERROR: ErrorCode = 1;
 
 pub type SdkResult<T> = Result<T, ErrorCode>;
 
+#[derive(Copy, Clone)]
 pub struct AccountId(u128);
+
+impl TryFrom<&[u8]> for AccountId {
+    type Error = ErrorCode;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        Ok(AccountId(u128::from_be_bytes(value.try_into().map_err(|_| ENCODING_ERROR)?)))
+    }
+}
 
 impl AccountId {
     pub fn as_bytes(&self) -> Vec<u8> {
@@ -77,6 +89,12 @@ pub trait Invoker {
 pub struct Context {
     whoami: AccountId,
     sender: AccountId,
+}
+
+impl Context {
+    pub fn new(sender: AccountId, whoami: AccountId) -> Self {
+        Context { whoami, sender }
+    }
 }
 
 /// Defines some arbitrary code that can handle account execution logic.

@@ -1,9 +1,9 @@
 mod checkpoint;
 
 use crate::checkpoint::Checkpoint;
-use evolve_core::well_known::ACCOUNT_IDENTIFIER_PREFIX;
+use evolve_core::well_known::{ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_IDENTIFIER_SINGLETON_PREFIX};
 use evolve_core::{
-    AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait, SdkResult,
+    AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait, Message, SdkResult,
 };
 use evolve_server_core::{AccountsCodeStorage, ReadonlyKV, Transaction};
 use std::cell::RefCell;
@@ -29,9 +29,26 @@ pub struct TxResult {}
 pub struct Stf<Tx>(PhantomData<Tx>);
 
 impl<T> Stf<T> {
+    pub fn create_account<
+        'a,
+        S: ReadonlyKV,
+        A: AccountsCodeStorage<Invoker<'a, S>>,
+        Tx: Transaction,
+    >(
+        storage: &'a S,
+        account_codes: &'a A,
+        from: AccountId,
+        identifier: &str,
+        msg: impl Into<Message>,
+    ) -> Result<(AccountId, InvokeResponse), Error> {
+        let request = InvokeRequest::new(0, Message::from(msg.into()));
+        let account = account_codes.get(identifier).unwrap().unwrap();
+
+        todo!()
+    }
     fn apply_tx<'a, S: ReadonlyKV, A: AccountsCodeStorage<Invoker<'a, S>>, Tx: Transaction>(
         storage: &'a S,
-        account_storage: &mut A,
+        account_codes: &mut A,
         tx: &Tx,
     ) -> SdkResult<()> {
         todo!("impl")
@@ -51,6 +68,9 @@ impl<T> Stf<T> {
         let account = account_storage.get(&identifier).unwrap().unwrap();
 
         let checkpoint = Checkpoint::new(storage);
+
+        // make ctx
+        let ctx = Context::new(from, to);
     }
 
     fn get_account_code_identifier_for_account<S: ReadonlyKV>(
@@ -58,7 +78,9 @@ impl<T> Stf<T> {
         storage: &S,
     ) -> Result<Option<String>, Error> {
         let key = Self::get_account_code_identifier_for_account_key(account);
-        Ok(storage.get(&key)?.map(|e| String::from_utf8_lossy(&e).to_string())) // TODO
+        Ok(storage
+            .get(&key)?
+            .map(|e| String::from_utf8_lossy(&e).to_string())) // TODO
     }
 
     fn set_account_code_identifier_for_account<S: ReadonlyKV>(
@@ -74,6 +96,14 @@ impl<T> Stf<T> {
         let mut key = vec![ACCOUNT_IDENTIFIER_PREFIX];
         key.extend_from_slice(&account.as_bytes());
         key
+    }
+
+    fn next_account_number<S: ReadonlyKV>(storage: Checkpoint<S>) -> StfResult<AccountId> {
+        let last = storage
+            .get(&vec![ACCOUNT_IDENTIFIER_SINGLETON_PREFIX])?
+            .unwrap_or(u16::MAX.to_be_bytes().into());
+
+        Ok(AccountId::try_from(last.as_slice())?)
     }
 }
 
