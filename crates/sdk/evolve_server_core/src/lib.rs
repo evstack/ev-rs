@@ -14,3 +14,8 @@ pub trait AccountsCodeStorage<I: Invoker> {
     fn get(&self, identifier: &str) -> Result<Option<Box<dyn AccountCode<I>>>, Self::Error>;
     fn add_account(&mut self, account_code: I) -> Result<(), Self::Error>;
 }
+
+pub trait ReadonlyKV {
+    type Error;
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, Self::Error>;
+}
