@@ -6,7 +6,7 @@ use evolve_core::well_known::{
 };
 use evolve_core::{
     AccountCode, AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait,
-    Message, SdkResult,
+    Message,
 };
 use evolve_server_core::{AccountsCodeStorage, ReadonlyKV, Transaction};
 use std::cell::RefCell;
@@ -73,7 +73,7 @@ impl<T> Stf<T> {
         storage: &'a S,
         account_codes: &mut A,
         tx: &Tx,
-    ) -> SdkResult<()> {
+    ) -> StfResult<()> {
         todo!("impl")
     }
 
@@ -90,9 +90,9 @@ impl<T> Stf<T> {
 
 struct Invoker<'a, S, A> {
     gas_limit: u64,
-    gas_used: RefCell<Rc<u64>>,
-    storage: RefCell<Rc<Checkpoint<'a, S>>>,
-    account_codes_storage: RefCell<Rc<&'a mut A>>,
+    gas_used: Rc<RefCell<u64>>,
+    storage: Rc<RefCell<Checkpoint<'a, S>>>,
+    account_codes_storage: Rc<RefCell<&'a mut A>>,
 }
 
 impl<S: ReadonlyKV, A: AccountsCodeStorage<Self>> InvokerTrait for Invoker<'_, S, A> {
@@ -101,8 +101,8 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage<Self>> InvokerTrait for Invoker<'_, S
         _ctx: &Context,
         to: AccountId,
         data: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
-        let account = self.load_account(to)?;
+    ) -> evolve_core::SdkResult<InvokeResponse> {
+        let account = self.load_account(to).unwrap();
         let ctx = Context::new(RUNTIME_ACCOUNT_ID, to);
 
         let invoker = Invoker {
@@ -122,7 +122,7 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage<Self>> InvokerTrait for Invoker<'_, S
         ctx: &mut Context,
         to: AccountId,
         data: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
+    ) -> evolve_core::SdkResult<InvokeResponse> {
         // TODO: use checkpoint to revert on error
         todo!()
     }
@@ -132,13 +132,13 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
     fn new(gas_limit: u64, storage: Checkpoint<'a, S>, account_code_storage: &'a mut A) -> Self {
         Self {
             gas_limit,
-            gas_used: RefCell::new(Rc::new(0)),
-            storage: RefCell::new(Rc::new(storage)),
-            account_codes_storage: RefCell::new(Rc::new(account_code_storage)),
+            gas_used: Rc::new(RefCell::new(0)),
+            storage: Rc::new(RefCell::new(storage)),
+            account_codes_storage: Rc::new(RefCell::new(account_code_storage)),
         }
     }
 
-    fn load_account(&self, account: AccountId) -> SdkResult<Box<&dyn AccountCode<Self>>> {
+    fn load_account(&self, account: AccountId) -> StfResult<Box<&dyn AccountCode<Self>>> {
         let code_id = self
             .get_account_code_identifier_for_account(account)?
             .unwrap(); // TODO unwrap
@@ -153,7 +153,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
             .storage
             .borrow()
             .get(&key)?
-            .map(|e| String::from_utf8_lossy(&e).to_string())?) // TODO
+            .map(|e| String::from_utf8_lossy(&e).to_string())) // TODO
     }
 
     fn set_account_code_identifier_for_account(
