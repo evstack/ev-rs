@@ -72,19 +72,22 @@ pub struct Context {
 }
 
 /// Defines some arbitrary code that can handle account execution logic.
-pub trait AccountCode {
+pub trait AccountCode<I: Invoker> {
     fn identifier(&self) -> &'static str;
-    fn init<I: Invoker>(
+    fn init(
+        &self,
         invoker: &mut I,
         ctx: &mut Context,
         request: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
-    fn execute<I: Invoker>(
+    fn execute(
+        &self,
         invoker: &mut I,
         ctx: &mut Context,
         request: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
-    fn query<I: Invoker>(
+    fn query(
+        &self,
         invoker: &I,
         ctx: &Context,
         request: InvokeRequest,

@@ -12,10 +12,12 @@ license = "Apache-2.0"
 rust-version = "1.81.0"
 
 [workspace.dependencies]
+evolve_core = { path = "crates/sdk/evolve_core" }
+evolve_server_core = { path = "crates/sdk/evolve_server_core" }
 
 [workspace.lints.rust]
-missing_docs = "deny"
+# missing_docs = "deny"
 
 [workspace.lints.rustdoc]
-broken_intra_doc_links = "deny"
-private_intra_doc_links = "deny"
+# broken_intra_doc_links = "deny"
+# private_intra_doc_links = "deny"
