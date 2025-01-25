@@ -6,10 +6,14 @@ use crate::checkpoint::Checkpoint;
 use evolve_core::well_known::{
     ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, RUNTIME_ACCOUNT_ID,
 };
-use evolve_core::{AccountCode, AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait, Message, ReadonlyKV, SdkResult};
+use evolve_core::{
+    AccountCode, AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait,
+    Message, ReadonlyKV, SdkResult,
+};
 use evolve_server_core::{AccountsCodeStorage, Transaction};
-use std::cell::RefCell;
+use std::cell::{Ref, RefCell};
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::rc::Rc;
 
 #[derive(Debug)]
@@ -101,13 +105,16 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage<Self>> InvokerTrait for Invoker<'_, S
         to: AccountId,
         data: InvokeRequest,
     ) -> SdkResult<InvokeResponse> {
-        let account = self.load_account(to)?;
-
         let ctx = Context::new(RUNTIME_ACCOUNT_ID, to);
 
         let invoker = self.clone();
 
-        Ok(account.query(&invoker, &ctx, data)?)
+        self.with_account(
+            to,
+            |code| {
+                code.query(&invoker, &ctx, data)
+            }
+        )?
     }
 
     fn do_exec(
@@ -116,18 +123,18 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage<Self>> InvokerTrait for Invoker<'_, S
         to: AccountId,
         data: InvokeRequest,
     ) -> SdkResult<InvokeResponse> {
-        let account = self.load_account(to)?;
-
         let mut new_ctx = Context::new(ctx.whoami(), to);
-
         let mut invoker = self.clone();
         let checkpoint = invoker.storage.borrow().checkpoint();
+
         // exec
-        let response = account.execute(&mut invoker, &mut new_ctx, data);
-        if response.is_err() {
+        let resp = self.with_account(to, |code| {
+           code.execute(&mut invoker, &mut new_ctx, data)
+        })?;
+        if resp.is_err() {
             self.storage.borrow_mut().restore(checkpoint);
         }
-        response
+        resp
     }
 }
 
@@ -141,11 +148,23 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         }
     }
 
-    fn load_account(&self, account: AccountId) -> SdkResult<&Box<dyn AccountCode<Self>>> {
+    fn with_account<R>(
+        &self,
+        account: AccountId,
+        f: impl FnOnce(&Box<dyn AccountCode<Self>>) -> R,
+    ) -> SdkResult<R> {
         let code_id = self
             .get_account_code_identifier_for_account(account)?
-            .unwrap(); // TODO unwrap
-        Ok(self.account_codes_storage.borrow().get(&code_id)?.unwrap()) // TODO unwrap
+            .unwrap(); // TODO
+
+        let storage_borrow = self.account_codes_storage.borrow();
+
+        // 3. Get a reference out of the storage
+        let code = storage_borrow
+            .get(&code_id)?
+            .unwrap(); // TODO
+
+        Ok(f(code))
     }
     fn get_account_code_identifier_for_account(
         &self,
