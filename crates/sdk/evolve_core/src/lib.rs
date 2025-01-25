@@ -95,6 +95,14 @@ impl Context {
     pub fn new(sender: AccountId, whoami: AccountId) -> Self {
         Context { whoami, sender }
     }
+
+    pub fn whoami(&self) -> AccountId {
+        self.whoami
+    }
+
+    pub fn sender(&self) -> AccountId {
+        self.sender
+    }
 }
 
 /// Defines some arbitrary code that can handle account execution logic.

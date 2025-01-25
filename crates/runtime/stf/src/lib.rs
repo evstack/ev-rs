@@ -6,7 +6,7 @@ use evolve_core::well_known::{
 };
 use evolve_core::{
     AccountCode, AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait,
-    Message,
+    Message, SdkResult,
 };
 use evolve_server_core::{AccountsCodeStorage, ReadonlyKV, Transaction};
 use std::cell::RefCell;
@@ -101,18 +101,12 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage<Self>> InvokerTrait for Invoker<'_, S
         _ctx: &Context,
         to: AccountId,
         data: InvokeRequest,
-    ) -> evolve_core::SdkResult<InvokeResponse> {
-        let account = self.load_account(to).unwrap();
+    ) -> SdkResult<InvokeResponse> {
+        let account = self.load_account(to)?;
+
         let ctx = Context::new(RUNTIME_ACCOUNT_ID, to);
 
-        let invoker = Invoker {
-            gas_limit: self.gas_limit,
-            gas_used: self.gas_used.clone(), // TODO charge gas
-            storage: self.storage.clone(),
-            account_codes_storage: self.account_codes_storage.clone(),
-        };
-
-        // TODO: use checkpoint to revert on error
+        let invoker = self.clone();
 
         Ok(account.query(&invoker, &ctx, data)?)
     }
@@ -122,9 +116,19 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage<Self>> InvokerTrait for Invoker<'_, S
         ctx: &mut Context,
         to: AccountId,
         data: InvokeRequest,
-    ) -> evolve_core::SdkResult<InvokeResponse> {
-        // TODO: use checkpoint to revert on error
-        todo!()
+    ) -> SdkResult<InvokeResponse> {
+        let account = self.load_account(to)?;
+
+        let mut new_ctx = Context::new(ctx.whoami(), to);
+
+        let mut invoker = self.clone();
+        let checkpoint = invoker.storage.borrow().checkpoint();
+        // exec
+        let response = account.execute(&mut invoker, &mut new_ctx, data);
+        if response.is_err() {
+            self.storage.borrow_mut().restore(checkpoint);
+        }
+        response
     }
 }
 
@@ -138,7 +142,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         }
     }
 
-    fn load_account(&self, account: AccountId) -> StfResult<Box<&dyn AccountCode<Self>>> {
+    fn load_account(&self, account: AccountId) -> SdkResult<Box<&dyn AccountCode<Self>>> {
         let code_id = self
             .get_account_code_identifier_for_account(account)?
             .unwrap(); // TODO unwrap
@@ -147,7 +151,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
     fn get_account_code_identifier_for_account(
         &self,
         account: AccountId,
-    ) -> StfResult<Option<String>> {
+    ) -> SdkResult<Option<String>> {
         let key = Self::get_account_code_identifier_for_account_key(account);
         Ok(self
             .storage
@@ -160,7 +164,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         &mut self,
         account: AccountId,
         account_identifier: &'static str,
-    ) -> Result<(), Error> {
+    ) -> SdkResult<()> {
         let key = Self::get_account_code_identifier_for_account_key(account);
         Ok(self
             .storage
@@ -174,7 +178,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         key
     }
 
-    fn next_account_number(&self) -> StfResult<AccountId> {
+    fn next_account_number(&self) -> SdkResult<AccountId> {
         let last = self
             .storage
             .borrow()
@@ -182,6 +186,15 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
             .unwrap_or(u16::MAX.to_be_bytes().into());
 
         Ok(AccountId::try_from(last.as_slice())?)
+    }
+
+    fn clone(&self) -> Self {
+        Self {
+            gas_limit: self.gas_limit,
+            gas_used: self.gas_used.clone(), // TODO charge gas
+            storage: self.storage.clone(),
+            account_codes_storage: self.account_codes_storage.clone(),
+        }
     }
 }
 

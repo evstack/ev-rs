@@ -67,6 +67,18 @@ impl<'a, S: ReadonlyKV> Checkpoint<'a, S> {
     }
 
     pub(crate) fn set(&mut self, key: &[u8], value: Vec<u8>) -> Result<(), ErrorCode> {
-        todo!("impl")
+        self.map.insert(key.to_vec(), value);
+        Ok(())
+    }
+
+    pub(crate) fn remove(&mut self, key: &[u8]) -> Result<(), ErrorCode> {
+        self.map.remove(key);
+        Ok(())
+    }
+    pub (crate) fn checkpoint(&self) -> u64 {
+        0
+    }
+
+    pub(crate) fn restore(&mut self, checkpoint: u64) {
     }
 }
