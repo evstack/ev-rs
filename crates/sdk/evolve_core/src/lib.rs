@@ -1,6 +1,7 @@
 use std::fmt::Error;
 
 pub mod well_known;
+pub mod mocks;
 
 pub type ErrorCode = u64;
 pub const ENCODING_ERROR: ErrorCode = 1;
@@ -26,6 +27,14 @@ impl AccountId {
 
 enum InnerMessage {
     OwnedBytes(Vec<u8>),
+}
+
+impl InnerMessage {
+    pub(crate) fn as_bytes(&self) -> &[u8] {
+        match self {
+            InnerMessage::OwnedBytes(b) => b.as_slice(),
+        }
+    }
 }
 
 /// Defines a message, the internals of this type are hidden such that we can improve them later
@@ -56,6 +65,10 @@ impl InvokeRequest {
             function_identifier,
             message,
         }
+    }
+
+    pub fn bytes(&self) -> &[u8] {
+        self.message.inner.as_bytes()
     }
 }
 
@@ -107,7 +120,7 @@ impl Context {
 
 /// Defines some arbitrary code that can handle account execution logic.
 pub trait AccountCode<I: Invoker> {
-    fn identifier(&self) -> &'static str;
+    fn identifier(&self) -> String;
     fn init(
         &self,
         invoker: &mut I,
@@ -126,4 +139,8 @@ pub trait AccountCode<I: Invoker> {
         ctx: &Context,
         request: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
+}
+
+pub trait ReadonlyKV {
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode>;
 }

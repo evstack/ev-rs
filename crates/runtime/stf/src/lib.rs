@@ -1,14 +1,13 @@
 mod checkpoint;
+#[cfg(test)]
+mod test;
 
 use crate::checkpoint::Checkpoint;
 use evolve_core::well_known::{
     ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, RUNTIME_ACCOUNT_ID,
 };
-use evolve_core::{
-    AccountCode, AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait,
-    Message, SdkResult,
-};
-use evolve_server_core::{AccountsCodeStorage, ReadonlyKV, Transaction};
+use evolve_core::{AccountCode, AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait, Message, ReadonlyKV, SdkResult};
+use evolve_server_core::{AccountsCodeStorage, Transaction};
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
@@ -142,7 +141,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         }
     }
 
-    fn load_account(&self, account: AccountId) -> SdkResult<Box<&dyn AccountCode<Self>>> {
+    fn load_account(&self, account: AccountId) -> SdkResult<&Box<dyn AccountCode<Self>>> {
         let code_id = self
             .get_account_code_identifier_for_account(account)?
             .unwrap(); // TODO unwrap
