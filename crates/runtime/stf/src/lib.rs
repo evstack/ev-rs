@@ -56,21 +56,23 @@ impl<T> Stf<T> {
         A: AccountsCodeStorage<Invoker<'a, S, A>> + 'a,
     >(
         storage: &'a S,
-        account_storage: &mut A,
+        account_storage: &'a mut A,
         from: AccountId,
         code_id: String,
-        init_msg: impl Into<Message>,
+        init_message: Message,
     ) -> SdkResult<Message> {
+        let req = InvokeRequest::try_from(CreateAccountRequest{
+            code_id,
+            init_message,
+        })?;
+
+
         Self::exec(
             storage,
             account_storage,
             from,
             RUNTIME_ACCOUNT_ID,
-            CreateAccountRequest {
-                code_id,
-                init_message: init_msg.into(),
-            }
-            .into(),
+            req,
         )
         .map(|v| v.into_message())
     }
@@ -80,12 +82,12 @@ impl<T> Stf<T> {
         account_storage: &'a mut A,
         from: AccountId,
         to: AccountId,
-        req: impl Into<InvokeRequest>,
+        req: InvokeRequest,
     ) -> SdkResult<InvokeResponse> {
         let writable_storage = Checkpoint::new(storage);
         let mut context = Context::new(from, to);
         let mut invoker = Invoker::new(0, writable_storage, account_storage);
-        invoker.do_exec(&mut context, to, req.into())
+        invoker.do_exec(&mut context, to, req)
     }
 }
 
@@ -152,14 +154,14 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         match request.function() {
             RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER => {
                 let req = CreateAccountRequest::try_from(request)?;
-                self.create_account(from, &req.code_id, req.init_message)
+                let resp = self.create_account(from, &req.code_id, req.init_message)
                     .map(|res| {
                         CreateAccountResponse {
                             new_account_id: res.0,
                             init_response: res.1.into_message(),
                         }
-                        .into()
-                    })
+                    })?;
+                return InvokeResponse::try_from(resp)
             }
             _ => Err(ERR_UNKNOWN_FUNCTION),
         }

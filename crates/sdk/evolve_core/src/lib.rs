@@ -70,6 +70,10 @@ impl InvokeRequest {
     pub fn function(&self) -> u64 {
         self.function_identifier
     }
+
+    pub fn message_bytes(&self) -> &[u8] {
+        self.message.inner.as_bytes()
+    }
 }
 
 impl InvokeRequest {
@@ -88,6 +92,12 @@ impl InvokeRequest {
 /// Defines the response of an [`InvokeRequest`]
 pub struct InvokeResponse {
     response: Message,
+}
+
+impl InvokeResponse {
+    pub(crate) fn response_bytes(&self) -> &[u8] {
+        self.response.inner.as_bytes()
+    }
 }
 
 impl InvokeResponse {
