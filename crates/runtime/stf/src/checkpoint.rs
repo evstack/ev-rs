@@ -1,7 +1,6 @@
 use evolve_core::{ErrorCode, ReadonlyKV};
 use std::collections::HashMap;
 
-
 // TODO: make this work
 
 enum StateChange<'a> {
@@ -79,11 +78,9 @@ impl<'a, S: ReadonlyKV> Checkpoint<'a, S> {
         self.map.remove(key);
         Ok(())
     }
-    pub (crate) fn checkpoint(&self) -> u64 {
+    pub(crate) fn checkpoint(&self) -> u64 {
         0
     }
 
-    pub(crate) fn restore(&mut self, checkpoint: u64) {
-
-    }
+    pub(crate) fn restore(&mut self, checkpoint: u64) {}
 }

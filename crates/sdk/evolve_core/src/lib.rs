@@ -1,9 +1,9 @@
-use borsh::{BorshDeserialize, BorshSerialize};
 use crate::encoding::{Decodable, Encodable};
+use borsh::{BorshDeserialize, BorshSerialize};
 
-pub mod well_known;
-pub mod mocks; // TODO: make test
 pub mod encoding;
+pub mod mocks; // TODO: make test
+pub mod well_known;
 
 pub type ErrorCode = u64;
 pub const ERR_ENCODING: ErrorCode = 1;
@@ -11,7 +11,9 @@ pub const ERR_UNKNOWN_FUNCTION: ErrorCode = 2;
 
 pub type SdkResult<T> = Result<T, ErrorCode>;
 
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, BorshSerialize, BorshDeserialize)]
+#[derive(
+    Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, BorshSerialize, BorshDeserialize,
+)]
 pub struct AccountId(u128);
 
 impl AccountId {
@@ -58,8 +60,6 @@ impl From<Vec<u8>> for Message {
         }
     }
 }
-
-
 
 /// Defines a request to invoke a method in an account.
 pub struct InvokeRequest {

@@ -4,7 +4,12 @@ mod test;
 
 use crate::checkpoint::Checkpoint;
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::well_known::{CreateAccountRequest, CreateAccountResponse, EmptyResponse, StorageGetRequest, StorageGetResponse, StorageSetRequest, ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, INIT_FUNCTION_IDENTIFIER, RUNTIME_ACCOUNT_ID, RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER, STORAGE_ACCOUNT_ID};
+use evolve_core::well_known::{
+    CreateAccountRequest, CreateAccountResponse, EmptyResponse, StorageGetRequest,
+    StorageGetResponse, StorageSetRequest, ACCOUNT_IDENTIFIER_PREFIX,
+    ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, INIT_FUNCTION_IDENTIFIER, RUNTIME_ACCOUNT_ID,
+    RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER, STORAGE_ACCOUNT_ID,
+};
 use evolve_core::{
     AccountCode, AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait,
     Message, ReadonlyKV, SdkResult, ERR_UNKNOWN_FUNCTION,
@@ -145,9 +150,12 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         data: InvokeRequest,
     ) -> SdkResult<InvokeResponse> {
         let storage_set = StorageSetRequest::try_from(data)?;
+
         let mut key = from.as_bytes();
         key.extend(storage_set.key);
+
         self.storage.borrow_mut().set(&key, storage_set.value)?;
+
         InvokeResponse::try_from(EmptyResponse {})
     }
 
@@ -161,7 +169,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         let mut key = from.as_bytes();
         key.extend(storage_get.key);
 
-        InvokeResponse::try_from(StorageGetResponse{
+        InvokeResponse::try_from(StorageGetResponse {
             value: self.storage.borrow().get(&key)?,
         })
     }

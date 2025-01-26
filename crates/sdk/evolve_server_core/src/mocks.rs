@@ -32,7 +32,6 @@ impl AccountsCodeStorage for MockedAccountsCodeStorage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     #[test]
     fn it_works() {}
 }

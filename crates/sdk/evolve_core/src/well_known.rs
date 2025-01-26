@@ -1,5 +1,5 @@
 use crate::encoding::{Decodable, Encodable};
-use crate::{AccountId, ErrorCode, InvokeRequest, InvokeResponse, Message, ERR_ENCODING};
+use crate::{AccountId, ErrorCode, InvokeRequest, InvokeResponse, Message};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub const ACCOUNT_IDENTIFIER_PREFIX: u8 = 0;

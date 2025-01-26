@@ -1,5 +1,5 @@
+use crate::{SdkResult, ERR_ENCODING};
 use borsh::{BorshDeserialize, BorshSerialize};
-use crate::{ErrorCode, Message, SdkResult, ERR_ENCODING};
 
 pub trait Encodable: Sized {
     fn encode(&self) -> SdkResult<Vec<u8>>;

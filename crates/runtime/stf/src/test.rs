@@ -78,7 +78,6 @@ mod echo_account {
 
             self.map.set(ctx, invoker, (), "hh".to_string())?;
 
-
             Ok(InvokeResponse::new(response))
         }
 
