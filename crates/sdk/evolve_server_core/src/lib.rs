@@ -10,11 +10,10 @@ pub trait Transaction {
 }
 
 /// Stores account code.
-pub trait AccountsCodeStorage<I: Invoker> {
+pub trait AccountsCodeStorage {
     /// TODO: this probably needs to consume gas, and should accept gas.
-    fn get<'a>(
-        &'a self,
-        identifier: &str,
-    ) -> Result<Option<&'a Box<dyn AccountCode<I>>>, ErrorCode>;
-    fn add_code<T: AccountCode<I> +'static>(&mut self, account_code: T) -> Result<(), ErrorCode>;
+    fn with_code<F, R>(&self, identifier: &str, f: F) -> Result<R, ErrorCode>
+    where
+        F: FnOnce(Option<&dyn AccountCode>) -> R;
+    fn add_code<T: AccountCode + 'static>(&mut self, account_code: T) -> Result<(), ErrorCode>;
 }

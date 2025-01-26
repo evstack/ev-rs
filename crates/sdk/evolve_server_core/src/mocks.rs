@@ -1,25 +1,38 @@
-use std::collections::HashMap;
-use evolve_core::{AccountCode, ErrorCode, Invoker};
 use crate::AccountsCodeStorage;
+use evolve_core::{AccountCode, ErrorCode, Invoker};
+use std::collections::HashMap;
 
-pub struct MockedAccountsCodeStorage<I: Invoker> {
-    codes: HashMap<String, Box<dyn AccountCode<I>>>
+pub struct MockedAccountsCodeStorage {
+    codes: HashMap<String, Box<dyn AccountCode>>,
 }
 
-impl<I: Invoker> MockedAccountsCodeStorage<I> {
+impl MockedAccountsCodeStorage {
     pub fn new() -> Self {
         Self {
-            codes: HashMap::new()
+            codes: HashMap::new(),
         }
     }
 }
 
-impl<I: Invoker> AccountsCodeStorage<I> for MockedAccountsCodeStorage<I> {
-    fn get<'a>(&'a self, identifier: &str) -> Result<Option<&'a Box<dyn AccountCode<I>>>, ErrorCode> {
-        Ok(self.codes.get(identifier))
+impl AccountsCodeStorage for MockedAccountsCodeStorage {
+    fn with_code<F, R>(&self, identifier: &str, f: F) -> Result<R, ErrorCode>
+    where
+        F: FnOnce(Option<&dyn AccountCode>) -> R,
+    {
+        let code = self.codes.get(identifier).map(|e| e.as_ref());
+        Ok(f(code))
     }
-    fn add_code<T: AccountCode<I> + 'static>(&mut self, account_code: T) -> Result<(), ErrorCode> {
-        self.codes.insert(account_code.identifier(), Box::new(account_code));
+
+    fn add_code<T: AccountCode + 'static>(&mut self, account_code: T) -> Result<(), ErrorCode> {
+        self.codes
+            .insert(account_code.identifier(), Box::new(account_code));
         Ok(())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn it_works() {}
 }

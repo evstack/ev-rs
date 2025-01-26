@@ -38,7 +38,7 @@ impl TryFrom<InvokeRequest> for CreateAccountRequest {
     }
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, Debug)]
 pub struct CreateAccountResponse {
     pub new_account_id: AccountId,
     pub init_response: Message,

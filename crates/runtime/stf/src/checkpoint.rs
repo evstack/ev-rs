@@ -64,7 +64,10 @@ impl<'a, S> Checkpoint<'a, S> {
 
 impl<'a, S: ReadonlyKV> Checkpoint<'a, S> {
     pub(crate) fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
-        self.storage.get(key)
+        match self.map.get(key) {
+            Some(value) => Ok(Some(value.clone())),
+            None => self.storage.get(key),
+        }
     }
 
     pub(crate) fn set(&mut self, key: &[u8], value: Vec<u8>) -> Result<(), ErrorCode> {
@@ -81,5 +84,6 @@ impl<'a, S: ReadonlyKV> Checkpoint<'a, S> {
     }
 
     pub(crate) fn restore(&mut self, checkpoint: u64) {
+
     }
 }

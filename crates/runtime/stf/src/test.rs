@@ -47,14 +47,14 @@ mod echo_account {
         pub(crate) echo_msg: String,
     }
 
-    impl<S: Invoker> AccountCode<S> for Echo {
+    impl AccountCode for Echo {
         fn identifier(&self) -> String {
             "echo".to_string()
         }
 
         fn init(
             &self,
-            invoker: &mut S,
+            invoker: &mut dyn Invoker,
             ctx: &mut Context,
             request: InvokeRequest,
         ) -> SdkResult<InvokeResponse> {
@@ -70,7 +70,7 @@ mod echo_account {
 
         fn execute(
             &self,
-            invoker: &mut S,
+            invoker: &mut dyn Invoker,
             ctx: &mut Context,
             request: InvokeRequest,
         ) -> SdkResult<InvokeResponse> {
@@ -79,7 +79,7 @@ mod echo_account {
 
         fn query(
             &self,
-            invoker: &S,
+            invoker: &dyn Invoker,
             ctx: &Context,
             request: InvokeRequest,
         ) -> SdkResult<InvokeResponse> {
@@ -109,5 +109,6 @@ fn success() {
             .encode()
             .unwrap(),
         ),
-    );
+    ).unwrap();
+    println!("{:?}", echo_id)
 }

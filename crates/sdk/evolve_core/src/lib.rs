@@ -15,16 +15,14 @@ pub type SdkResult<T> = Result<T, ErrorCode>;
 pub struct AccountId(u128);
 
 impl AccountId {
-    pub fn new(u: impl Into<u128>) -> Self {
-        Self(u.into())
+    pub fn increase(&self) -> Self {
+        Self(self.0 + 1)
     }
 }
 
-impl TryFrom<&[u8]> for AccountId {
-    type Error = ErrorCode;
-
-    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        Ok(AccountId(u128::from_be_bytes(value.try_into().map_err(|_| ERR_ENCODING)?)))
+impl AccountId {
+    pub fn new(u: impl Into<u128>) -> Self {
+        Self(u.into())
     }
 }
 
@@ -33,7 +31,7 @@ impl AccountId {
         self.0.to_be_bytes().into()
     }
 }
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize, Debug)]
 enum InnerMessage {
     OwnedBytes(Vec<u8>),
 }
@@ -46,7 +44,7 @@ impl InnerMessage {
     }
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize, Debug)]
 /// Defines a message, the internals of this type are hidden such that we can improve them later
 /// for performance.
 pub struct Message {
@@ -159,23 +157,23 @@ impl Context {
 }
 
 /// Defines some arbitrary code that can handle account execution logic.
-pub trait AccountCode<I: Invoker> {
+pub trait AccountCode {
     fn identifier(&self) -> String;
     fn init(
         &self,
-        invoker: &mut I,
+        invoker: &mut dyn Invoker,
         ctx: &mut Context,
         request: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
     fn execute(
         &self,
-        invoker: &mut I,
+        invoker: &mut dyn Invoker,
         ctx: &mut Context,
         request: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
     fn query(
         &self,
-        invoker: &I,
+        invoker: &dyn Invoker,
         ctx: &Context,
         request: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;

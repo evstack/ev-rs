@@ -3,6 +3,7 @@ mod checkpoint;
 mod test;
 
 use crate::checkpoint::Checkpoint;
+use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::well_known::{
     CreateAccountRequest, CreateAccountResponse, ACCOUNT_IDENTIFIER_PREFIX,
     ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, INIT_FUNCTION_IDENTIFIER, RUNTIME_ACCOUNT_ID,
@@ -18,43 +19,20 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::Rc;
 
-#[derive(Debug)]
-pub enum Error {
-    SdkError(evolve_core::ErrorCode),
-    StorageError(),
-}
-
-impl From<evolve_core::ErrorCode> for Error {
-    fn from(code: evolve_core::ErrorCode) -> Self {
-        Error::SdkError(code)
-    }
-}
-
-pub type StfResult<T> = Result<T, Error>;
-
 pub struct TxResult {}
 
 pub struct Stf<Tx>(PhantomData<Tx>);
 
 impl<T> Stf<T> {
-    fn apply_tx<
-        'a,
-        S: ReadonlyKV + 'a,
-        A: AccountsCodeStorage<Invoker<'a, S, A>> + 'a,
-        Tx: Transaction,
-    >(
+    fn apply_tx<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a, Tx: Transaction>(
         storage: &'a S,
         account_codes: &mut A,
         tx: &Tx,
-    ) -> StfResult<()> {
+    ) {
         todo!("impl")
     }
 
-    pub(crate) fn create_account<
-        'a,
-        S: ReadonlyKV,
-        A: AccountsCodeStorage<Invoker<'a, S, A>> + 'a,
-    >(
+    pub(crate) fn create_account<'a, S: ReadonlyKV, A: AccountsCodeStorage + 'a>(
         storage: &'a S,
         account_storage: &'a mut A,
         from: AccountId,
@@ -66,16 +44,12 @@ impl<T> Stf<T> {
             init_message,
         })?;
 
-        Ok(CreateAccountResponse::try_from(Self::exec(
-            storage,
-            account_storage,
-            from,
-            RUNTIME_ACCOUNT_ID,
-            req,
-        )?)?)
+        let resp = Self::exec(storage, account_storage, from, RUNTIME_ACCOUNT_ID, req)?;
+
+        Ok(CreateAccountResponse::try_from(resp)?)
     }
 
-    pub(crate) fn exec<'a, S: ReadonlyKV, A: AccountsCodeStorage<Invoker<'a, S, A>> + 'a>(
+    pub(crate) fn exec<'a, S: ReadonlyKV, A: AccountsCodeStorage + 'a>(
         storage: &'a S,
         account_storage: &'a mut A,
         from: AccountId,
@@ -96,7 +70,7 @@ struct Invoker<'a, S, A> {
     account_codes_storage: Rc<RefCell<&'a mut A>>,
 }
 
-impl<S: ReadonlyKV, A: AccountsCodeStorage<Self>> InvokerTrait for Invoker<'_, S, A> {
+impl<S: ReadonlyKV, A: AccountsCodeStorage> InvokerTrait for Invoker<'_, S, A> {
     fn do_query(
         &self,
         _ctx: &Context,
@@ -134,7 +108,7 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage<Self>> InvokerTrait for Invoker<'_, S
     }
 }
 
-impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
+impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
     fn new(gas_limit: u64, storage: Checkpoint<'a, S>, account_code_storage: &'a mut A) -> Self {
         Self {
             gas_limit,
@@ -187,7 +161,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
     fn with_account<R>(
         &self,
         account: AccountId,
-        f: impl FnOnce(&Box<dyn AccountCode<Self>>) -> R,
+        f: impl FnOnce(&dyn AccountCode) -> R,
     ) -> SdkResult<R> {
         let code_id = self
             .get_account_code_identifier_for_account(account)?
@@ -196,20 +170,16 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         let storage_borrow = self.account_codes_storage.borrow();
 
         // 3. Get a reference out of the storage
-        let code = storage_borrow.get(&code_id)?.unwrap(); // TODO
-
-        Ok(f(code))
+        storage_borrow.with_code(&code_id, |code| f(code.unwrap())) // todo remove unwrap
     }
     fn get_account_code_identifier_for_account(
         &self,
         account: AccountId,
     ) -> SdkResult<Option<String>> {
         let key = Self::get_account_code_identifier_for_account_key(account);
-        Ok(self
-            .storage
-            .borrow()
-            .get(&key)?
-            .map(|e| String::from_utf8_lossy(&e).to_string())) // TODO
+        let code_id = self.storage.borrow().get(&key)?;
+
+        Ok(code_id.map(|e| String::from_utf8(e).unwrap())) // TODO
     }
 
     fn set_account_code_identifier_for_account(
@@ -217,6 +187,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         account: AccountId,
         account_identifier: &str,
     ) -> SdkResult<()> {
+        println!("setting: {:?} {:?}", account, account_identifier);
         let key = Self::get_account_code_identifier_for_account_key(account);
         Ok(self
             .storage
@@ -230,14 +201,23 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         key
     }
 
-    fn next_account_number(&self) -> SdkResult<AccountId> {
+    fn next_account_number(&mut self) -> SdkResult<AccountId> {
+        let key = vec![ACCOUNT_IDENTIFIER_SINGLETON_PREFIX];
+
+        // get last
         let last = self
             .storage
             .borrow()
-            .get(&vec![ACCOUNT_IDENTIFIER_SINGLETON_PREFIX])?
-            .unwrap_or(u16::MAX.to_be_bytes().into());
+            .get(&key)?
+            .map(|bytes| AccountId::decode(&bytes))
+            .unwrap_or(Ok(AccountId::new(u16::MAX)))?;
 
-        Ok(AccountId::try_from(last.as_slice())?)
+        // set next
+        self.storage
+            .borrow_mut()
+            .set(&key, last.increase().encode()?)?;
+
+        Ok(last)
     }
 
     fn clone(&self) -> Self {
