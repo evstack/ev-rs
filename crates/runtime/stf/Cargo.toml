@@ -10,5 +10,8 @@ rust-version.workspace = true
 evolve_core = { workspace = true }
 evolve_server_core = { workspace = true}
 
+[dev-dependencies]
+borsh = { workspace = true, features = ["derive"]}
+
 [lints]
 workspace = true

@@ -1,46 +1,10 @@
-use evolve_core::{AccountCode, AccountId, Context, InvokeRequest, InvokeResponse, Invoker, Message, SdkResult};
-use evolve_server_core::Transaction;
+use crate::test::echo_account::{Echo, InitRequest};
 use crate::Stf;
-
-struct Echo;
-
-impl<I: Invoker> AccountCode<I> for Echo {
-    fn identifier(&self) -> String {
-        "Echo".to_string()
-    }
-
-    fn init(
-        &self,
-        _invoker: &mut I,
-        _ctx: &mut Context,
-        _request: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
-        let resp = "echo_init".to_string().as_bytes().to_vec();
-        Ok(InvokeResponse::new(Message::from(resp)))
-    }
-
-    fn execute(
-        &self,
-        invoker: &mut I,
-        ctx: &mut Context,
-        request: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
-        let mut resp = "echo_execute".to_string().as_bytes().to_vec();
-        resp.extend_from_slice(request.bytes());
-        Ok(InvokeResponse::new(Message::from(resp)))
-    }
-
-    fn query(
-        &self,
-        invoker: &I,
-        ctx: &Context,
-        request: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
-        let mut resp = "echo_response".to_string().as_bytes().to_vec();
-        resp.extend_from_slice(request.bytes());
-        Ok(InvokeResponse::new(Message::from(resp)))
-    }
-}
+use evolve_core::encoding::Encodable;
+use evolve_core::{AccountCode, AccountId, Invoker, Message};
+use evolve_server_core::{AccountsCodeStorage, Transaction};
+use std::collections::HashMap;
+use evolve_server_core::mocks::MockedAccountsCodeStorage;
 
 struct MockTx;
 
@@ -64,7 +28,86 @@ impl Transaction for MockTx {
 
 type TestStf = Stf<MockTx>;
 
+mod echo_account {
+    use borsh::{BorshDeserialize, BorshSerialize};
+    use evolve_core::encoding::Encodable;
+    use evolve_core::{
+        AccountCode, Context, InvokeRequest, InvokeResponse, Invoker, Message, SdkResult,
+    };
+
+    pub(crate) struct Echo {}
+
+    #[derive(BorshDeserialize, BorshSerialize)]
+    pub(crate) struct InitRequest {
+        pub(crate) echo_msg: String,
+    }
+
+    #[derive(BorshSerialize, BorshDeserialize)]
+    pub(crate) struct InitResponse {
+        pub(crate) echo_msg: String,
+    }
+
+    impl<S: Invoker> AccountCode<S> for Echo {
+        fn identifier(&self) -> String {
+            "echo".to_string()
+        }
+
+        fn init(
+            &self,
+            invoker: &mut S,
+            ctx: &mut Context,
+            request: InvokeRequest,
+        ) -> SdkResult<InvokeResponse> {
+            let request: InitRequest = request.decode()?;
+            let response = Message::from(
+                InitResponse {
+                    echo_msg: request.echo_msg,
+                }
+                .encode()?,
+            );
+            Ok(InvokeResponse::new(response))
+        }
+
+        fn execute(
+            &self,
+            invoker: &mut S,
+            ctx: &mut Context,
+            request: InvokeRequest,
+        ) -> SdkResult<InvokeResponse> {
+            todo!()
+        }
+
+        fn query(
+            &self,
+            invoker: &S,
+            ctx: &Context,
+            request: InvokeRequest,
+        ) -> SdkResult<InvokeResponse> {
+            todo!()
+        }
+    }
+}
+
 #[test]
 fn success() {
+    let mut account_codes = MockedAccountsCodeStorage::new();
 
+    let echo = Echo {};
+    account_codes.add_code(echo).unwrap();
+
+    let mut storage: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+
+    let echo_id = TestStf::create_account(
+        &mut storage,
+        &mut account_codes,
+        AccountId::new(100u128),
+        "echo".to_string(),
+        Message::from(
+            InitRequest {
+                echo_msg: "hi".to_string(),
+            }
+            .encode()
+            .unwrap(),
+        ),
+    );
 }

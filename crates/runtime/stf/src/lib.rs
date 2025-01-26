@@ -13,7 +13,7 @@ use evolve_core::{
     Message, ReadonlyKV, SdkResult, ERR_UNKNOWN_FUNCTION,
 };
 use evolve_server_core::{AccountsCodeStorage, Transaction};
-use std::cell::{RefCell};
+use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -60,21 +60,19 @@ impl<T> Stf<T> {
         from: AccountId,
         code_id: String,
         init_message: Message,
-    ) -> SdkResult<Message> {
-        let req = InvokeRequest::try_from(CreateAccountRequest{
+    ) -> SdkResult<CreateAccountResponse> {
+        let req = InvokeRequest::try_from(CreateAccountRequest {
             code_id,
             init_message,
         })?;
 
-
-        Self::exec(
+        Ok(CreateAccountResponse::try_from(Self::exec(
             storage,
             account_storage,
             from,
             RUNTIME_ACCOUNT_ID,
             req,
-        )
-        .map(|v| v.into_message())
+        )?)?)
     }
 
     pub(crate) fn exec<'a, S: ReadonlyKV, A: AccountsCodeStorage<Invoker<'a, S, A>> + 'a>(
@@ -154,14 +152,13 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         match request.function() {
             RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER => {
                 let req = CreateAccountRequest::try_from(request)?;
-                let resp = self.create_account(from, &req.code_id, req.init_message)
-                    .map(|res| {
-                        CreateAccountResponse {
-                            new_account_id: res.0,
-                            init_response: res.1.into_message(),
-                        }
+                let resp = self
+                    .create_account(from, &req.code_id, req.init_message)
+                    .map(|res| CreateAccountResponse {
+                        new_account_id: res.0,
+                        init_response: res.1.into_message(),
                     })?;
-                return InvokeResponse::try_from(resp)
+                InvokeResponse::try_from(resp)
             }
             _ => Err(ERR_UNKNOWN_FUNCTION),
         }

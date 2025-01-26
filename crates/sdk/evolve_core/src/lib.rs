@@ -1,10 +1,9 @@
-use std::fmt::Error;
 use borsh::{BorshDeserialize, BorshSerialize};
 use crate::encoding::{Decodable, Encodable};
 
 pub mod well_known;
-pub mod mocks;
-mod encoding;
+pub mod mocks; // TODO: make test
+pub mod encoding;
 
 pub type ErrorCode = u64;
 pub const ERR_ENCODING: ErrorCode = 1;
@@ -14,6 +13,12 @@ pub type SdkResult<T> = Result<T, ErrorCode>;
 
 #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, BorshSerialize, BorshDeserialize)]
 pub struct AccountId(u128);
+
+impl AccountId {
+    pub fn new(u: impl Into<u128>) -> Self {
+        Self(u.into())
+    }
+}
 
 impl TryFrom<&[u8]> for AccountId {
     type Error = ErrorCode;
@@ -64,6 +69,12 @@ pub struct InvokeRequest {
     function_identifier: u64,
     /// Defines the message argument of the function.
     message: Message,
+}
+
+impl InvokeRequest {
+    pub fn decode<T: Decodable>(&self) -> SdkResult<T> {
+        T::decode(self.message_bytes())
+    }
 }
 
 impl InvokeRequest {
