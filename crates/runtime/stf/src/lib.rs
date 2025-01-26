@@ -4,11 +4,7 @@ mod test;
 
 use crate::checkpoint::Checkpoint;
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::well_known::{
-    CreateAccountRequest, CreateAccountResponse, ACCOUNT_IDENTIFIER_PREFIX,
-    ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, INIT_FUNCTION_IDENTIFIER, RUNTIME_ACCOUNT_ID,
-    RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER,
-};
+use evolve_core::well_known::{CreateAccountRequest, CreateAccountResponse, EmptyResponse, StorageGetRequest, StorageGetResponse, StorageSetRequest, ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, INIT_FUNCTION_IDENTIFIER, RUNTIME_ACCOUNT_ID, RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER, STORAGE_ACCOUNT_ID};
 use evolve_core::{
     AccountCode, AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait,
     Message, ReadonlyKV, SdkResult, ERR_UNKNOWN_FUNCTION,
@@ -92,14 +88,19 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> InvokerTrait for Invoker<'_, S, A> {
     ) -> SdkResult<InvokeResponse> {
         let checkpoint = self.storage.borrow().checkpoint();
 
-        // check if system message
-        let resp = if to == RUNTIME_ACCOUNT_ID {
-            self.handle_system_request(ctx.whoami(), data)
-        } else {
-            let mut invoker = self.clone();
-            let mut new_ctx = Context::new(ctx.whoami(), to);
-            self.with_account(to, |code| code.execute(&mut invoker, &mut new_ctx, data))?
+        let resp = match to {
+            // check if system
+            RUNTIME_ACCOUNT_ID => self.handle_system_exec(ctx.whoami(), data),
+            // check if storage
+            STORAGE_ACCOUNT_ID => self.handle_storage_exec(ctx.whoami(), data),
+            // other account
+            _ => {
+                let mut invoker = self.clone();
+                let mut new_ctx = Context::new(ctx.whoami(), to);
+                self.with_account(to, |code| code.execute(&mut invoker, &mut new_ctx, data))?
+            }
         };
+
         // restore checkpoint in case of failure and yield back.
         if resp.is_err() {
             self.storage.borrow_mut().restore(checkpoint);
@@ -118,7 +119,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         }
     }
 
-    fn handle_system_request(
+    fn handle_system_exec(
         &mut self,
         from: AccountId,
         request: InvokeRequest,
@@ -136,6 +137,33 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
             }
             _ => Err(ERR_UNKNOWN_FUNCTION),
         }
+    }
+
+    fn handle_storage_exec(
+        &mut self,
+        from: AccountId,
+        data: InvokeRequest,
+    ) -> SdkResult<InvokeResponse> {
+        let storage_set = StorageSetRequest::try_from(data)?;
+        let mut key = from.as_bytes();
+        key.extend(storage_set.key);
+        self.storage.borrow_mut().set(&key, storage_set.value)?;
+        InvokeResponse::try_from(EmptyResponse {})
+    }
+
+    fn handle_storage_query(
+        &mut self,
+        from: AccountId,
+        request: InvokeRequest,
+    ) -> SdkResult<InvokeResponse> {
+        let storage_get = StorageGetRequest::try_from(request)?;
+
+        let mut key = from.as_bytes();
+        key.extend(storage_get.key);
+
+        InvokeResponse::try_from(StorageGetResponse{
+            value: self.storage.borrow().get(&key)?,
+        })
     }
 
     fn create_account(

@@ -2,9 +2,9 @@ use crate::test::echo_account::{Echo, InitRequest};
 use crate::Stf;
 use evolve_core::encoding::Encodable;
 use evolve_core::{AccountCode, AccountId, Invoker, Message};
+use evolve_server_core::mocks::MockedAccountsCodeStorage;
 use evolve_server_core::{AccountsCodeStorage, Transaction};
 use std::collections::HashMap;
-use evolve_server_core::mocks::MockedAccountsCodeStorage;
 
 struct MockTx;
 
@@ -35,7 +35,17 @@ mod echo_account {
         AccountCode, Context, InvokeRequest, InvokeResponse, Invoker, Message, SdkResult,
     };
 
-    pub(crate) struct Echo {}
+    pub(crate) struct Echo {
+        map: evolve_collections::Map<(), String>,
+    }
+
+    impl Echo {
+        pub(crate) fn new() -> Self {
+            Echo {
+                map: evolve_collections::Map::new(0),
+            }
+        }
+    }
 
     #[derive(BorshDeserialize, BorshSerialize)]
     pub(crate) struct InitRequest {
@@ -65,6 +75,10 @@ mod echo_account {
                 }
                 .encode()?,
             );
+
+            self.map.set(ctx, invoker, (), "hh".to_string())?;
+
+
             Ok(InvokeResponse::new(response))
         }
 
@@ -92,7 +106,8 @@ mod echo_account {
 fn success() {
     let mut account_codes = MockedAccountsCodeStorage::new();
 
-    let echo = Echo {};
+    let echo = Echo::new();
+
     account_codes.add_code(echo).unwrap();
 
     let mut storage: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
@@ -109,8 +124,8 @@ fn success() {
             .encode()
             .unwrap(),
         ),
-    ).unwrap();
-
+    )
+    .unwrap();
 
     println!("{:?}", echo_id)
 }

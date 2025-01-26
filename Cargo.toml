@@ -15,6 +15,7 @@ rust-version = "1.81.0"
 [workspace.dependencies]
 evolve_core = { path = "crates/sdk/evolve_core" }
 evolve_server_core = { path = "crates/sdk/evolve_server_core" }
+evolve_collections = { path = "crates/sdk/evolve_collections"}
 
 borsh = { features = ["derive"], version = "1.5.5"}
 [workspace.lints.rust]
