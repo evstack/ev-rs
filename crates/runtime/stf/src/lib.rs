@@ -4,14 +4,16 @@ mod test;
 
 use crate::checkpoint::Checkpoint;
 use evolve_core::well_known::{
-    ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, RUNTIME_ACCOUNT_ID,
+    CreateAccountRequest, CreateAccountResponse, ACCOUNT_IDENTIFIER_PREFIX,
+    ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, INIT_FUNCTION_IDENTIFIER, RUNTIME_ACCOUNT_ID,
+    RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER,
 };
 use evolve_core::{
     AccountCode, AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait,
-    Message, ReadonlyKV, SdkResult,
+    Message, ReadonlyKV, SdkResult, ERR_UNKNOWN_FUNCTION,
 };
 use evolve_server_core::{AccountsCodeStorage, Transaction};
-use std::cell::{Ref, RefCell};
+use std::cell::{RefCell};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::Rc;
@@ -35,38 +37,6 @@ pub struct TxResult {}
 pub struct Stf<Tx>(PhantomData<Tx>);
 
 impl<T> Stf<T> {
-    pub fn create_account<
-        'a,
-        S: ReadonlyKV + 'a,
-        A: AccountsCodeStorage<Invoker<'a, S, A>>,
-        Tx: Transaction,
-    >(
-        checkpoint: &'a mut Checkpoint<'a, S>,
-        account_codes: &'a mut A,
-        from: AccountId,
-        identifier: &str,
-        msg: impl Into<Message>,
-    ) -> Result<(AccountId, InvokeResponse), Error> {
-        /*
-        let request = InvokeRequest::new(0, Message::from(msg.into()));
-        let account = account_codes.get(identifier).unwrap().unwrap();
-        let new_id = Self::next_account_number(checkpoint)?;
-        let mut ctx = Context::new(from, new_id);
-
-        let mut invoker = Invoker {
-            gas_limit: 0,
-            gas_used: RefCell::new(Rc::new(0)),
-            storage: checkpoint,
-            account_codes_storage: account_codes,
-        };
-
-        Ok(account
-            .execute(&mut invoker, &mut ctx, request)
-            .map(|v| (new_id, v))?)
-
-         */
-        todo!("impl")
-    }
     fn apply_tx<
         'a,
         S: ReadonlyKV + 'a,
@@ -80,14 +50,42 @@ impl<T> Stf<T> {
         todo!("impl")
     }
 
-    fn exec<'a, S: ReadonlyKV, A: AccountsCodeStorage<Invoker<'a, S, A>> + 'a>(
+    pub(crate) fn create_account<
+        'a,
+        S: ReadonlyKV,
+        A: AccountsCodeStorage<Invoker<'a, S, A>> + 'a,
+    >(
         storage: &'a S,
         account_storage: &mut A,
         from: AccountId,
+        code_id: String,
+        init_msg: impl Into<Message>,
+    ) -> SdkResult<Message> {
+        Self::exec(
+            storage,
+            account_storage,
+            from,
+            RUNTIME_ACCOUNT_ID,
+            CreateAccountRequest {
+                code_id,
+                init_message: init_msg.into(),
+            }
+            .into(),
+        )
+        .map(|v| v.into_message())
+    }
+
+    pub(crate) fn exec<'a, S: ReadonlyKV, A: AccountsCodeStorage<Invoker<'a, S, A>> + 'a>(
+        storage: &'a S,
+        account_storage: &'a mut A,
+        from: AccountId,
         to: AccountId,
-        req: InvokeRequest,
-    ) {
-        todo!("impl")
+        req: impl Into<InvokeRequest>,
+    ) -> SdkResult<InvokeResponse> {
+        let writable_storage = Checkpoint::new(storage);
+        let mut context = Context::new(from, to);
+        let mut invoker = Invoker::new(0, writable_storage, account_storage);
+        invoker.do_exec(&mut context, to, req.into())
     }
 }
 
@@ -109,12 +107,7 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage<Self>> InvokerTrait for Invoker<'_, S
 
         let invoker = self.clone();
 
-        self.with_account(
-            to,
-            |code| {
-                code.query(&invoker, &ctx, data)
-            }
-        )?
+        self.with_account(to, |code| code.query(&invoker, &ctx, data))?
     }
 
     fn do_exec(
@@ -123,14 +116,17 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage<Self>> InvokerTrait for Invoker<'_, S
         to: AccountId,
         data: InvokeRequest,
     ) -> SdkResult<InvokeResponse> {
-        let mut new_ctx = Context::new(ctx.whoami(), to);
-        let mut invoker = self.clone();
-        let checkpoint = invoker.storage.borrow().checkpoint();
+        let checkpoint = self.storage.borrow().checkpoint();
 
-        // exec
-        let resp = self.with_account(to, |code| {
-           code.execute(&mut invoker, &mut new_ctx, data)
-        })?;
+        // check if system message
+        let resp = if to == RUNTIME_ACCOUNT_ID {
+            self.handle_system_request(ctx.whoami(), data)
+        } else {
+            let mut invoker = self.clone();
+            let mut new_ctx = Context::new(ctx.whoami(), to);
+            self.with_account(to, |code| code.execute(&mut invoker, &mut new_ctx, data))?
+        };
+        // restore checkpoint in case of failure and yield back.
         if resp.is_err() {
             self.storage.borrow_mut().restore(checkpoint);
         }
@@ -148,6 +144,47 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         }
     }
 
+    fn handle_system_request(
+        &mut self,
+        from: AccountId,
+        request: InvokeRequest,
+    ) -> SdkResult<InvokeResponse> {
+        match request.function() {
+            RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER => {
+                let req = CreateAccountRequest::try_from(request)?;
+                self.create_account(from, &req.code_id, req.init_message)
+                    .map(|res| {
+                        CreateAccountResponse {
+                            new_account_id: res.0,
+                            init_response: res.1.into_message(),
+                        }
+                        .into()
+                    })
+            }
+            _ => Err(ERR_UNKNOWN_FUNCTION),
+        }
+    }
+
+    fn create_account(
+        &mut self,
+        from: AccountId,
+        code_id: &str,
+        msg: impl Into<Message>,
+    ) -> SdkResult<(AccountId, InvokeResponse)> {
+        // get new account and associate it with new code ID
+        let new_account_id = self.next_account_number()?;
+        self.set_account_code_identifier_for_account(new_account_id, code_id)?;
+        // prepare request params
+        let req = InvokeRequest::new(INIT_FUNCTION_IDENTIFIER, msg.into());
+        let mut invoker = self.clone();
+        let mut ctx = Context::new(from, new_account_id);
+        // do account init
+        self.with_account(new_account_id, |code| {
+            code.init(&mut invoker, &mut ctx, req)
+        })?
+        .map(|r| (new_account_id, r))
+    }
+
     fn with_account<R>(
         &self,
         account: AccountId,
@@ -160,9 +197,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
         let storage_borrow = self.account_codes_storage.borrow();
 
         // 3. Get a reference out of the storage
-        let code = storage_borrow
-            .get(&code_id)?
-            .unwrap(); // TODO
+        let code = storage_borrow.get(&code_id)?.unwrap(); // TODO
 
         Ok(f(code))
     }
@@ -181,7 +216,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage<Self>> Invoker<'a, S, A> {
     fn set_account_code_identifier_for_account(
         &mut self,
         account: AccountId,
-        account_identifier: &'static str,
+        account_identifier: &str,
     ) -> SdkResult<()> {
         let key = Self::get_account_code_identifier_for_account_key(account);
         Ok(self

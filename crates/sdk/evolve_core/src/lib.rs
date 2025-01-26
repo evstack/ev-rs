@@ -1,21 +1,25 @@
 use std::fmt::Error;
+use borsh::{BorshDeserialize, BorshSerialize};
+use crate::encoding::{Decodable, Encodable};
 
 pub mod well_known;
 pub mod mocks;
+mod encoding;
 
 pub type ErrorCode = u64;
-pub const ENCODING_ERROR: ErrorCode = 1;
+pub const ERR_ENCODING: ErrorCode = 1;
+pub const ERR_UNKNOWN_FUNCTION: ErrorCode = 2;
 
 pub type SdkResult<T> = Result<T, ErrorCode>;
 
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, BorshSerialize, BorshDeserialize)]
 pub struct AccountId(u128);
 
 impl TryFrom<&[u8]> for AccountId {
     type Error = ErrorCode;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
-        Ok(AccountId(u128::from_be_bytes(value.try_into().map_err(|_| ENCODING_ERROR)?)))
+        Ok(AccountId(u128::from_be_bytes(value.try_into().map_err(|_| ERR_ENCODING)?)))
     }
 }
 
@@ -24,7 +28,7 @@ impl AccountId {
         self.0.to_be_bytes().into()
     }
 }
-
+#[derive(BorshSerialize, BorshDeserialize)]
 enum InnerMessage {
     OwnedBytes(Vec<u8>),
 }
@@ -37,6 +41,7 @@ impl InnerMessage {
     }
 }
 
+#[derive(BorshSerialize, BorshDeserialize)]
 /// Defines a message, the internals of this type are hidden such that we can improve them later
 /// for performance.
 pub struct Message {
@@ -51,12 +56,20 @@ impl From<Vec<u8>> for Message {
     }
 }
 
+
+
 /// Defines a request to invoke a method in an account.
 pub struct InvokeRequest {
     /// Defines the identifier of the function.
     function_identifier: u64,
     /// Defines the message argument of the function.
     message: Message,
+}
+
+impl InvokeRequest {
+    pub fn function(&self) -> u64 {
+        self.function_identifier
+    }
 }
 
 impl InvokeRequest {
@@ -75,6 +88,12 @@ impl InvokeRequest {
 /// Defines the response of an [`InvokeRequest`]
 pub struct InvokeResponse {
     response: Message,
+}
+
+impl InvokeResponse {
+    pub fn into_message(self) -> Message {
+        self.response
+    }
 }
 
 impl InvokeResponse {
