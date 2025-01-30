@@ -63,31 +63,15 @@ impl<T> Stf<T> {
     }
 }
 
-struct InnerMutable<'a, S, A> {
-    gas_used: u64,
-    storage: Checkpoint<'a, S>,
-    code_storage: &'a mut A,
-}
-
-impl<'a, S, A> InnerMutable<'a, S, A> {
-    fn new(
-        storage: Checkpoint<'a, S>,
-        code_storage: &'a mut A,
-    ) -> Rc<RefCell<InnerMutable<'a, S, A>>> {
-        Rc::new(RefCell::new(InnerMutable {
-            gas_used: 0,
-            storage,
-            code_storage,
-        }))
-    }
-}
-
 struct Invoker<'a, S, A> {
     whoami: AccountId,
     sender: AccountId,
 
     gas_limit: u64,
-    inner: Rc<RefCell<InnerMutable<'a, S, A>>>,
+
+    gas_used: Rc<RefCell<u64>>,
+    account_codes: Rc<RefCell<&'a mut A>>,
+    storage: Rc<RefCell<Checkpoint<'a, S>>>,
 }
 
 impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
@@ -106,7 +90,7 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
     }
 
     fn do_exec(&mut self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse> {
-        let checkpoint = self.inner.borrow().storage.checkpoint();
+        let checkpoint = self.storage.borrow().checkpoint();
 
         let resp = match to {
             // check if system
@@ -122,7 +106,7 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
 
         // restore checkpoint in case of failure and yield back.
         if resp.is_err() {
-            self.inner.borrow_mut().storage.restore(checkpoint);
+            self.storage.borrow_mut().restore(checkpoint);
         }
         resp
     }
@@ -140,7 +124,10 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
             whoami,
             sender,
             gas_limit,
-            inner: InnerMutable::new(storage, account_code_storage),
+
+            gas_used: Rc::new(RefCell::new(0)),
+            account_codes: Rc::new(RefCell::new(account_code_storage)),
+            storage: Rc::new(RefCell::new(storage)),
         }
     }
 
@@ -167,10 +154,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         let mut key = self.whoami.as_bytes();
         key.extend(storage_set.key);
 
-        self.inner
-            .borrow_mut()
-            .storage
-            .set(&key, storage_set.value)?;
+        self.storage.borrow_mut().set(&key, storage_set.value)?;
 
         InvokeResponse::try_from(EmptyResponse {})
     }
@@ -186,7 +170,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         key.extend(storage_get.key);
 
         InvokeResponse::try_from(StorageGetResponse {
-            value: self.inner.borrow().storage.get(&key)?,
+            value: self.storage.borrow().get(&key)?,
         })
     }
 
@@ -215,19 +199,17 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
             .get_account_code_identifier_for_account(account)?
             .unwrap(); // TODO
 
-        let inner_borrow = self.inner.borrow();
+        let account_storage = self.account_codes.borrow();
 
         // 3. Get a reference out of the storage
-        inner_borrow
-            .code_storage
-            .with_code(&code_id, |code| f(code.unwrap())) // todo remove unwrap
+        account_storage.with_code(&code_id, |code| f(code.unwrap())) // todo remove unwrap
     }
     fn get_account_code_identifier_for_account(
         &self,
         account: AccountId,
     ) -> SdkResult<Option<String>> {
         let key = Self::get_account_code_identifier_for_account_key(account);
-        let code_id = self.inner.borrow().storage.get(&key)?;
+        let code_id = self.storage.borrow().get(&key)?;
 
         Ok(code_id.map(|e| String::from_utf8(e).unwrap())) // TODO
     }
@@ -240,9 +222,8 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         println!("setting: {:?} {:?}", account, account_identifier);
         let key = Self::get_account_code_identifier_for_account_key(account);
         Ok(self
-            .inner
-            .borrow_mut()
             .storage
+            .borrow_mut()
             .set(&key, account_identifier.as_bytes().to_vec())?)
     }
 
@@ -256,20 +237,14 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         let key = vec![ACCOUNT_IDENTIFIER_SINGLETON_PREFIX];
 
         // get last
-        let last = self
-            .inner
-            .borrow()
-            .storage
+        let mut storage = self.storage.borrow_mut();
+        let last = storage
             .get(&key)?
             .map(|bytes| AccountId::decode(&bytes))
             .unwrap_or(Ok(AccountId::new(u16::MAX)))?;
 
         // set next
-        self.inner
-            .borrow_mut()
-            .storage
-            .set(&key, last.increase().encode()?)?;
-
+        storage.set(&key, last.increase().encode()?)?;
         Ok(last)
     }
 
@@ -278,7 +253,10 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
             whoami,
             sender: RUNTIME_ACCOUNT_ID,
             gas_limit: self.gas_limit,
-            inner: self.inner.clone(),
+
+            gas_used: self.gas_used.clone(),
+            account_codes: self.account_codes.clone(),
+            storage: self.storage.clone(),
         }
     }
 
@@ -287,7 +265,9 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
             whoami: to,
             sender: self.whoami,
             gas_limit: self.gas_limit,
-            inner: self.inner.clone(),
+            gas_used: self.gas_used.clone(),
+            account_codes: self.account_codes.clone(),
+            storage: self.storage.clone(),
         }
     }
 }
