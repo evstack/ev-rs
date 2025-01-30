@@ -11,8 +11,8 @@ use evolve_core::well_known::{
     RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER, STORAGE_ACCOUNT_ID,
 };
 use evolve_core::{
-    AccountCode, AccountId, Context, InvokeRequest, InvokeResponse, Invoker as InvokerTrait,
-    Message, ReadonlyKV, SdkResult, ERR_UNKNOWN_FUNCTION,
+    AccountCode, AccountId, Environment, InvokeRequest, InvokeResponse, Message, ReadonlyKV,
+    SdkResult, ERR_UNKNOWN_FUNCTION,
 };
 use evolve_server_core::{AccountsCodeStorage, Transaction};
 use std::cell::RefCell;
@@ -58,82 +58,98 @@ impl<T> Stf<T> {
         req: InvokeRequest,
     ) -> SdkResult<InvokeResponse> {
         let writable_storage = Checkpoint::new(storage);
-        let mut context = Context::new(from, to);
-        let mut invoker = Invoker::new(0, writable_storage, account_storage);
-        invoker.do_exec(&mut context, to, req)
+        let mut invoker = Invoker::new(from, to, 0, writable_storage, account_storage);
+        invoker.do_exec(to, req)
+    }
+}
+
+struct InnerMutable<'a, S, A> {
+    gas_used: u64,
+    storage: Checkpoint<'a, S>,
+    code_storage: &'a mut A,
+}
+
+impl<'a, S, A> InnerMutable<'a, S, A> {
+    fn new(
+        storage: Checkpoint<'a, S>,
+        code_storage: &'a mut A,
+    ) -> Rc<RefCell<InnerMutable<'a, S, A>>> {
+        Rc::new(RefCell::new(InnerMutable {
+            gas_used: 0,
+            storage,
+            code_storage,
+        }))
     }
 }
 
 struct Invoker<'a, S, A> {
+    whoami: AccountId,
+    sender: AccountId,
+
     gas_limit: u64,
-    gas_used: Rc<RefCell<u64>>,
-    storage: Rc<RefCell<Checkpoint<'a, S>>>,
-    account_codes_storage: Rc<RefCell<&'a mut A>>,
+    inner: Rc<RefCell<InnerMutable<'a, S, A>>>,
 }
 
-impl<S: ReadonlyKV, A: AccountsCodeStorage> InvokerTrait for Invoker<'_, S, A> {
-    fn do_query(
-        &self,
-        _ctx: &Context,
-        to: AccountId,
-        data: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
-        let ctx = Context::new(RUNTIME_ACCOUNT_ID, to);
-
-        let invoker = self.clone();
-
-        self.with_account(to, |code| code.query(&invoker, &ctx, data))?
+impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
+    fn whoami(&self) -> AccountId {
+        self.whoami
     }
 
-    fn do_exec(
-        &mut self,
-        ctx: &mut Context,
-        to: AccountId,
-        data: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
-        let checkpoint = self.storage.borrow().checkpoint();
+    fn sender(&self) -> AccountId {
+        self.sender
+    }
+
+    fn do_query(&self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse> {
+        let invoker = self.branch_query(to);
+
+        self.with_account(to, |code| code.query(&invoker, data))?
+    }
+
+    fn do_exec(&mut self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse> {
+        let checkpoint = self.inner.borrow().storage.checkpoint();
 
         let resp = match to {
             // check if system
-            RUNTIME_ACCOUNT_ID => self.handle_system_exec(ctx.whoami(), data),
+            RUNTIME_ACCOUNT_ID => self.handle_system_exec(data),
             // check if storage
-            STORAGE_ACCOUNT_ID => self.handle_storage_exec(ctx.whoami(), data),
+            STORAGE_ACCOUNT_ID => self.handle_storage_exec(data),
             // other account
             _ => {
-                let mut invoker = self.clone();
-                let mut new_ctx = Context::new(ctx.whoami(), to);
-                self.with_account(to, |code| code.execute(&mut invoker, &mut new_ctx, data))?
+                let mut invoker = self.branch_exec(to);
+                self.with_account(to, |code| code.execute(&mut invoker, data))?
             }
         };
 
         // restore checkpoint in case of failure and yield back.
         if resp.is_err() {
-            self.storage.borrow_mut().restore(checkpoint);
+            self.inner.borrow_mut().storage.restore(checkpoint);
         }
         resp
     }
 }
 
 impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
-    fn new(gas_limit: u64, storage: Checkpoint<'a, S>, account_code_storage: &'a mut A) -> Self {
+    fn new(
+        sender: AccountId,
+        whoami: AccountId,
+        gas_limit: u64,
+        storage: Checkpoint<'a, S>,
+        account_code_storage: &'a mut A,
+    ) -> Self {
         Self {
+            whoami,
+            sender,
             gas_limit,
-            gas_used: Rc::new(RefCell::new(0)),
-            storage: Rc::new(RefCell::new(storage)),
-            account_codes_storage: Rc::new(RefCell::new(account_code_storage)),
+            inner: InnerMutable::new(storage, account_code_storage),
         }
     }
 
-    fn handle_system_exec(
-        &mut self,
-        from: AccountId,
-        request: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
+    fn handle_system_exec(&mut self, request: InvokeRequest) -> SdkResult<InvokeResponse> {
         match request.function() {
             RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER => {
                 let req = CreateAccountRequest::try_from(request)?;
                 let resp = self
-                    .create_account(from, &req.code_id, req.init_message)
+                    .create_account(&req.code_id, req.init_message)
                     .map(|res| CreateAccountResponse {
                         new_account_id: res.0,
                         init_response: res.1.into_message(),
@@ -144,17 +160,17 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         }
     }
 
-    fn handle_storage_exec(
-        &mut self,
-        from: AccountId,
-        data: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
+    fn handle_storage_exec(&mut self, data: InvokeRequest) -> SdkResult<InvokeResponse> {
+        // TODO: manage all
         let storage_set = StorageSetRequest::try_from(data)?;
 
-        let mut key = from.as_bytes();
+        let mut key = self.whoami.as_bytes();
         key.extend(storage_set.key);
 
-        self.storage.borrow_mut().set(&key, storage_set.value)?;
+        self.inner
+            .borrow_mut()
+            .storage
+            .set(&key, storage_set.value)?;
 
         InvokeResponse::try_from(EmptyResponse {})
     }
@@ -170,13 +186,12 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         key.extend(storage_get.key);
 
         InvokeResponse::try_from(StorageGetResponse {
-            value: self.storage.borrow().get(&key)?,
+            value: self.inner.borrow().storage.get(&key)?,
         })
     }
 
     fn create_account(
         &mut self,
-        from: AccountId,
         code_id: &str,
         msg: impl Into<Message>,
     ) -> SdkResult<(AccountId, InvokeResponse)> {
@@ -185,13 +200,10 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         self.set_account_code_identifier_for_account(new_account_id, code_id)?;
         // prepare request params
         let req = InvokeRequest::new(INIT_FUNCTION_IDENTIFIER, msg.into());
-        let mut invoker = self.clone();
-        let mut ctx = Context::new(from, new_account_id);
+        let mut invoker = self.branch_exec(new_account_id);
         // do account init
-        self.with_account(new_account_id, |code| {
-            code.init(&mut invoker, &mut ctx, req)
-        })?
-        .map(|r| (new_account_id, r))
+        self.with_account(new_account_id, |code| code.init(&mut invoker, req))?
+            .map(|r| (new_account_id, r))
     }
 
     fn with_account<R>(
@@ -203,17 +215,19 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
             .get_account_code_identifier_for_account(account)?
             .unwrap(); // TODO
 
-        let storage_borrow = self.account_codes_storage.borrow();
+        let inner_borrow = self.inner.borrow();
 
         // 3. Get a reference out of the storage
-        storage_borrow.with_code(&code_id, |code| f(code.unwrap())) // todo remove unwrap
+        inner_borrow
+            .code_storage
+            .with_code(&code_id, |code| f(code.unwrap())) // todo remove unwrap
     }
     fn get_account_code_identifier_for_account(
         &self,
         account: AccountId,
     ) -> SdkResult<Option<String>> {
         let key = Self::get_account_code_identifier_for_account_key(account);
-        let code_id = self.storage.borrow().get(&key)?;
+        let code_id = self.inner.borrow().storage.get(&key)?;
 
         Ok(code_id.map(|e| String::from_utf8(e).unwrap())) // TODO
     }
@@ -226,8 +240,9 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         println!("setting: {:?} {:?}", account, account_identifier);
         let key = Self::get_account_code_identifier_for_account_key(account);
         Ok(self
-            .storage
+            .inner
             .borrow_mut()
+            .storage
             .set(&key, account_identifier.as_bytes().to_vec())?)
     }
 
@@ -242,26 +257,37 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
 
         // get last
         let last = self
-            .storage
+            .inner
             .borrow()
+            .storage
             .get(&key)?
             .map(|bytes| AccountId::decode(&bytes))
             .unwrap_or(Ok(AccountId::new(u16::MAX)))?;
 
         // set next
-        self.storage
+        self.inner
             .borrow_mut()
+            .storage
             .set(&key, last.increase().encode()?)?;
 
         Ok(last)
     }
 
-    fn clone(&self) -> Self {
+    fn branch_query(&self, whoami: AccountId) -> Self {
         Self {
+            whoami,
+            sender: RUNTIME_ACCOUNT_ID,
             gas_limit: self.gas_limit,
-            gas_used: self.gas_used.clone(), // TODO charge gas
-            storage: self.storage.clone(),
-            account_codes_storage: self.account_codes_storage.clone(),
+            inner: self.inner.clone(),
+        }
+    }
+
+    fn branch_exec(&self, to: AccountId) -> Self {
+        Self {
+            whoami: to,
+            sender: self.whoami,
+            gas_limit: self.gas_limit,
+            inner: self.inner.clone(),
         }
     }
 }

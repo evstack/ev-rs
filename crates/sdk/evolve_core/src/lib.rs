@@ -121,39 +121,19 @@ impl InvokeResponse {
     }
 }
 
-pub trait Invoker {
+pub trait Environment {
+    fn whoami(&self) -> AccountId;
+    fn sender(&self) -> AccountId;
     fn do_query(
         &self,
-        ctx: &Context,
         to: AccountId,
         data: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
     fn do_exec(
         &mut self,
-        ctx: &mut Context,
         to: AccountId,
         data: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
-}
-
-/// Defines the execution context.
-pub struct Context {
-    whoami: AccountId,
-    sender: AccountId,
-}
-
-impl Context {
-    pub fn new(sender: AccountId, whoami: AccountId) -> Self {
-        Context { whoami, sender }
-    }
-
-    pub fn whoami(&self) -> AccountId {
-        self.whoami
-    }
-
-    pub fn sender(&self) -> AccountId {
-        self.sender
-    }
 }
 
 /// Defines some arbitrary code that can handle account execution logic.
@@ -161,20 +141,17 @@ pub trait AccountCode {
     fn identifier(&self) -> String;
     fn init(
         &self,
-        invoker: &mut dyn Invoker,
-        ctx: &mut Context,
+        env: &mut dyn Environment,
         request: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
     fn execute(
         &self,
-        invoker: &mut dyn Invoker,
-        ctx: &mut Context,
+        env: &mut dyn Environment,
         request: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
     fn query(
         &self,
-        invoker: &dyn Invoker,
-        ctx: &Context,
+        env: &dyn Environment,
         request: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
 }

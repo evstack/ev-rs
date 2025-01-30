@@ -1,6 +1,6 @@
 pub mod mocks; // TODO: make test
 
-use evolve_core::{AccountCode, AccountId, ErrorCode, Invoker, Message};
+use evolve_core::{AccountCode, AccountId, ErrorCode, Environment, Message};
 
 pub trait Transaction {
     fn sender(&self) -> AccountId;

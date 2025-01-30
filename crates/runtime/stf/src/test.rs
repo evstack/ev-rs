@@ -1,7 +1,7 @@
 use crate::test::echo_account::{Echo, InitRequest};
 use crate::Stf;
 use evolve_core::encoding::Encodable;
-use evolve_core::{AccountCode, AccountId, Invoker, Message};
+use evolve_core::{AccountCode, AccountId, Environment, Message};
 use evolve_server_core::mocks::MockedAccountsCodeStorage;
 use evolve_server_core::{AccountsCodeStorage, Transaction};
 use std::collections::HashMap;
@@ -32,7 +32,7 @@ mod echo_account {
     use borsh::{BorshDeserialize, BorshSerialize};
     use evolve_core::encoding::Encodable;
     use evolve_core::{
-        AccountCode, Context, InvokeRequest, InvokeResponse, Invoker, Message, SdkResult,
+        AccountCode, InvokeRequest, InvokeResponse, Environment, Message, SdkResult,
     };
 
     pub(crate) struct Echo {
@@ -64,8 +64,7 @@ mod echo_account {
 
         fn init(
             &self,
-            invoker: &mut dyn Invoker,
-            ctx: &mut Context,
+            invoker: &mut dyn Environment,
             request: InvokeRequest,
         ) -> SdkResult<InvokeResponse> {
             let request: InitRequest = request.decode()?;
@@ -76,15 +75,14 @@ mod echo_account {
                 .encode()?,
             );
 
-            self.map.set(ctx, invoker, (), "hh".to_string())?;
+            self.map.set(invoker, (), "hh".to_string())?;
 
             Ok(InvokeResponse::new(response))
         }
 
         fn execute(
             &self,
-            invoker: &mut dyn Invoker,
-            ctx: &mut Context,
+            invoker: &mut dyn Environment,
             request: InvokeRequest,
         ) -> SdkResult<InvokeResponse> {
             todo!()
@@ -92,8 +90,7 @@ mod echo_account {
 
         fn query(
             &self,
-            invoker: &dyn Invoker,
-            ctx: &Context,
+            invoker: &dyn Environment,
             request: InvokeRequest,
         ) -> SdkResult<InvokeResponse> {
             todo!()

@@ -1,5 +1,5 @@
 use crate::AccountsCodeStorage;
-use evolve_core::{AccountCode, ErrorCode, Invoker};
+use evolve_core::{AccountCode, ErrorCode, Environment};
 use std::collections::HashMap;
 
 pub struct MockedAccountsCodeStorage {
