@@ -1,13 +1,16 @@
 use evolve_core::{ErrorCode, ReadonlyKV};
 use std::collections::HashMap;
 
-/// Represents a single key change so that it can be undone later.
+/// Represents one change to the overlay so it can be undone.
 #[derive(Debug)]
-pub enum StateChange {
+enum StateChange {
+    /// We set a key to a new value. `previous_value` is what it was logically
+    /// (including falling back to storage if needed).
     Set {
         key: Vec<u8>,
         previous_value: Option<Vec<u8>>,
     },
+    /// We removed a key. `previous_value` is the old value if it existed.
     Remove {
         key: Vec<u8>,
         previous_value: Option<Vec<u8>>,
@@ -15,43 +18,52 @@ pub enum StateChange {
 }
 
 impl StateChange {
-    fn revert(self, map: &mut HashMap<Vec<u8>, Vec<u8>>) {
+    /// Undo this change by reverting the overlay to its prior state.
+    fn revert(self, map: &mut HashMap<Vec<u8>, Option<Vec<u8>>>) {
         match self {
-            StateChange::Set { key, previous_value } => {
-                // "Set" was performed. Reverting means:
-                // If we had a previous value, restore it.
-                // If we didn't, remove the key from map.
+            StateChange::Set {
+                key,
+                previous_value,
+            } => {
+                // We "Set" this key. Now revert it to previous_value.
                 match previous_value {
-                    Some(old) => {
-                        map.insert(key, old);
+                    Some(old_value) => {
+                        map.insert(key, Some(old_value));
                     }
                     None => {
+                        // If there was no old_value, remove from overlay (fallback to store).
                         map.remove(&key);
                     }
                 }
             }
-            StateChange::Remove { key, previous_value } => {
-                // "Remove" was performed. Reverting means:
-                // If we had a previous value, re-insert it.
-                // If we didn't, do nothing (it was absent before).
-                if let Some(old) = previous_value {
-                    map.insert(key, old);
+            StateChange::Remove {
+                key,
+                previous_value,
+            } => {
+                // We "Remove"d this key. Now revert it to previous_value.
+                match previous_value {
+                    Some(old_value) => {
+                        map.insert(key, Some(old_value));
+                    }
+                    None => {
+                        // If old_value was None, remove from overlay to revert.
+                        map.remove(&key);
+                    }
                 }
             }
         }
     }
 }
 
-/// A checkpoint provides an in-memory overlay that can be restored
-/// to a prior state by "undoing" the logged changes.
+/// The checkpoint overlay for a read-only store `S`.
+/// Overlay is tracked in `map`, which can have:
+///  - `Some(value)` => key is set to `value`
+///  - `None` => key is explicitly removed / tombstone
+///  - no entry => fallback to store
 pub struct Checkpoint<'a, S> {
-    /// The in-memory overlay for changes not yet committed to the backing store.
-    map: HashMap<Vec<u8>, Vec<u8>>,
-    /// Ordered list of changes (for undo).
-    change_list: Vec<StateChange>,
-
-    /// The read-only backing store. We query it if `map` doesn’t have the key.
     storage: &'a S,
+    map: HashMap<Vec<u8>, Option<Vec<u8>>>,
+    change_list: Vec<StateChange>,
 }
 
 impl<'a, S> Checkpoint<'a, S> {
@@ -65,61 +77,57 @@ impl<'a, S> Checkpoint<'a, S> {
 }
 
 impl<'a, S: ReadonlyKV> Checkpoint<'a, S> {
-    /// Retrieves a value first from local changes, else falls back to storage.
+    /// Retrieves the "logical" value for `key`.
+    ///  1) If overlay has key => check if it's Some(...) or None.
+    ///  2) Else fallback to store.
     pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
-        if let Some(value) = self.map.get(key) {
-            Ok(Some(value.clone()))
-        } else {
-            self.storage.get(key)
+        if let Some(opt) = self.map.get(key) {
+            // If the overlay says Some(v), return that.
+            // If the overlay says None, it's explicitly removed => return None.
+            return Ok(opt.clone());
         }
+        // No overlay entry => fallback to store
+        self.storage.get(key)
     }
 
-    /// Sets a key in the overlay and records the previous value so we can revert.
+    /// Sets `key` to `value`, recording the old logical value for undo.
     pub fn set(&mut self, key: &[u8], value: Vec<u8>) -> Result<(), ErrorCode> {
-        // Capture the old value from either the overlay or the underlying storage
-        let old_value = self
-            .map
-            .get(key)
-            .cloned()
-            .or_else(|| self.storage.get(key).ok().flatten());
+        // Get old logical value (including store fallback).
+        let old_value = self.get(key)?;
 
-        // Log the change
+        // Record that we changed the value
         self.change_list.push(StateChange::Set {
             key: key.to_vec(),
             previous_value: old_value,
         });
 
-        // Actually update the overlay
-        self.map.insert(key.to_vec(), value);
-
+        // Actually set in overlay (Some(...) => not removed).
+        self.map.insert(key.to_vec(), Some(value));
         Ok(())
     }
 
-    /// Removes a key from the overlay and records the previous value so we can revert.
+    /// Removes `key` from the "logical" store, recording old value for undo.
     pub fn remove(&mut self, key: &[u8]) -> Result<(), ErrorCode> {
-        let old_value = self
-            .map
-            .get(key)
-            .cloned()
-            .or_else(|| self.storage.get(key).ok().flatten());
+        // old logical value
+        let old_value = self.get(key)?;
 
         self.change_list.push(StateChange::Remove {
             key: key.to_vec(),
             previous_value: old_value,
         });
 
-        self.map.remove(key);
+        // Insert a "tombstone" => explicitly removed
+        self.map.insert(key.to_vec(), None);
         Ok(())
     }
 
-    /// Returns a "bookmark" in the change list we can restore to.
+    /// Returns a checkpoint ID (just an index in the change log).
     pub fn checkpoint(&self) -> u64 {
         self.change_list.len() as u64
     }
 
-    /// Restores state by popping and reverting changes until we're back to `checkpoint`.
+    /// Restores the overlay to the given checkpoint by popping changes.
     pub fn restore(&mut self, checkpoint: u64) {
-        // Pop changes until we're back to the checkpoint index
         while self.change_list.len() as u64 > checkpoint {
             let change = self.change_list.pop().unwrap();
             change.revert(&mut self.map);
