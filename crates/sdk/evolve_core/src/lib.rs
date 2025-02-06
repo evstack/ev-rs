@@ -75,6 +75,7 @@ impl InvokeRequest {
     }
 }
 
+
 impl InvokeRequest {
     pub fn function(&self) -> u64 {
         self.function_identifier
@@ -101,6 +102,13 @@ impl InvokeRequest {
 /// Defines the response of an [`InvokeRequest`]
 pub struct InvokeResponse {
     response: Message,
+}
+
+impl InvokeResponse {
+    pub fn try_from_encodable(v: impl Encodable) -> SdkResult<InvokeResponse> {
+        let bytes = v.encode()?;
+        Ok(InvokeResponse::new(Message::from(bytes)))
+    }
 }
 
 impl InvokeResponse {

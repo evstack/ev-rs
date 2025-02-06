@@ -1,6 +1,7 @@
 mod checkpoint;
 #[cfg(test)]
 mod test;
+mod account;
 
 use crate::checkpoint::Checkpoint;
 use evolve_core::encoding::{Decodable, Encodable};

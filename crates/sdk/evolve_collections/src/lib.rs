@@ -2,7 +2,7 @@ use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::well_known::{
     StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
 };
-use evolve_core::{InvokeRequest, Environment, SdkResult};
+use evolve_core::{Environment, InvokeRequest, SdkResult};
 use std::marker::PhantomData;
 
 pub struct Map<K, V> {
@@ -24,12 +24,7 @@ where
     K: Encodable + Decodable,
     V: Encodable + Decodable,
 {
-    pub fn set(
-        &self,
-        backend: &mut dyn Environment,
-        key: K,
-        value: V,
-    ) -> SdkResult<()> {
+    pub fn set(&self, backend: &mut dyn Environment, key: K, value: V) -> SdkResult<()> {
         backend.do_exec(
             STORAGE_ACCOUNT_ID,
             InvokeRequest::try_from(StorageSetRequest {
@@ -52,6 +47,23 @@ where
             None => Ok(None),
             Some(v) => Ok(Some(V::decode(&v)?)),
         }
+    }
+}
+
+pub struct Item<V>(Map<(), V>);
+
+impl<V> Item<V> {
+    pub const fn new(prefix: u8) -> Item<V> {
+        Item(Map::new(prefix))
+    }
+}
+
+impl<V> Item<V>
+where
+    V: Encodable + Decodable,
+{
+    pub fn get(&self, backend: &dyn Environment) -> SdkResult<Option<V>> {
+        self.0.get(backend, ())
     }
 }
 
