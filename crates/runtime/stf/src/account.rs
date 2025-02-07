@@ -71,7 +71,7 @@ mod tests {
     use crate::account::asset_account;
     use crate::test::TestStf;
     use evolve_core::encoding::Encodable;
-    use evolve_core::{AccountId, Message};
+    use evolve_core::{AccountCode, AccountId, Message};
     use evolve_server_core::mocks::MockedAccountsCodeStorage;
     use evolve_server_core::AccountsCodeStorage;
     use std::collections::HashMap;
@@ -90,7 +90,7 @@ mod tests {
             &mut storage,
             &mut account_codes,
             AccountId::new(100u128),
-            "asset".to_owned(),
+            "Asset".to_owned(),
             Message::from(
                 asset_account::InitializeMsg {
                     name: "atom".to_string(),
