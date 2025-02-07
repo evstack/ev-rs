@@ -6,7 +6,7 @@ use evolve_server_core::mocks::MockedAccountsCodeStorage;
 use evolve_server_core::{AccountsCodeStorage, Transaction};
 use std::collections::HashMap;
 
-struct MockTx;
+pub(crate) struct  MockTx;
 
 impl Transaction for MockTx {
     fn sender(&self) -> AccountId {
@@ -26,7 +26,7 @@ impl Transaction for MockTx {
     }
 }
 
-type TestStf = Stf<MockTx>;
+pub(crate) type TestStf = Stf<MockTx>;
 
 mod echo_account {
     use borsh::{BorshDeserialize, BorshSerialize};

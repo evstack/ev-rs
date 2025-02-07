@@ -31,7 +31,12 @@ pub mod asset_account {
             name: String,
             init_balances: Vec<(AccountId, u128)>,
         ) -> SdkResult<()> {
-            todo!()
+            for (addr, balance) in init_balances {
+                self.balances.set(env, addr, balance)?;
+            }
+            self.name.set(env, name)?;
+
+            Ok(())
         }
 
         #[exec]
@@ -45,8 +50,12 @@ pub mod asset_account {
         }
 
         #[query]
-        pub fn get_balance(&self, env: &dyn Environment, account_id: AccountId) -> SdkResult<u128> {
-            todo!()
+        pub fn get_balance(
+            &self,
+            env: &dyn Environment,
+            account_id: AccountId,
+        ) -> SdkResult<Option<u128>> {
+            self.balances.get(env, account_id)
         }
 
         fn ignored(&self, env: &mut dyn Environment, account_id: AccountId) -> SdkResult<()> {
@@ -59,8 +68,44 @@ pub mod asset_account {
 #[cfg(test)]
 mod tests {
     use super::asset_account::Asset;
+    use crate::account::asset_account;
+    use crate::test::TestStf;
+    use evolve_core::encoding::Encodable;
+    use evolve_core::{AccountId, Message};
+    use evolve_server_core::mocks::MockedAccountsCodeStorage;
+    use evolve_server_core::AccountsCodeStorage;
+    use std::collections::HashMap;
+
     #[test]
     fn test() {
-        let account = Asset::new();
+        let mut account_codes = MockedAccountsCodeStorage::new();
+
+        let asset = Asset::new();
+
+        account_codes.add_code(asset).unwrap();
+
+        let mut storage: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+
+        let atom_id = TestStf::create_account(
+            &mut storage,
+            &mut account_codes,
+            AccountId::new(100u128),
+            "asset".to_owned(),
+            Message::from(
+                asset_account::InitializeMsg {
+                    name: "atom".to_string(),
+                    init_balances: vec![(AccountId::new(1u128), 1000u128)],
+                }
+                .encode()
+                .unwrap(),
+            ),
+        )
+        .unwrap()
+        .new_account_id;
+
+        // try get balance
+        let req = asset_account::GetBalanceMsg{
+            account_id: AccountId::new(1u128),
+        };
     }
 }

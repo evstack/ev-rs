@@ -65,6 +65,10 @@ where
     pub fn get(&self, backend: &dyn Environment) -> SdkResult<Option<V>> {
         self.0.get(backend, ())
     }
+
+    pub fn set(&self, backend: &mut dyn Environment, value: V) -> SdkResult<()> {
+        self.0.set(backend, (), value)
+    }
 }
 
 #[cfg(test)]

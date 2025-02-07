@@ -1,7 +1,8 @@
+mod account;
 mod checkpoint;
+mod mocks;
 #[cfg(test)]
 mod test;
-mod account;
 
 use crate::checkpoint::Checkpoint;
 use evolve_core::encoding::{Decodable, Encodable};
@@ -61,6 +62,18 @@ impl<T> Stf<T> {
         let writable_storage = Checkpoint::new(storage);
         let mut invoker = Invoker::new(from, to, 0, writable_storage, account_storage);
         invoker.do_exec(to, req)
+    }
+
+    pub(crate) fn query<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
+        storage: &'a S,
+        account_storage: &'a mut A,
+        to: AccountId,
+        req: InvokeRequest,
+    ) -> SdkResult<InvokeResponse> {
+        let writable_storage = Checkpoint::new(storage);
+        let mut invoker =
+            Invoker::new(RUNTIME_ACCOUNT_ID, to, 0, writable_storage, account_storage);
+        invoker.do_query(to, req)
     }
 }
 
