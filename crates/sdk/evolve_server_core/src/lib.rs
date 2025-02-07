@@ -1,6 +1,6 @@
 pub mod mocks; // TODO: make test
 
-use evolve_core::{AccountCode, AccountId, ErrorCode, Environment, Message};
+use evolve_core::{AccountCode, AccountId, ErrorCode, Environment, Message, ReadonlyKV};
 
 pub trait Transaction {
     fn sender(&self) -> AccountId;
@@ -16,4 +16,19 @@ pub trait AccountsCodeStorage {
     where
         F: FnOnce(Option<&dyn AccountCode>) -> R;
     fn add_code<T: AccountCode + 'static>(&mut self, account_code: T) -> Result<(), ErrorCode>;
+}
+
+pub enum StateChange {
+    Set {
+        key: Vec<u8>,
+        value: Vec<u8>,
+    },
+
+    Remove {
+        key: Vec<u8>,
+    }
+}
+
+pub trait WritableKV: ReadonlyKV {
+    fn apply_changes(&mut self, changes: &[StateChange]) -> Result<(), ErrorCode>;
 }
