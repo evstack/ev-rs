@@ -6,10 +6,12 @@ pub mod asset_account {
     use evolve_collections::{Item, Map};
     use evolve_core::encoding::Encodable;
     use evolve_core::{
-        AccountCode, AccountId, Environment, InvokeRequest, InvokeResponse, Message, SdkResult,
-        ERR_UNKNOWN_FUNCTION,
+        AccountCode, AccountId, Environment, ErrorCode, InvokeRequest, InvokeResponse, Message,
+        SdkResult, ERR_UNKNOWN_FUNCTION,
     };
     use evolve_macros::{exec, init, query};
+
+    const ERR_INSUFFICIENT_BALANCE: ErrorCode = 1;
 
     pub struct Asset {
         pub name: Item<String>,
@@ -32,9 +34,9 @@ pub mod asset_account {
             init_balances: Vec<(AccountId, u128)>,
         ) -> SdkResult<()> {
             for (addr, balance) in init_balances {
-                self.balances.set(env, addr, balance)?;
+                self.balances.set(&addr, &balance, env)?;
             }
-            self.name.set(env, name)?;
+            self.name.set(&name, env)?;
 
             Ok(())
         }
@@ -46,7 +48,22 @@ pub mod asset_account {
             to: AccountId,
             amount: u128,
         ) -> SdkResult<()> {
-            todo!()
+            let new_sender_balance = self.balances.update(
+                &env.sender(),
+                |value| {
+                    value
+                        .unwrap_or_default()
+                        .checked_sub(amount)
+                        .ok_or(ERR_INSUFFICIENT_BALANCE)
+                },
+                env,
+            )?;
+
+            let new_recipient_balance =
+                self.balances
+                    .update(&to, |value| Ok(value.unwrap_or_default() + amount), env)?;
+
+            Ok(())
         }
 
         #[query]
@@ -55,7 +72,7 @@ pub mod asset_account {
             env: &dyn Environment,
             account_id: AccountId,
         ) -> SdkResult<Option<u128>> {
-            self.balances.get(env, account_id)
+            self.balances.get(&account_id, env)
         }
 
         fn ignored(&self, env: &mut dyn Environment, account_id: AccountId) -> SdkResult<()> {

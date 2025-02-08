@@ -24,11 +24,11 @@ where
     K: Encodable + Decodable,
     V: Encodable + Decodable,
 {
-    pub fn set(&self, backend: &mut dyn Environment, key: K, value: V) -> SdkResult<()> {
+    pub fn set(&self, key: &K, value: &V, backend: &mut dyn Environment, ) -> SdkResult<()> {
         backend.do_exec(
             STORAGE_ACCOUNT_ID,
             InvokeRequest::try_from(StorageSetRequest {
-                key: key.encode()?,
+                key: self.make_key(key)?,
                 value: value.encode()?,
             })?,
         )?;
@@ -36,12 +36,12 @@ where
         Ok(())
     }
 
-    pub fn get(&self, backend: &dyn Environment, key: K) -> SdkResult<Option<V>> {
+    pub fn get(&self, key: &K, backend: &dyn Environment) -> SdkResult<Option<V>> {
         let resp = backend.do_query(
             STORAGE_ACCOUNT_ID,
             InvokeRequest::try_from(StorageGetRequest {
                 account_id: backend.whoami(),
-                key: key.encode()?,
+                key: self.make_key(key)?,
             })?,
         )?;
 
@@ -51,7 +51,26 @@ where
             Some(v) => Ok(Some(V::decode(&v)?)),
         }
     }
+
+    pub fn update(
+        &self,
+        key: &K,
+        update_fn: impl FnOnce(Option<V>) -> SdkResult<V>,
+        backend: &mut dyn Environment,
+    ) -> SdkResult<V> {
+        let old_value = self.get(key, backend)?;
+        let new_value = update_fn(old_value)?;
+        self.set(key, &new_value, backend)?;
+        Ok(new_value)
+    }
+
+    pub fn make_key(&self, key: &K) -> SdkResult<Vec<u8>> {
+        let mut key_bytes = vec![self.prefix];
+        key_bytes.extend(key.encode()?);
+        Ok(key_bytes)
+    }
 }
+
 
 pub struct Item<V>(Map<(), V>);
 
@@ -66,11 +85,11 @@ where
     V: Encodable + Decodable,
 {
     pub fn get(&self, backend: &dyn Environment) -> SdkResult<Option<V>> {
-        self.0.get(backend, ())
+        self.0.get(&(), backend)
     }
 
-    pub fn set(&self, backend: &mut dyn Environment, value: V) -> SdkResult<()> {
-        self.0.set(backend, (), value)
+    pub fn set(&self, value: &V, backend: &mut dyn Environment, ) -> SdkResult<()> {
+        self.0.set(&(), value, backend)
     }
 }
 
