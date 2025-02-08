@@ -2,9 +2,9 @@ use crate::encoding::{Decodable, Encodable};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub mod encoding;
+pub mod low_level;
 pub mod mocks; // TODO: make test
 pub mod well_known;
-pub mod low_level;
 
 pub type ErrorCode = u64;
 pub const ERR_ENCODING: ErrorCode = 1;

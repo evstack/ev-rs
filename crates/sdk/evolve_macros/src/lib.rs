@@ -339,7 +339,11 @@ fn generate_accountcode_impl(
         let msg_name = &info.msg_name;
         let fn_name = &info.fn_name;
         // Generate arguments from the message fields.
-        let args = info.params.iter().map(|(name, _)| quote! { msg.#name }).collect::<Vec<_>>();
+        let args = info
+            .params
+            .iter()
+            .map(|(name, _)| quote! { msg.#name })
+            .collect::<Vec<_>>();
         quote! {
             fn init(&self, env: &mut dyn Environment, request: ::evolve_core::InvokeRequest) -> SdkResult<::evolve_core::InvokeResponse> {
                 use evolve_core::encoding::{Decodable, Encodable};

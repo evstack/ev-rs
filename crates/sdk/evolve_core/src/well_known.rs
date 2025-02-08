@@ -21,16 +21,23 @@ pub struct CreateAccountRequest {
 }
 
 impl CreateAccountRequest {
-    pub fn new_invoke_request<T: Encodable>(code_id: String, init_message: &T) -> SdkResult<InvokeRequest> {
+    pub fn new_invoke_request<T: Encodable>(
+        code_id: String,
+        init_message: &T,
+    ) -> SdkResult<InvokeRequest> {
         let init_message = Message::from(init_message.encode()?);
         let create_request = Message::from(
-            CreateAccountRequest{
+            CreateAccountRequest {
                 code_id,
                 init_message,
-            }.encode()?,
+            }
+            .encode()?,
         );
 
-        Ok(InvokeRequest::new(RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER, create_request))
+        Ok(InvokeRequest::new(
+            RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER,
+            create_request,
+        ))
     }
 }
 

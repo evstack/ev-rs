@@ -97,7 +97,8 @@ pub mod asset_account {
             name: String,
             init_balances: Vec<(::evolve_core::AccountId, u128)>,
             env: &mut dyn ::evolve_core::Environment,
-        ) -> SdkResult<()> { // the result of init market
+        ) -> SdkResult<()> {
+            // the result of init market
             let (self_account_id, resp) = ::evolve_core::low_level::create_account(
                 "Asset".to_string(),
                 &InitializeMsg {
@@ -117,7 +118,8 @@ pub mod asset_account {
             to: ::evolve_core::AccountId,
             amount: u128,
             env: &mut dyn ::evolve_core::Environment,
-        ) -> ::evolve_core::SdkResult<()> { // result of exec marker
+        ) -> ::evolve_core::SdkResult<()> {
+            // result of exec marker
             ::evolve_core::low_level::exec_account(
                 self.0
                     .get(env)?
@@ -132,7 +134,8 @@ pub mod asset_account {
             &self,
             account_id: ::evolve_core::AccountId,
             env: &dyn ::evolve_core::Environment,
-        ) -> ::evolve_core::SdkResult<Option<u128>> { // result of query market
+        ) -> ::evolve_core::SdkResult<Option<u128>> {
+            // result of query market
             ::evolve_core::low_level::query_account(
                 self.0
                     .get(env)?
