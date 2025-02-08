@@ -353,7 +353,7 @@ fn generate_accountcode_impl(
     } else {
         quote! {
             fn init(&self, _env: &mut dyn Environment, _request: ::evolve_core::InvokeRequest) -> SdkResult<::evolve_core::InvokeResponse> {
-                Err(ERR_UNKNOWN_FUNCTION)
+                Err(::evolve_core::ERR_UNKNOWN_FUNCTION)
             }
         }
     };
