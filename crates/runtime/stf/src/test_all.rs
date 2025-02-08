@@ -75,7 +75,7 @@ pub mod asset_account {
             self.balances.get(&account_id, env)
         }
 
-        fn ignored(&self, env: &mut dyn Environment, account_id: AccountId) -> SdkResult<()> {
+        fn ignored(&self, _account_id: AccountId, _env: &mut dyn Environment, ) -> SdkResult<()> {
             // this fn is ignored bcz no query or exec
             todo!()
         }
