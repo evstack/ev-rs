@@ -19,8 +19,6 @@ impl<S: BorshSerialize> Encodable for S {
 
 impl<S: BorshDeserialize> Decodable for S {
     fn decode(bytes: &[u8]) -> SdkResult<Self> {
-        borsh::from_slice(bytes).map_err(|_| {
-            ERR_ENCODING
-        })
+        borsh::from_slice(bytes).map_err(|_| ERR_ENCODING)
     }
 }

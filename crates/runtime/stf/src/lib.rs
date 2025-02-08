@@ -189,10 +189,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         InvokeResponse::try_from(EmptyResponse {})
     }
 
-    fn handle_storage_query(
-        &self,
-        request: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
+    fn handle_storage_query(&self, request: InvokeRequest) -> SdkResult<InvokeResponse> {
         let storage_get = StorageGetRequest::try_from(request)?;
 
         let mut key = storage_get.account_id.as_bytes();

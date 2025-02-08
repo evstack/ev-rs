@@ -2,6 +2,8 @@
 
 extern crate proc_macro;
 
+// Import the CamelCase trait so that `.to_camel_case()` is available.
+use heck::ToUpperCamelCase;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use sha2::{Digest, Sha256};
@@ -9,8 +11,6 @@ use syn::{
     parse_macro_input, spanned::Spanned, Attribute, FnArg, Ident, ImplItem, Item, ItemImpl,
     ItemMod, Pat, Type,
 };
-// Import the CamelCase trait so that `.to_camel_case()` is available.
-use heck::ToUpperCamelCase;
 
 /// This attribute macro generates message types and an AccountCode trait implementation
 /// for the given account type. It processes functions annotated with #[init], #[exec],
@@ -31,11 +31,10 @@ pub fn account_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
 
     // Collect functions (with markers #[init], #[exec], #[query]) from the impl block(s)
     // for the given account type.
-    let (init_fn, exec_fns, query_fns) =
-        match collect_account_functions(&account_ident, content) {
-            Ok(val) => val,
-            Err(err) => return err.to_compile_error().into(),
-        };
+    let (init_fn, exec_fns, query_fns) = match collect_account_functions(&account_ident, content) {
+        Ok(val) => val,
+        Err(err) => return err.to_compile_error().into(),
+    };
 
     // Generate the message struct definitions for each function.
     let mut generated_msgs = Vec::new();
@@ -398,7 +397,6 @@ fn is_marker_attr(attr: &Attribute, marker: &str) -> bool {
         .get_ident()
         .map_or(false, |ident| ident == marker)
 }
-
 
 /// A no-op attribute used only as a marker.
 #[proc_macro_attribute]

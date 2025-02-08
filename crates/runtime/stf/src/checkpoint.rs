@@ -84,8 +84,7 @@ impl<'a, S> Checkpoint<'a, S> {
         // For each key in the overlay:
         //   - If the value is Some(v), then we want to persist a "set" operation.
         //   - If the value is None, then we want to persist a "remove" operation.
-        self
-            .overlay
+        self.overlay
             .into_iter()
             .map(|(key, maybe_value)| match maybe_value {
                 Some(value) => CoreStateChange::Set { key, value },
@@ -156,8 +155,9 @@ impl<'a, S: ReadonlyKV> Checkpoint<'a, S> {
 
 #[cfg(test)]
 mod tests {
-    use super::*; // bring in the Checkpoint and StateChange
-    use evolve_core::{ErrorCode, ReadonlyKV};
+    use super::*;
+    // bring in the Checkpoint and StateChange
+        use evolve_core::{ErrorCode, ReadonlyKV};
     use std::collections::HashMap;
 
     /// A simple in-memory mock that implements `ReadonlyKV`.

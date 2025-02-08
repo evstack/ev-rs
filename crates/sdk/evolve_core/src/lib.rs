@@ -75,7 +75,6 @@ impl InvokeRequest {
     }
 }
 
-
 impl InvokeRequest {
     pub fn function(&self) -> u64 {
         self.function_identifier
@@ -136,36 +135,20 @@ impl InvokeResponse {
 pub trait Environment {
     fn whoami(&self) -> AccountId;
     fn sender(&self) -> AccountId;
-    fn do_query(
-        &self,
-        to: AccountId,
-        data: InvokeRequest,
-    ) -> SdkResult<InvokeResponse>;
-    fn do_exec(
-        &mut self,
-        to: AccountId,
-        data: InvokeRequest,
-    ) -> SdkResult<InvokeResponse>;
+    fn do_query(&self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse>;
+    fn do_exec(&mut self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse>;
 }
 
 /// Defines some arbitrary code that can handle account execution logic.
 pub trait AccountCode {
     fn identifier(&self) -> String;
-    fn init(
-        &self,
-        env: &mut dyn Environment,
-        request: InvokeRequest,
-    ) -> SdkResult<InvokeResponse>;
+    fn init(&self, env: &mut dyn Environment, request: InvokeRequest) -> SdkResult<InvokeResponse>;
     fn execute(
         &self,
         env: &mut dyn Environment,
         request: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
-    fn query(
-        &self,
-        env: &dyn Environment,
-        request: InvokeRequest,
-    ) -> SdkResult<InvokeResponse>;
+    fn query(&self, env: &dyn Environment, request: InvokeRequest) -> SdkResult<InvokeResponse>;
 }
 
 pub trait ReadonlyKV {

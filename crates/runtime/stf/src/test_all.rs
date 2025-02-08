@@ -102,7 +102,6 @@ mod tests {
         )
         .unwrap();
 
-
         storage.apply_changes(state_changes.into_changes()).unwrap();
 
         // try get balance

@@ -1,5 +1,5 @@
 use crate::{AccountsCodeStorage, StateChange, WritableKV};
-use evolve_core::{AccountCode, ErrorCode, Environment};
+use evolve_core::{AccountCode, Environment, ErrorCode};
 use std::collections::HashMap;
 
 pub struct MockedAccountsCodeStorage {
