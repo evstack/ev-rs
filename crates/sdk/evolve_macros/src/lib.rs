@@ -303,7 +303,7 @@ fn generate_msg_struct(info: &FunctionInfo) -> proc_macro2::TokenStream {
     if info.kind == FunctionKind::Init {
         // For init functions, we only need the struct.
         quote! {
-            #[derive(BorshSerialize, BorshDeserialize)]
+            #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize)]
             pub struct #msg_name {
                 #(#fields)*
             }
@@ -311,7 +311,7 @@ fn generate_msg_struct(info: &FunctionInfo) -> proc_macro2::TokenStream {
     } else {
         // For exec and query functions, add constants for the function name and identifier.
         quote! {
-            #[derive(BorshSerialize, BorshDeserialize)]
+            #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize)]
             pub struct #msg_name {
                 #(#fields)*
             }
@@ -341,18 +341,18 @@ fn generate_accountcode_impl(
         // Generate arguments from the message fields.
         let args = info.params.iter().map(|(name, _)| quote! { msg.#name });
         quote! {
-            fn init(&self, env: &mut dyn Environment, request: InvokeRequest) -> SdkResult<InvokeResponse> {
+            fn init(&self, env: &mut dyn Environment, request: ::evolve_core::InvokeRequest) -> SdkResult<::evolve_core::InvokeResponse> {
                 use evolve_core::encoding::{Decodable, Encodable};
                 let msg = request.decode::<#msg_name>()?;
                 // Pass message fields first, then env as the last argument.
                 let resp = self.#fn_name(#(#args),*, env)?;
-                let msg_resp = Message::from(resp.encode()?);
-                Ok(InvokeResponse::new(msg_resp))
+                let msg_resp = ::evolve_core::Message::from(resp.encode()?);
+                Ok(::evolve_core::InvokeResponse::new(msg_resp))
             }
         }
     } else {
         quote! {
-            fn init(&self, _env: &mut dyn Environment, _request: InvokeRequest) -> SdkResult<InvokeResponse> {
+            fn init(&self, _env: &mut dyn Environment, _request: ::evolve_core::InvokeRequest) -> SdkResult<::evolve_core::InvokeResponse> {
                 Err(ERR_UNKNOWN_FUNCTION)
             }
         }
@@ -368,16 +368,16 @@ fn generate_accountcode_impl(
                 let msg = request.decode::<#msg_name>()?;
                 // Pass message fields first, then env as the last argument.
                 let resp = self.#fn_name(#(#args),*, env)?;
-                InvokeResponse::try_from_encodable(resp)
+                ::evolve_core::InvokeResponse::try_from_encodable(resp)
             }
         }
     });
     let exec_impl = quote! {
-        fn execute(&self, env: &mut dyn Environment, request: InvokeRequest) -> SdkResult<InvokeResponse> {
+        fn execute(&self, env: &mut dyn Environment, request: ::evolve_core::InvokeRequest) -> SdkResult<::evolve_core::InvokeResponse> {
             use evolve_core::encoding::Decodable;
             match request.function() {
                 #(#exec_match_arms,)*
-                _ => Err(ERR_UNKNOWN_FUNCTION)
+                _ => Err(::evolve_core::ERR_UNKNOWN_FUNCTION)
             }
         }
     };
@@ -392,23 +392,23 @@ fn generate_accountcode_impl(
                 let msg = request.decode::<#msg_name>()?;
                 // Pass message fields first, then env as the last argument.
                 let resp = self.#fn_name(#(#args),*, env)?;
-                InvokeResponse::try_from_encodable(resp)
+                ::evolve_core::InvokeResponse::try_from_encodable(resp)
             }
         }
     });
     let query_impl = quote! {
-        fn query(&self, env: &dyn Environment, request: InvokeRequest) -> SdkResult<InvokeResponse> {
+        fn query(&self, env: &dyn Environment, request: ::evolve_core::InvokeRequest) -> SdkResult<::evolve_core::InvokeResponse> {
             use evolve_core::encoding::Decodable;
             match request.function() {
                 #(#query_match_arms,)*
-                _ => Err(ERR_UNKNOWN_FUNCTION)
+                _ => Err(::evolve_core::ERR_UNKNOWN_FUNCTION)
             }
         }
     };
 
     // Combine all parts into the final AccountCode implementation.
     quote! {
-        impl AccountCode for #account_ident {
+        impl ::evolve_core::AccountCode for #account_ident {
             fn identifier(&self) -> String {
                 #account_name_str.to_string()
             }
