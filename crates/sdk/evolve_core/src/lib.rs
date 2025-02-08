@@ -4,10 +4,12 @@ use borsh::{BorshDeserialize, BorshSerialize};
 pub mod encoding;
 pub mod mocks; // TODO: make test
 pub mod well_known;
+pub mod low_level;
 
 pub type ErrorCode = u64;
 pub const ERR_ENCODING: ErrorCode = 1;
 pub const ERR_UNKNOWN_FUNCTION: ErrorCode = 2;
+pub const ERR_ACCOUNT_NOT_INITIALIZED: ErrorCode = 3;
 
 pub type SdkResult<T> = Result<T, ErrorCode>;
 

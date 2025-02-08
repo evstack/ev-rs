@@ -339,13 +339,13 @@ fn generate_accountcode_impl(
         let msg_name = &info.msg_name;
         let fn_name = &info.fn_name;
         // Generate arguments from the message fields.
-        let args = info.params.iter().map(|(name, _)| quote! { msg.#name });
+        let args = info.params.iter().map(|(name, _)| quote! { msg.#name }).collect::<Vec<_>>();
         quote! {
             fn init(&self, env: &mut dyn Environment, request: ::evolve_core::InvokeRequest) -> SdkResult<::evolve_core::InvokeResponse> {
                 use evolve_core::encoding::{Decodable, Encodable};
                 let msg = request.decode::<#msg_name>()?;
                 // Pass message fields first, then env as the last argument.
-                let resp = self.#fn_name(#(#args),*, env)?;
+                let resp = self.#fn_name(#(#args, )* env)?;
                 let msg_resp = ::evolve_core::Message::from(resp.encode()?);
                 Ok(::evolve_core::InvokeResponse::new(msg_resp))
             }
@@ -367,7 +367,7 @@ fn generate_accountcode_impl(
             #msg_name::FUNCTION_IDENTIFIER => {
                 let msg = request.decode::<#msg_name>()?;
                 // Pass message fields first, then env as the last argument.
-                let resp = self.#fn_name(#(#args),*, env)?;
+                let resp = self.#fn_name(#(#args, )* env)?;
                 ::evolve_core::InvokeResponse::try_from_encodable(resp)
             }
         }
@@ -391,7 +391,7 @@ fn generate_accountcode_impl(
             #msg_name::FUNCTION_IDENTIFIER => {
                 let msg = request.decode::<#msg_name>()?;
                 // Pass message fields first, then env as the last argument.
-                let resp = self.#fn_name(#(#args),*, env)?;
+                let resp = self.#fn_name(#(#args, )* env)?;
                 ::evolve_core::InvokeResponse::try_from_encodable(resp)
             }
         }
