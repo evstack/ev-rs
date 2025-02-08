@@ -99,6 +99,7 @@ impl TryFrom<InvokeResponse> for EmptyResponse {
 
 #[derive(BorshDeserialize, BorshSerialize, Debug)]
 pub struct StorageGetRequest {
+    pub account_id: AccountId,
     pub key: Vec<u8>,
 }
 

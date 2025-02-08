@@ -1,4 +1,4 @@
-use crate::AccountsCodeStorage;
+use crate::{AccountsCodeStorage, StateChange, WritableKV};
 use evolve_core::{AccountCode, ErrorCode, Environment};
 use std::collections::HashMap;
 
@@ -26,6 +26,23 @@ impl AccountsCodeStorage for MockedAccountsCodeStorage {
     fn add_code<T: AccountCode + 'static>(&mut self, account_code: T) -> Result<(), ErrorCode> {
         self.codes
             .insert(account_code.identifier(), Box::new(account_code));
+        Ok(())
+    }
+}
+
+impl WritableKV for HashMap<Vec<u8>, Vec<u8>> {
+    fn apply_changes(&mut self, changes: Vec<StateChange>) -> Result<(), ErrorCode> {
+        for state in changes {
+            match state {
+                StateChange::Set { key, value } => {
+                    self.insert(key, value);
+                }
+                StateChange::Remove { key } => {
+                    self.remove(&key);
+                }
+            }
+        }
+
         Ok(())
     }
 }

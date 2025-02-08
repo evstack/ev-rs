@@ -39,7 +39,10 @@ where
     pub fn get(&self, backend: &dyn Environment, key: K) -> SdkResult<Option<V>> {
         let resp = backend.do_query(
             STORAGE_ACCOUNT_ID,
-            InvokeRequest::try_from(StorageGetRequest { key: key.encode()? })?,
+            InvokeRequest::try_from(StorageGetRequest {
+                account_id: backend.whoami(),
+                key: key.encode()?,
+            })?,
         )?;
 
         let resp = StorageGetResponse::try_from(resp)?;

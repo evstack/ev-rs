@@ -109,6 +109,10 @@ impl InvokeResponse {
         let bytes = v.encode()?;
         Ok(InvokeResponse::new(Message::from(bytes)))
     }
+
+    pub fn try_into_decodable<T: Decodable>(self) -> SdkResult<T> {
+        T::decode(self.response_bytes())
+    }
 }
 
 impl InvokeResponse {

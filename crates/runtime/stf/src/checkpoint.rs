@@ -79,22 +79,19 @@ impl<'a, S> Checkpoint<'a, S> {
         }
     }
 
-    pub fn apply_changes_to_kv(self, store: &mut impl WritableKV) -> Result<(), ErrorCode> {
+    pub fn into_changes(self) -> Vec<CoreStateChange> {
         // The final overlay is stored in self.overlay.
         // For each key in the overlay:
         //   - If the value is Some(v), then we want to persist a "set" operation.
         //   - If the value is None, then we want to persist a "remove" operation.
-        let core_changes: Vec<CoreStateChange> = self
+        self
             .overlay
             .into_iter()
             .map(|(key, maybe_value)| match maybe_value {
                 Some(value) => CoreStateChange::Set { key, value },
                 None => CoreStateChange::Remove { key },
             })
-            .collect();
-
-        // Apply the aggregated (deduplicated) changes to the underlying writable KV.
-        store.apply_changes(&core_changes)
+            .collect()
     }
 }
 

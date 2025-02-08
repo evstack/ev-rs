@@ -121,7 +121,5 @@ fn success() {
             .unwrap(),
         ),
     )
-    .unwrap();
-
-    println!("{:?}", echo_id)
+    .unwrap().0;
 }

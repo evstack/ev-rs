@@ -18,6 +18,7 @@ pub trait AccountsCodeStorage {
     fn add_code<T: AccountCode + 'static>(&mut self, account_code: T) -> Result<(), ErrorCode>;
 }
 
+#[derive(Debug)]
 pub enum StateChange {
     Set {
         key: Vec<u8>,
@@ -30,5 +31,5 @@ pub enum StateChange {
 }
 
 pub trait WritableKV: ReadonlyKV {
-    fn apply_changes(&mut self, changes: &[StateChange]) -> Result<(), ErrorCode>;
+    fn apply_changes(&mut self, changes: Vec<StateChange>) -> Result<(), ErrorCode>;
 }

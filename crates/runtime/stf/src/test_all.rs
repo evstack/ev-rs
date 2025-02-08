@@ -68,12 +68,12 @@ pub mod asset_account {
 #[cfg(test)]
 mod tests {
     use super::asset_account::Asset;
-    use crate::account::asset_account;
     use crate::test::TestStf;
+    use crate::test_all::asset_account;
     use evolve_core::encoding::Encodable;
-    use evolve_core::{AccountCode, AccountId, Message};
+    use evolve_core::{AccountCode, AccountId, InvokeRequest, Message};
     use evolve_server_core::mocks::MockedAccountsCodeStorage;
-    use evolve_server_core::AccountsCodeStorage;
+    use evolve_server_core::{AccountsCodeStorage, WritableKV};
     use std::collections::HashMap;
 
     #[test]
@@ -86,8 +86,8 @@ mod tests {
 
         let mut storage: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
 
-        let atom_id = TestStf::create_account(
-            &mut storage,
+        let (resp, state_changes) = TestStf::create_account(
+            &storage,
             &mut account_codes,
             AccountId::new(100u128),
             "Asset".to_owned(),
@@ -100,12 +100,29 @@ mod tests {
                 .unwrap(),
             ),
         )
-        .unwrap()
-        .new_account_id;
+        .unwrap();
+
+
+        storage.apply_changes(state_changes.into_changes()).unwrap();
 
         // try get balance
-        let req = asset_account::GetBalanceMsg{
+        let req = asset_account::GetBalanceMsg {
             account_id: AccountId::new(1u128),
         };
+
+        let balance = TestStf::query(
+            &storage,
+            &mut account_codes,
+            resp.new_account_id,
+            InvokeRequest::new(
+                asset_account::GetBalanceMsg::FUNCTION_IDENTIFIER,
+                Message::from(req.encode().unwrap()),
+            ),
+        )
+        .expect("query failed")
+        .try_into_decodable::<Option<u128>>()
+        .expect("failed to decode response");
+
+        assert_eq!(balance, Some(1000u128));
     }
 }
