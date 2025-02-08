@@ -152,35 +152,59 @@ fn collect_account_functions(
                 None => continue,
             };
 
-            // Create a message struct name by converting the function name to CamelCase and appending "Msg".
+            // Create a message struct name by converting the function name to UpperCamelCase and appending "Msg".
             let fn_name = method.sig.ident.clone();
             let msg_name = format_ident!("{}Msg", fn_name.to_string().to_upper_camel_case());
 
-            // Prepare to collect parameters for the message struct.
-            let mut params = Vec::new();
-            let mut inputs_iter = method.sig.inputs.iter();
-
-            // The first parameter must be the receiver (e.g., &self).
-            let receiver = inputs_iter.next().ok_or_else(|| {
-                syn::Error::new(
-                    method.sig.ident.span(),
-                    "Expected a receiver parameter (e.g. &self)",
-                )
-            })?;
-            if !matches!(receiver, FnArg::Receiver(_)) {
+            // Collect all function parameters.
+            let inputs: Vec<_> = method.sig.inputs.iter().collect();
+            if inputs.len() < 2 {
                 return Err(syn::Error::new(
-                    receiver.span(),
-                    "Expected a receiver parameter (e.g. &self)",
+                    method.sig.ident.span(),
+                    "Expected at least two parameters: a receiver and an environment parameter",
                 ));
             }
 
-            // The second parameter is assumed to be the environment.
-            inputs_iter.next().ok_or_else(|| {
-                syn::Error::new(method.sig.ident.span(), "Expected an environment parameter")
-            })?;
+            // Ensure the first parameter is the receiver.
+            if !matches!(inputs[0], FnArg::Receiver(_)) {
+                return Err(syn::Error::new(
+                    inputs[0].span(),
+                    "Expected the first parameter to be a receiver (e.g. &self)",
+                ));
+            }
 
-            // All remaining parameters will become fields of the generated message struct.
-            for input in inputs_iter {
+            // The last parameter is assumed to be the environment.
+            let env_input = inputs.last().unwrap();
+            match env_input {
+                FnArg::Typed(pat_type) => {
+                    // Check that the environment parameter is a reference.
+                    if let syn::Type::Reference(type_ref) = &*pat_type.ty {
+                        // For query functions, the environment must be an immutable reference.
+                        if marker == FunctionKind::Query && type_ref.mutability.is_some() {
+                            return Err(syn::Error::new(
+                                env_input.span(),
+                                "Queries must have non mutable env",
+                            ));
+                        }
+                    } else {
+                        return Err(syn::Error::new(
+                            env_input.span(),
+                            "Expected the environment parameter to be a reference",
+                        ));
+                    }
+                }
+                _ => {
+                    return Err(syn::Error::new(
+                        env_input.span(),
+                        "Expected the environment parameter to be a typed parameter",
+                    ));
+                }
+            }
+
+            // All parameters between the receiver and the environment become message fields.
+            let field_inputs = &inputs[1..inputs.len() - 1];
+            let mut params = Vec::new();
+            for input in field_inputs {
                 let pat_type = match input {
                     FnArg::Typed(pat_type) => pat_type,
                     _ => {
@@ -314,12 +338,14 @@ fn generate_accountcode_impl(
     let init_impl = if let Some(info) = init_fn {
         let msg_name = &info.msg_name;
         let fn_name = &info.fn_name;
+        // Generate arguments from the message fields.
         let args = info.params.iter().map(|(name, _)| quote! { msg.#name });
         quote! {
             fn init(&self, env: &mut dyn Environment, request: InvokeRequest) -> SdkResult<InvokeResponse> {
                 use evolve_core::encoding::{Decodable, Encodable};
                 let msg = request.decode::<#msg_name>()?;
-                let resp = self.#fn_name(env, #(#args),*)?;
+                // Pass message fields first, then env as the last argument.
+                let resp = self.#fn_name(#(#args),*, env)?;
                 let msg_resp = Message::from(resp.encode()?);
                 Ok(InvokeResponse::new(msg_resp))
             }
@@ -340,7 +366,8 @@ fn generate_accountcode_impl(
         quote! {
             #msg_name::FUNCTION_IDENTIFIER => {
                 let msg = request.decode::<#msg_name>()?;
-                let resp = self.#fn_name(env, #(#args),*)?;
+                // Pass message fields first, then env as the last argument.
+                let resp = self.#fn_name(#(#args),*, env)?;
                 InvokeResponse::try_from_encodable(resp)
             }
         }
@@ -363,7 +390,8 @@ fn generate_accountcode_impl(
         quote! {
             #msg_name::FUNCTION_IDENTIFIER => {
                 let msg = request.decode::<#msg_name>()?;
-                let resp = self.#fn_name(env, #(#args),*)?;
+                // Pass message fields first, then env as the last argument.
+                let resp = self.#fn_name(#(#args),*, env)?;
                 InvokeResponse::try_from_encodable(resp)
             }
         }

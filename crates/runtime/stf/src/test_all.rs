@@ -29,9 +29,9 @@ pub mod asset_account {
         #[init]
         pub fn initialize(
             &self,
-            env: &mut dyn Environment,
             name: String,
             init_balances: Vec<(AccountId, u128)>,
+            env: &mut dyn Environment,
         ) -> SdkResult<()> {
             for (addr, balance) in init_balances {
                 self.balances.set(&addr, &balance, env)?;
@@ -44,9 +44,9 @@ pub mod asset_account {
         #[exec]
         pub fn transfer(
             &self,
-            env: &mut dyn Environment,
             to: AccountId,
             amount: u128,
+            env: &mut dyn Environment,
         ) -> SdkResult<()> {
             let new_sender_balance = self.balances.update(
                 &env.sender(),
@@ -69,8 +69,8 @@ pub mod asset_account {
         #[query]
         pub fn get_balance(
             &self,
-            env: &dyn Environment,
             account_id: AccountId,
+            env: &dyn Environment,
         ) -> SdkResult<Option<u128>> {
             self.balances.get(&account_id, env)
         }
