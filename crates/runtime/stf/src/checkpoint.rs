@@ -157,7 +157,7 @@ impl<'a, S: ReadonlyKV> Checkpoint<'a, S> {
 mod tests {
     use super::*;
     // bring in the Checkpoint and StateChange
-        use evolve_core::{ErrorCode, ReadonlyKV};
+    use evolve_core::{ErrorCode, ReadonlyKV};
     use std::collections::HashMap;
 
     /// A simple in-memory mock that implements `ReadonlyKV`.

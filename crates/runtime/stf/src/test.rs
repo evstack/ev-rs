@@ -75,7 +75,7 @@ mod echo_account {
                 .encode()?,
             );
 
-            self.map.set(&(), &"hh".to_string(), invoker, )?;
+            self.map.set(&(), &"hh".to_string(), invoker)?;
 
             Ok(InvokeResponse::new(response))
         }

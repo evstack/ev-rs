@@ -24,7 +24,7 @@ where
     K: Encodable + Decodable,
     V: Encodable + Decodable,
 {
-    pub fn set(&self, key: &K, value: &V, backend: &mut dyn Environment, ) -> SdkResult<()> {
+    pub fn set(&self, key: &K, value: &V, backend: &mut dyn Environment) -> SdkResult<()> {
         backend.do_exec(
             STORAGE_ACCOUNT_ID,
             InvokeRequest::try_from(StorageSetRequest {
@@ -71,7 +71,6 @@ where
     }
 }
 
-
 pub struct Item<V>(Map<(), V>);
 
 impl<V> Item<V> {
@@ -88,7 +87,7 @@ where
         self.0.get(&(), backend)
     }
 
-    pub fn set(&self, value: &V, backend: &mut dyn Environment, ) -> SdkResult<()> {
+    pub fn set(&self, value: &V, backend: &mut dyn Environment) -> SdkResult<()> {
         self.0.set(&(), value, backend)
     }
 }
