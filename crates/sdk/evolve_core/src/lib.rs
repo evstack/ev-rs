@@ -2,12 +2,14 @@ use crate::encoding::{Decodable, Encodable};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub mod encoding;
+pub mod low_level;
 pub mod mocks; // TODO: make test
 pub mod well_known;
 
 pub type ErrorCode = u64;
 pub const ERR_ENCODING: ErrorCode = 1;
 pub const ERR_UNKNOWN_FUNCTION: ErrorCode = 2;
+pub const ERR_ACCOUNT_NOT_INITIALIZED: ErrorCode = 3;
 
 pub type SdkResult<T> = Result<T, ErrorCode>;
 
@@ -104,6 +106,17 @@ pub struct InvokeResponse {
 }
 
 impl InvokeResponse {
+    pub fn try_from_encodable(v: impl Encodable) -> SdkResult<InvokeResponse> {
+        let bytes = v.encode()?;
+        Ok(InvokeResponse::new(Message::from(bytes)))
+    }
+
+    pub fn try_into_decodable<T: Decodable>(self) -> SdkResult<T> {
+        T::decode(self.response_bytes())
+    }
+}
+
+impl InvokeResponse {
     pub(crate) fn response_bytes(&self) -> &[u8] {
         self.response.inner.as_bytes()
     }
@@ -124,36 +137,20 @@ impl InvokeResponse {
 pub trait Environment {
     fn whoami(&self) -> AccountId;
     fn sender(&self) -> AccountId;
-    fn do_query(
-        &self,
-        to: AccountId,
-        data: InvokeRequest,
-    ) -> SdkResult<InvokeResponse>;
-    fn do_exec(
-        &mut self,
-        to: AccountId,
-        data: InvokeRequest,
-    ) -> SdkResult<InvokeResponse>;
+    fn do_query(&self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse>;
+    fn do_exec(&mut self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse>;
 }
 
 /// Defines some arbitrary code that can handle account execution logic.
 pub trait AccountCode {
     fn identifier(&self) -> String;
-    fn init(
-        &self,
-        env: &mut dyn Environment,
-        request: InvokeRequest,
-    ) -> SdkResult<InvokeResponse>;
+    fn init(&self, env: &mut dyn Environment, request: InvokeRequest) -> SdkResult<InvokeResponse>;
     fn execute(
         &self,
         env: &mut dyn Environment,
         request: InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
-    fn query(
-        &self,
-        env: &dyn Environment,
-        request: InvokeRequest,
-    ) -> SdkResult<InvokeResponse>;
+    fn query(&self, env: &dyn Environment, request: InvokeRequest) -> SdkResult<InvokeResponse>;
 }
 
 pub trait ReadonlyKV {

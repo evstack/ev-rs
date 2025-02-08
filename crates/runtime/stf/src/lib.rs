@@ -1,6 +1,8 @@
 mod checkpoint;
+mod mocks;
 #[cfg(test)]
 mod test;
+mod test_all;
 
 use crate::checkpoint::Checkpoint;
 use evolve_core::encoding::{Decodable, Encodable};
@@ -39,15 +41,14 @@ impl<T> Stf<T> {
         from: AccountId,
         code_id: String,
         init_message: Message,
-    ) -> SdkResult<CreateAccountResponse> {
+    ) -> SdkResult<(CreateAccountResponse, Checkpoint<'a, S>)> {
         let req = InvokeRequest::try_from(CreateAccountRequest {
             code_id,
             init_message,
         })?;
 
         let resp = Self::exec(storage, account_storage, from, RUNTIME_ACCOUNT_ID, req)?;
-
-        Ok(CreateAccountResponse::try_from(resp)?)
+        Ok((CreateAccountResponse::try_from(resp.0)?, resp.1))
     }
 
     pub(crate) fn exec<'a, S: ReadonlyKV, A: AccountsCodeStorage + 'a>(
@@ -56,10 +57,30 @@ impl<T> Stf<T> {
         from: AccountId,
         to: AccountId,
         req: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
+    ) -> SdkResult<(InvokeResponse, Checkpoint<'a, S>)> {
         let writable_storage = Checkpoint::new(storage);
         let mut invoker = Invoker::new(from, to, 0, writable_storage, account_storage);
-        invoker.do_exec(to, req)
+        let resp = invoker.do_exec(to, req);
+        resp.map(|resp| {
+            (
+                resp,
+                Rc::try_unwrap(invoker.storage)
+                    .unwrap_or_else(|e| panic!("expected unwrap"))
+                    .into_inner(),
+            )
+        })
+    }
+
+    pub(crate) fn query<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
+        storage: &'a S,
+        account_storage: &'a mut A,
+        to: AccountId,
+        req: InvokeRequest,
+    ) -> SdkResult<InvokeResponse> {
+        let writable_storage = Checkpoint::new(storage);
+        let mut invoker =
+            Invoker::new(RUNTIME_ACCOUNT_ID, to, 0, writable_storage, account_storage);
+        invoker.do_query(to, req)
     }
 }
 
@@ -84,9 +105,14 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
     }
 
     fn do_query(&self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse> {
-        let invoker = self.branch_query(to);
-
-        self.with_account(to, |code| code.query(&invoker, data))?
+        match to {
+            RUNTIME_ACCOUNT_ID => self.handle_system_query(data),
+            STORAGE_ACCOUNT_ID => self.handle_storage_query(data),
+            _ => {
+                let invoker = self.branch_query(to);
+                self.with_account(to, |code| code.query(&invoker, data))?
+            }
+        }
     }
 
     fn do_exec(&mut self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse> {
@@ -147,6 +173,10 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         }
     }
 
+    fn handle_system_query(&self, request: InvokeRequest) -> SdkResult<InvokeResponse> {
+        Err(ERR_UNKNOWN_FUNCTION)
+    }
+
     fn handle_storage_exec(&mut self, data: InvokeRequest) -> SdkResult<InvokeResponse> {
         // TODO: manage all
         let storage_set = StorageSetRequest::try_from(data)?;
@@ -159,14 +189,10 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         InvokeResponse::try_from(EmptyResponse {})
     }
 
-    fn handle_storage_query(
-        &mut self,
-        from: AccountId,
-        request: InvokeRequest,
-    ) -> SdkResult<InvokeResponse> {
+    fn handle_storage_query(&self, request: InvokeRequest) -> SdkResult<InvokeResponse> {
         let storage_get = StorageGetRequest::try_from(request)?;
 
-        let mut key = from.as_bytes();
+        let mut key = storage_get.account_id.as_bytes();
         key.extend(storage_get.key);
 
         InvokeResponse::try_from(StorageGetResponse {
@@ -219,7 +245,6 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         account: AccountId,
         account_identifier: &str,
     ) -> SdkResult<()> {
-        println!("setting: {:?} {:?}", account, account_identifier);
         let key = Self::get_account_code_identifier_for_account_key(account);
         Ok(self
             .storage

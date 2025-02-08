@@ -1,5 +1,5 @@
 use crate::encoding::{Decodable, Encodable};
-use crate::{AccountId, ErrorCode, InvokeRequest, InvokeResponse, Message};
+use crate::{AccountId, ErrorCode, InvokeRequest, InvokeResponse, Message, SdkResult};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub const ACCOUNT_IDENTIFIER_PREFIX: u8 = 0;
@@ -18,6 +18,27 @@ pub const INIT_FUNCTION_IDENTIFIER: u64 = 0;
 pub struct CreateAccountRequest {
     pub code_id: String,
     pub init_message: Message,
+}
+
+impl CreateAccountRequest {
+    pub fn new_invoke_request<T: Encodable>(
+        code_id: String,
+        init_message: &T,
+    ) -> SdkResult<InvokeRequest> {
+        let init_message = Message::from(init_message.encode()?);
+        let create_request = Message::from(
+            CreateAccountRequest {
+                code_id,
+                init_message,
+            }
+            .encode()?,
+        );
+
+        Ok(InvokeRequest::new(
+            RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER,
+            create_request,
+        ))
+    }
 }
 
 impl TryFrom<CreateAccountRequest> for InvokeRequest {
@@ -99,6 +120,7 @@ impl TryFrom<InvokeResponse> for EmptyResponse {
 
 #[derive(BorshDeserialize, BorshSerialize, Debug)]
 pub struct StorageGetRequest {
+    pub account_id: AccountId,
     pub key: Vec<u8>,
 }
 
