@@ -77,19 +77,27 @@ pub mod asset_account {
         }
     }
 
-
     pub struct AssetAccount(::evolve_collections::Item<::evolve_core::AccountId>);
 
     impl AssetAccount {
         pub fn new(prefix: u8) -> Self {
             Self(::evolve_collections::Item::new(prefix))
         }
+
+        pub fn set_account_id_ptr(
+            &self,
+            account_id: AccountId,
+            env: &mut dyn Environment,
+        ) -> SdkResult<()> {
+            self.0.set(&account_id, env)
+        }
+
         pub fn initialize(
             &self,
             name: String,
             init_balances: Vec<(::evolve_core::AccountId, u128)>,
             env: &mut dyn ::evolve_core::Environment,
-        ) -> SdkResult<()> {
+        ) -> SdkResult<()> { // the result of init market
             let (self_account_id, resp) = ::evolve_core::low_level::create_account(
                 "Asset".to_string(),
                 &InitializeMsg {
@@ -109,7 +117,7 @@ pub mod asset_account {
             to: ::evolve_core::AccountId,
             amount: u128,
             env: &mut dyn ::evolve_core::Environment,
-        ) -> ::evolve_core::SdkResult<()> {
+        ) -> ::evolve_core::SdkResult<()> { // result of exec marker
             ::evolve_core::low_level::exec_account(
                 self.0
                     .get(env)?
@@ -124,45 +132,57 @@ pub mod asset_account {
             &self,
             account_id: ::evolve_core::AccountId,
             env: &dyn ::evolve_core::Environment,
-        ) -> ::evolve_core::SdkResult<Option<u128>> {
+        ) -> ::evolve_core::SdkResult<Option<u128>> { // result of query market
             ::evolve_core::low_level::query_account(
                 self.0
                     .get(env)?
                     .ok_or(::evolve_core::ERR_ACCOUNT_NOT_INITIALIZED)?,
                 GetBalanceMsg::FUNCTION_IDENTIFIER,
-                &GetBalanceMsg {
-                    account_id,
-                },
-                env
+                &GetBalanceMsg { account_id },
+                env,
             )
         }
-
     }
-
 }
 
-
 #[account_impl(MacroTester)]
-mod macro_tester {
-    use evolve_core::{Environment, SdkResult};
-    use evolve_macros::{exec, init, query};
+pub mod macro_tester {
     use crate::test_all::asset_account::AssetAccount;
+    use evolve_core::{AccountId, Environment, SdkResult};
+    use evolve_macros::{exec, init, query};
 
-    struct MacroTester {
-        account: AssetAccount,
+    pub struct MacroTester {
+        atom: AssetAccount,
     }
 
     impl MacroTester {
-        fn new() -> Self {
+        pub(crate) fn new() -> Self {
             let account = AssetAccount::new(0);
-            MacroTester { account }
+            MacroTester { atom: account }
         }
         #[init]
-        fn initialize(
-            &self,
-            env: &mut dyn Environment,
-        ) -> SdkResult<()> {
-            todo!("impl")
+        fn initialize(&self, env: &mut dyn Environment) -> SdkResult<()> {
+            // tests initting a new atom account
+            self.atom
+                .initialize("atom".to_string(), vec![(env.whoami(), 1000)], env)?;
+            let self_balance = self
+                .atom
+                .get_balance(env.whoami(), env)?
+                .expect("expected balance");
+            assert_eq!(self_balance, 1000);
+
+            // send balance
+            let someone_else = AccountId::new(1000u128);
+            self.atom.transfer(someone_else, 500, env)?;
+
+            // check someone else balance
+            let someone_else_balance = self
+                .atom
+                .get_balance(someone_else, env)?
+                .expect("expected balance");
+            assert_eq!(someone_else_balance, 500);
+
+            Ok(())
         }
 
         #[exec]
@@ -175,17 +195,15 @@ mod macro_tester {
             todo!("impl")
         }
     }
-
-
 }
 
 #[cfg(test)]
 mod tests {
     use super::asset_account::Asset;
     use crate::test::TestStf;
-    use crate::test_all::asset_account;
+    use crate::test_all::macro_tester::MacroTester;
     use evolve_core::encoding::Encodable;
-    use evolve_core::{AccountCode, AccountId, InvokeRequest, Message};
+    use evolve_core::{AccountId, Message};
     use evolve_server_core::mocks::MockedAccountsCodeStorage;
     use evolve_server_core::{AccountsCodeStorage, WritableKV};
     use std::collections::HashMap;
@@ -194,9 +212,8 @@ mod tests {
     fn test() {
         let mut account_codes = MockedAccountsCodeStorage::new();
 
-        let asset = Asset::new();
-
-        account_codes.add_code(asset).unwrap();
+        account_codes.add_code(Asset::new()).unwrap();
+        account_codes.add_code(MacroTester::new()).unwrap();
 
         let mut storage: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
 
@@ -204,38 +221,11 @@ mod tests {
             &storage,
             &mut account_codes,
             AccountId::new(100u128),
-            "Asset".to_owned(),
-            Message::from(
-                asset_account::InitializeMsg {
-                    name: "atom".to_string(),
-                    init_balances: vec![(AccountId::new(1u128), 1000u128)],
-                }
-                .encode()
-                .unwrap(),
-            ),
+            "MacroTester".to_owned(),
+            Message::from(super::macro_tester::InitializeMsg {}.encode().unwrap()),
         )
         .unwrap();
 
         storage.apply_changes(state_changes.into_changes()).unwrap();
-
-        // try get balance
-        let req = asset_account::GetBalanceMsg {
-            account_id: AccountId::new(1u128),
-        };
-
-        let balance = TestStf::query(
-            &storage,
-            &mut account_codes,
-            resp.new_account_id,
-            InvokeRequest::new(
-                asset_account::GetBalanceMsg::FUNCTION_IDENTIFIER,
-                Message::from(req.encode().unwrap()),
-            ),
-        )
-        .expect("query failed")
-        .try_into_decodable::<Option<u128>>()
-        .expect("failed to decode response");
-
-        assert_eq!(balance, Some(1000u128));
     }
 }
