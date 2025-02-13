@@ -1,13 +1,13 @@
 extern crate proc_macro;
 
+use heck::ToUpperCamelCase;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use sha2::{Digest, Sha256};
 use syn::{
     parse_macro_input, spanned::Spanned, Attribute, FnArg, Ident, ImplItem, Item, ItemImpl,
-    ItemMod, Pat, ReturnType, Signature, Type, TypePath
+    ItemMod, Pat, ReturnType, Signature, Type, TypePath,
 };
-use heck::ToUpperCamelCase;
 
 /// This attribute macro generates:
 /// 1) Message types (e.g. `InitializeMsg`, `TransferMsg`, etc.).
@@ -42,7 +42,8 @@ pub fn account_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     // 2) Generate the AccountCode trait impl for the "real" struct (e.g. `impl AccountCode for Asset`).
-    let accountcode_impl = generate_accountcode_impl(&account_ident, &init_fn, &exec_fns, &query_fns);
+    let accountcode_impl =
+        generate_accountcode_impl(&account_ident, &init_fn, &exec_fns, &query_fns);
 
     // 3) (NEW) Generate the "wrapper account" struct + impl, e.g. `pub struct AssetAccount { ... }`.
     let wrapper_struct = generate_wrapper_struct(&account_ident, &init_fn, &exec_fns, &query_fns);
@@ -141,13 +142,13 @@ fn collect_account_functions(
                     "Expected first param to be &self or &mut self",
                 ));
             }
-            let env_input = inputs.last().unwrap();
+            let _env_input = inputs.last().unwrap();
             // If it's a query function, env must be &dyn ...
             // Otherwise &mut dyn ...
             // (We already do that logic in your original macro.)
 
             // Gather the "middle" params as message fields
-            let field_inputs = &inputs[1..inputs.len()-1];
+            let field_inputs = &inputs[1..inputs.len() - 1];
             let mut params = Vec::new();
             for input in field_inputs {
                 match input {
@@ -322,7 +323,7 @@ fn generate_accountcode_impl(
     let init_impl = if let Some(info) = init_fn {
         let msg_name = &info.msg_name;
         let fn_name = &info.fn_name;
-        let args = info.params.iter().map(|(n, _)| quote!{ msg.#n });
+        let args = info.params.iter().map(|(n, _)| quote! { msg.#n });
         quote! {
             fn init(&self, env: &mut dyn ::evolve_core::Environment, request: ::evolve_core::InvokeRequest)
                 -> ::evolve_core::SdkResult<::evolve_core::InvokeResponse>
@@ -426,13 +427,13 @@ fn generate_wrapper_struct(
         let fn_name = &info.fn_name; // e.g. "initialize"
         let msg_name = &info.msg_name; // e.g. "InitializeMsg"
         let return_inner = &info.return_type; // e.g. Option<u128> or ()
-        // In practice, your user-defined init always returns SdkResult<()>, but let's be general.
+                                              // In practice, your user-defined init always returns SdkResult<()>, but let's be general.
 
         // Expand the param list for the wrapper method (excluding env).
         // We also remember to add `env: &mut dyn Environment` at the end.
         // The user’s function param list is in `info.params`.
         let params_decl = info.params.iter().map(|(n, t)| {
-            quote!{ #n: #t }
+            quote! { #n: #t }
         });
         let param_names = info.params.iter().map(|(n, _)| quote!(#n));
 
@@ -461,7 +462,7 @@ fn generate_wrapper_struct(
         let msg_name = &info.msg_name;
         let return_inner = &info.return_type;
 
-        let params_decl = info.params.iter().map(|(n, t)| quote!{ #n: #t });
+        let params_decl = info.params.iter().map(|(n, t)| quote! { #n: #t });
         let param_names = info.params.iter().map(|(n, _)| quote!(#n));
 
         quote! {
@@ -484,7 +485,7 @@ fn generate_wrapper_struct(
         let msg_name = &info.msg_name;
         let return_inner = &info.return_type;
 
-        let params_decl = info.params.iter().map(|(n, t)| quote!{ #n: #t });
+        let params_decl = info.params.iter().map(|(n, t)| quote! { #n: #t });
         let param_names = info.params.iter().map(|(n, _)| quote!(#n));
 
         quote! {

@@ -2,9 +2,10 @@
 resolver = "2"
 members = [
     "crates/runtime/stf",
-    "crates/sdk/evolve_collections",
-    "crates/sdk/evolve_core", "crates/sdk/evolve_macros",
-    "crates/sdk/evolve_server_core",
+    "crates/sdk/collections",
+    "crates/sdk/core",
+    "crates/sdk/macros",
+    "crates/sdk/server_core",
 ]
 
 [workspace.package]
@@ -13,12 +14,12 @@ license = "Apache-2.0"
 rust-version = "1.81.0"
 
 [workspace.dependencies]
-evolve_core = { path = "crates/sdk/evolve_core" }
-evolve_macros = { path = "crates/sdk/evolve_macros" }
-evolve_server_core = { path = "crates/sdk/evolve_server_core" }
-evolve_collections = { path = "crates/sdk/evolve_collections"}
+evolve_core = { path = "crates/sdk/core" }
+evolve_macros = { path = "crates/sdk/macros" }
+evolve_server_core = { path = "crates/sdk/server_core" }
+evolve_collections = { path = "crates/sdk/collections" }
 
-borsh = { features = ["derive"], version = "1.5.5"}
+borsh = { features = ["derive"], version = "1.5.5" }
 [workspace.lints.rust]
 # missing_docs = "deny"
 
