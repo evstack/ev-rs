@@ -1,10 +1,12 @@
 use evolve_macros::account_impl;
 
+use evolve_fungible_asset::FungibleAssetInterface;
+
 #[account_impl(Asset)]
 pub mod asset_account {
     use evolve_collections::{Item, Map};
-    use evolve_core::encoding::Encodable;
     use evolve_core::{AccountId, Environment, ErrorCode, SdkResult};
+    use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
 
     const ERR_INSUFFICIENT_BALANCE: ErrorCode = 1;
@@ -37,8 +39,15 @@ pub mod asset_account {
             Ok(())
         }
 
+        fn ignored(&self, _account_id: AccountId, _env: &mut dyn Environment) -> SdkResult<()> {
+            // this fn is ignored bcz no query or exec
+            todo!()
+        }
+    }
+
+    impl FungibleAssetInterface for Asset {
         #[exec]
-        pub fn transfer(
+        fn transfer(
             &self,
             to: AccountId,
             amount: u128,
@@ -63,17 +72,17 @@ pub mod asset_account {
         }
 
         #[query]
-        pub fn get_balance(
+        fn metadata(&self, env: &dyn Environment) -> SdkResult<FungibleAssetMetadata> {
+            todo!("impl");
+        }
+
+        #[query]
+        fn get_balance(
             &self,
             account_id: AccountId,
             env: &dyn Environment,
         ) -> SdkResult<Option<u128>> {
             self.balances.get(&account_id, env)
-        }
-
-        fn ignored(&self, _account_id: AccountId, _env: &mut dyn Environment) -> SdkResult<()> {
-            // this fn is ignored bcz no query or exec
-            todo!()
         }
     }
 }
@@ -119,13 +128,21 @@ pub mod macro_tester {
         }
 
         #[exec]
-        fn dostuff(&self, env: &mut dyn Environment) -> SdkResult<()> {
-            todo!("impl")
+        fn do_stuff(&self, env: &mut dyn Environment) -> SdkResult<()> {
+            Ok(())
+        }
+
+        #[exec(payable)]
+        fn receive_money(&self, env: &mut dyn Environment) -> SdkResult<()> {
+            if env.funds().is_empty() {
+                panic!("no money received");
+            }
+            Ok(())
         }
 
         #[query]
         fn query(&self, env: &dyn Environment) -> SdkResult<()> {
-            todo!("impl")
+            Ok(())
         }
     }
 }
@@ -133,10 +150,10 @@ pub mod macro_tester {
 #[cfg(test)]
 mod tests {
     use super::asset_account::Asset;
-    use crate::test::TestStf;
+    use crate::mocks::TestStf;
     use crate::test_all::macro_tester::MacroTester;
     use evolve_core::encoding::Encodable;
-    use evolve_core::{AccountId, Message};
+    use evolve_core::{AccountId, InvokeRequest, Message};
     use evolve_server_core::mocks::MockedAccountsCodeStorage;
     use evolve_server_core::{AccountsCodeStorage, WritableKV};
     use std::collections::HashMap;
@@ -156,9 +173,24 @@ mod tests {
             AccountId::new(100u128),
             "MacroTester".to_owned(),
             Message::from(super::macro_tester::InitializeMsg {}.encode().unwrap()),
+            vec![],
         )
         .unwrap();
 
         storage.apply_changes(state_changes.into_changes()).unwrap();
+
+        // query account
+        let resp = TestStf::query(
+            &storage,
+            &mut account_codes,
+            resp.new_account_id,
+            InvokeRequest::new(
+                super::macro_tester::QueryMsg::FUNCTION_IDENTIFIER,
+                Message::from(super::macro_tester::QueryMsg {}.encode().unwrap()),
+            ),
+        );
     }
+
+    #[test]
+    fn test_fungible_asset_transfer() {}
 }

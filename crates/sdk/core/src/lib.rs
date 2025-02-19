@@ -95,6 +95,16 @@ impl InvokeRequest {
         }
     }
 
+    pub fn new_from_encodable(
+        function_identifier: u64,
+        encodable: impl Encodable,
+    ) -> SdkResult<Self> {
+        Ok(InvokeRequest::new(
+            function_identifier,
+            Message::from(encodable.encode()?),
+        ))
+    }
+
     pub fn bytes(&self) -> &[u8] {
         self.message.inner.as_bytes()
     }
@@ -134,11 +144,23 @@ impl InvokeResponse {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct FungibleAsset {
+    pub asset_id: AccountId,
+    pub amount: u128,
+}
+
 pub trait Environment {
     fn whoami(&self) -> AccountId;
     fn sender(&self) -> AccountId;
+    fn funds(&self) -> &[FungibleAsset];
     fn do_query(&self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse>;
-    fn do_exec(&mut self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse>;
+    fn do_exec(
+        &mut self,
+        to: AccountId,
+        data: InvokeRequest,
+        funds: Vec<FungibleAsset>,
+    ) -> SdkResult<InvokeResponse>;
 }
 
 /// Defines some arbitrary code that can handle account execution logic.

@@ -31,6 +31,7 @@ where
                 key: self.make_key(key)?,
                 value: value.encode()?,
             })?,
+            vec![],
         )?;
 
         Ok(())
@@ -89,6 +90,14 @@ where
 
     pub fn set(&self, value: &V, backend: &mut dyn Environment) -> SdkResult<()> {
         self.0.set(&(), value, backend)
+    }
+
+    pub fn update(
+        &self,
+        update_fn: impl FnOnce(Option<V>) -> SdkResult<V>,
+        backend: &mut dyn Environment,
+    ) -> SdkResult<V> {
+        self.0.update(&(), update_fn, backend)
     }
 }
 

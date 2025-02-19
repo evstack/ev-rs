@@ -1,7 +1,7 @@
 mod checkpoint;
-mod mocks;
+mod example_test;
 #[cfg(test)]
-mod test;
+mod mocks;
 mod test_all;
 
 use crate::checkpoint::Checkpoint;
@@ -13,8 +13,8 @@ use evolve_core::well_known::{
     RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER, STORAGE_ACCOUNT_ID,
 };
 use evolve_core::{
-    AccountCode, AccountId, Environment, InvokeRequest, InvokeResponse, Message, ReadonlyKV,
-    SdkResult, ERR_UNKNOWN_FUNCTION,
+    AccountCode, AccountId, Environment, FungibleAsset, InvokeRequest, InvokeResponse, Message,
+    ReadonlyKV, SdkResult, ERR_UNKNOWN_FUNCTION,
 };
 use evolve_server_core::{AccountsCodeStorage, Transaction};
 use std::cell::RefCell;
@@ -41,13 +41,21 @@ impl<T> Stf<T> {
         from: AccountId,
         code_id: String,
         init_message: Message,
+        funds: Vec<FungibleAsset>,
     ) -> SdkResult<(CreateAccountResponse, Checkpoint<'a, S>)> {
         let req = InvokeRequest::try_from(CreateAccountRequest {
             code_id,
             init_message,
         })?;
 
-        let resp = Self::exec(storage, account_storage, from, RUNTIME_ACCOUNT_ID, req)?;
+        let resp = Self::exec(
+            storage,
+            account_storage,
+            from,
+            RUNTIME_ACCOUNT_ID,
+            req,
+            funds,
+        )?;
         Ok((CreateAccountResponse::try_from(resp.0)?, resp.1))
     }
 
@@ -57,10 +65,11 @@ impl<T> Stf<T> {
         from: AccountId,
         to: AccountId,
         req: InvokeRequest,
+        funds: Vec<FungibleAsset>,
     ) -> SdkResult<(InvokeResponse, Checkpoint<'a, S>)> {
         let writable_storage = Checkpoint::new(storage);
-        let mut invoker = Invoker::new(from, to, 0, writable_storage, account_storage);
-        let resp = invoker.do_exec(to, req);
+        let mut invoker = Invoker::new_for_exec(from, 0, writable_storage, account_storage);
+        let resp = invoker.do_exec(to, req, funds);
         resp.map(|resp| {
             (
                 resp,
@@ -78,8 +87,7 @@ impl<T> Stf<T> {
         req: InvokeRequest,
     ) -> SdkResult<InvokeResponse> {
         let writable_storage = Checkpoint::new(storage);
-        let mut invoker =
-            Invoker::new(RUNTIME_ACCOUNT_ID, to, 0, writable_storage, account_storage);
+        let mut invoker = Invoker::new_for_query(0, writable_storage, account_storage);
         invoker.do_query(to, req)
     }
 }
@@ -89,6 +97,8 @@ struct Invoker<'a, S, A> {
     sender: AccountId,
 
     gas_limit: u64,
+
+    funds: Vec<FungibleAsset>,
 
     gas_used: Rc<RefCell<u64>>,
     account_codes: Rc<RefCell<&'a mut A>>,
@@ -104,6 +114,10 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
         self.sender
     }
 
+    fn funds(&self) -> &[FungibleAsset] {
+        &self.funds
+    }
+
     fn do_query(&self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse> {
         match to {
             RUNTIME_ACCOUNT_ID => self.handle_system_query(data),
@@ -115,17 +129,24 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
         }
     }
 
-    fn do_exec(&mut self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse> {
+    fn do_exec(
+        &mut self,
+        to: AccountId,
+        data: InvokeRequest,
+        funds: Vec<FungibleAsset>,
+    ) -> SdkResult<InvokeResponse> {
+        self.handle_transfers(to, funds.as_ref())?;
+
         let checkpoint = self.storage.borrow().checkpoint();
 
         let resp = match to {
             // check if system
-            RUNTIME_ACCOUNT_ID => self.handle_system_exec(data),
+            RUNTIME_ACCOUNT_ID => self.handle_system_exec(data, funds),
             // check if storage
             STORAGE_ACCOUNT_ID => self.handle_storage_exec(data),
             // other account
             _ => {
-                let mut invoker = self.branch_exec(to);
+                let mut invoker = self.branch_exec(to, funds);
                 self.with_account(to, |code| code.execute(&mut invoker, data))?
             }
         };
@@ -139,30 +160,41 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
 }
 
 impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
-    fn new(
-        sender: AccountId,
-        whoami: AccountId,
+    fn new_for_query(
+        gas_limit: u64,
+        storage: Checkpoint<'a, S>,
+        account_code_storage: &'a mut A,
+    ) -> Self {
+        Self::new_for_exec(RUNTIME_ACCOUNT_ID, gas_limit, storage, account_code_storage)
+    }
+    fn new_for_exec(
+        exec_source: AccountId,
         gas_limit: u64,
         storage: Checkpoint<'a, S>,
         account_code_storage: &'a mut A,
     ) -> Self {
         Self {
-            whoami,
-            sender,
+            whoami: exec_source,
+            sender: AccountId::new(u128::MAX),
             gas_limit,
 
+            funds: vec![],
             gas_used: Rc::new(RefCell::new(0)),
             account_codes: Rc::new(RefCell::new(account_code_storage)),
             storage: Rc::new(RefCell::new(storage)),
         }
     }
 
-    fn handle_system_exec(&mut self, request: InvokeRequest) -> SdkResult<InvokeResponse> {
+    fn handle_system_exec(
+        &mut self,
+        request: InvokeRequest,
+        funds: Vec<FungibleAsset>,
+    ) -> SdkResult<InvokeResponse> {
         match request.function() {
             RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER => {
                 let req = CreateAccountRequest::try_from(request)?;
                 let resp = self
-                    .create_account(&req.code_id, req.init_message)
+                    .create_account(&req.code_id, req.init_message, funds)
                     .map(|res| CreateAccountResponse {
                         new_account_id: res.0,
                         init_response: res.1.into_message(),
@@ -200,17 +232,39 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         })
     }
 
+    fn handle_transfers(&mut self, to: AccountId, funds: &[FungibleAsset]) -> SdkResult<()> {
+        for asset in funds {
+            // create transfer message
+            let msg = evolve_fungible_asset::TransferMsg {
+                to,
+                amount: asset.amount,
+            };
+
+            // execute transfer
+            self.do_exec(
+                asset.asset_id,
+                InvokeRequest::new(
+                    evolve_fungible_asset::TransferMsg::FUNCTION_IDENTIFIER,
+                    Message::from(msg.encode()?),
+                ),
+                vec![],
+            )?;
+        }
+        Ok(())
+    }
+
     fn create_account(
         &mut self,
         code_id: &str,
         msg: impl Into<Message>,
+        funds: Vec<FungibleAsset>,
     ) -> SdkResult<(AccountId, InvokeResponse)> {
         // get new account and associate it with new code ID
         let new_account_id = self.next_account_number()?;
         self.set_account_code_identifier_for_account(new_account_id, code_id)?;
         // prepare request params
         let req = InvokeRequest::new(INIT_FUNCTION_IDENTIFIER, msg.into());
-        let mut invoker = self.branch_exec(new_account_id);
+        let mut invoker = self.branch_exec(new_account_id, funds);
         // do account init
         self.with_account(new_account_id, |code| code.init(&mut invoker, req))?
             .map(|r| (new_account_id, r))
@@ -278,18 +332,19 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
             whoami,
             sender: RUNTIME_ACCOUNT_ID,
             gas_limit: self.gas_limit,
-
+            funds: vec![],
             gas_used: self.gas_used.clone(),
             account_codes: self.account_codes.clone(),
             storage: self.storage.clone(),
         }
     }
 
-    fn branch_exec(&self, to: AccountId) -> Self {
+    fn branch_exec(&self, to: AccountId, funds: Vec<FungibleAsset>) -> Self {
         Self {
             whoami: to,
             sender: self.whoami,
             gas_limit: self.gas_limit,
+            funds,
             gas_used: self.gas_used.clone(),
             account_codes: self.account_codes.clone(),
             storage: self.storage.clone(),
@@ -299,8 +354,6 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     fn it_works() {}
 }
