@@ -63,7 +63,7 @@ impl BlockTrait<Tx> for Block {
 pub struct TxValidatorHandler;
 
 impl TxValidator<Tx> for TxValidatorHandler {
-    fn validate_tx(_tx: &Tx, _env: &mut dyn Environment,) -> SdkResult<()> {
+    fn validate_tx(_tx: &Tx, _env: &mut dyn Environment) -> SdkResult<()> {
         Ok(())
     }
 }

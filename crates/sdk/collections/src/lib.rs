@@ -1,5 +1,5 @@
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::well_known::{
+use evolve_core::storage_messages::{
     StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
 };
 use evolve_core::{Environment, InvokeRequest, SdkResult};
@@ -27,7 +27,7 @@ where
     pub fn set(&self, key: &K, value: &V, backend: &mut dyn Environment) -> SdkResult<()> {
         backend.do_exec(
             STORAGE_ACCOUNT_ID,
-            &InvokeRequest::try_from(StorageSetRequest {
+            &InvokeRequest::new(&StorageSetRequest {
                 key: self.make_key(key)?,
                 value: value.encode()?,
             })?,
@@ -37,16 +37,19 @@ where
         Ok(())
     }
 
-    pub fn get(&self, key: &K, backend: &dyn Environment) -> SdkResult<Option<V>> {
-        let resp = backend.do_query(
-            STORAGE_ACCOUNT_ID,
-            &InvokeRequest::try_from(StorageGetRequest {
-                account_id: backend.whoami(),
-                key: self.make_key(key)?,
-            })?,
-        )?;
+    pub fn get(&self, key: &K, env: &dyn Environment) -> SdkResult<Option<V>> {
+        let bytes_key = self.make_key(key)?;
 
-        let resp = StorageGetResponse::try_from(resp)?;
+        let resp = env
+            .do_query(
+                STORAGE_ACCOUNT_ID,
+                &InvokeRequest::new(&StorageGetRequest {
+                    account_id: env.whoami(),
+                    key: bytes_key,
+                })?,
+            )?
+            .get::<StorageGetResponse>()?;
+
         match resp.value {
             None => Ok(None),
             Some(v) => Ok(Some(V::decode(&v)?)),

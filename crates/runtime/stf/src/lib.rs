@@ -8,11 +8,13 @@ mod test_all;
 
 use crate::checkpoint::ExecutionState;
 use evolve_core::encoding::{Decodable, Encodable};
+use evolve_core::runtime_messages::{CreateAccountRequest, CreateAccountResponse};
+use evolve_core::storage_messages::{
+    StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageSetRequest,
+    StorageSetResponse, STORAGE_ACCOUNT_ID,
+};
 use evolve_core::well_known::{
-    CreateAccountRequest, CreateAccountResponse, EmptyResponse, StorageGetRequest,
-    StorageGetResponse, StorageSetRequest, ACCOUNT_IDENTIFIER_PREFIX,
-    ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, INIT_FUNCTION_IDENTIFIER, RUNTIME_ACCOUNT_ID,
-    RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER, STORAGE_ACCOUNT_ID,
+    ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, RUNTIME_ACCOUNT_ID,
 };
 use evolve_core::{
     AccountCode, AccountId, Environment, FungibleAsset, InvokableMessage, InvokeRequest,
@@ -138,13 +140,13 @@ where
         init_message: M,
         funds: Vec<FungibleAsset>,
     ) -> SdkResult<(CreateAccountResponse, ExecutionState<'a, S>)> {
-        let init_message = Message::from(init_message.encode()?);
+        let init_message = Message::new(&init_message)?;
         let req = CreateAccountRequest {
             code_id,
             init_message,
         };
 
-        let resp = Self::exec(
+        let (resp, state) = Self::exec(
             storage,
             account_storage,
             from,
@@ -152,7 +154,8 @@ where
             &req,
             funds,
         )?;
-        Ok((CreateAccountResponse::try_from(resp.0)?, resp.1))
+
+        Ok((resp.get::<CreateAccountResponse>()?, state))
     }
 
     pub(crate) fn exec<'a, S: ReadonlyKV, A: AccountsCodeStorage + 'a, R: InvokableMessage>(
@@ -163,7 +166,7 @@ where
         req: &R,
         funds: Vec<FungibleAsset>,
     ) -> SdkResult<(InvokeResponse, ExecutionState<'a, S>)> {
-        let req = InvokeRequest::new_from_encodable(R::FUNCTION_IDENTIFIER, req)?;
+        let req = InvokeRequest::new(req)?;
         let writable_storage = ExecutionState::new(storage);
         let mut invoker = Invoker::new_for_exec(from, 0, writable_storage, account_storage);
         let resp = invoker.do_exec(to, &req, funds);
@@ -190,10 +193,7 @@ where
     ) -> SdkResult<InvokeResponse> {
         let writable_storage = ExecutionState::new(storage);
         let invoker = Invoker::new_for_query(0, writable_storage, account_storage);
-        invoker.do_query(
-            to,
-            &InvokeRequest::new_from_encodable(R::FUNCTION_IDENTIFIER, req)?,
-        )
+        invoker.do_query(to, &InvokeRequest::new(req)?)
     }
 }
 
@@ -296,15 +296,17 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         funds: Vec<FungibleAsset>,
     ) -> SdkResult<InvokeResponse> {
         match request.function() {
-            RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER => {
-                let req = CreateAccountRequest::try_from(request)?;
-                let resp = self
-                    .create_account(&req.code_id, req.init_message, funds)
-                    .map(|res| CreateAccountResponse {
-                        new_account_id: res.0,
-                        init_response: res.1.into_message(),
-                    })?;
-                InvokeResponse::try_from(resp)
+            CreateAccountRequest::FUNCTION_IDENTIFIER => {
+                let req: CreateAccountRequest = request.get()?;
+
+                let (new_account_id, init_response) =
+                    self.create_account(&req.code_id, req.init_message, funds)?;
+
+                let resp = CreateAccountResponse {
+                    new_account_id,
+                    init_response,
+                };
+                Ok(InvokeResponse::new(&resp)?)
             }
             _ => Err(ERR_UNKNOWN_FUNCTION),
         }
@@ -315,26 +317,38 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
     }
 
     fn handle_storage_exec(&mut self, request: &InvokeRequest) -> SdkResult<InvokeResponse> {
-        // TODO: manage all
-        let storage_set = StorageSetRequest::try_from(request)?;
+        match request.function() {
+            StorageSetRequest::FUNCTION_IDENTIFIER => {
+                let storage_set: StorageSetRequest = request.get()?;
 
-        let mut key = self.whoami.as_bytes();
-        key.extend(storage_set.key);
+                let mut key = self.whoami.as_bytes();
+                key.extend(storage_set.key);
 
-        self.storage.borrow_mut().set(&key, storage_set.value)?;
+                self.storage.borrow_mut().set(&key, storage_set.value)?;
 
-        InvokeResponse::try_from(EmptyResponse {})
+                Ok(InvokeResponse::new(&StorageSetResponse {})?)
+            }
+            StorageRemoveRequest::FUNCTION_IDENTIFIER => {
+                todo!("impl")
+            }
+            _ => Err(ERR_UNKNOWN_FUNCTION),
+        }
     }
 
     fn handle_storage_query(&self, request: &InvokeRequest) -> SdkResult<InvokeResponse> {
-        let storage_get = StorageGetRequest::try_from(request)?;
+        match request.function() {
+            StorageGetRequest::FUNCTION_IDENTIFIER => {
+                let storage_get: StorageGetRequest = request.get()?;
 
-        let mut key = storage_get.account_id.as_bytes();
-        key.extend(storage_get.key);
+                let mut key = storage_get.account_id.as_bytes();
+                key.extend(storage_get.key);
 
-        InvokeResponse::try_from(StorageGetResponse {
-            value: self.storage.borrow().get(&key)?,
-        })
+                let value = self.storage.borrow().get(&key)?;
+
+                Ok(InvokeResponse::new(&StorageGetResponse { value })?)
+            }
+            _ => Err(ERR_UNKNOWN_FUNCTION),
+        }
     }
 
     fn handle_transfers(&mut self, to: AccountId, funds: &[FungibleAsset]) -> SdkResult<()> {
@@ -346,14 +360,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
             };
 
             // execute transfer
-            self.do_exec(
-                asset.asset_id,
-                &InvokeRequest::new(
-                    evolve_fungible_asset::TransferMsg::FUNCTION_IDENTIFIER,
-                    Message::from(msg.encode()?),
-                ),
-                vec![],
-            )?;
+            self.do_exec(asset.asset_id, &InvokeRequest::new(&msg)?, vec![])?;
         }
         Ok(())
     }
@@ -361,18 +368,20 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
     fn create_account(
         &mut self,
         code_id: &str,
-        msg: impl Into<Message>,
+        msg: Message,
         funds: Vec<FungibleAsset>,
-    ) -> SdkResult<(AccountId, InvokeResponse)> {
+    ) -> SdkResult<(AccountId, Message)> {
         // get new account and associate it with new code ID
         let new_account_id = self.next_account_number()?;
         self.set_account_code_identifier_for_account(new_account_id, code_id)?;
         // prepare request params
-        let req = InvokeRequest::new(INIT_FUNCTION_IDENTIFIER, msg.into());
+        let req = InvokeRequest::new_from_message(0, msg);
         let mut invoker = self.branch_exec(new_account_id, funds);
         // do account init
-        self.with_account(new_account_id, |code| code.init(&mut invoker, &req))?
-            .map(|r| (new_account_id, r))
+        let init_resp =
+            self.with_account(new_account_id, |code| code.init(&mut invoker, &req))??;
+
+        Ok((new_account_id, init_resp.into_inner()))
     }
 
     fn with_account<R>(

@@ -153,7 +153,7 @@ mod tests {
     use crate::test_all::macro_tester::MacroTester;
     use evolve_core::AccountId;
     use evolve_server_core::mocks::MockedAccountsCodeStorage;
-    use evolve_server_core::{AccountsCodeStorage, WritableKV};
+    use evolve_server_core::WritableKV;
     use std::collections::HashMap;
 
     #[test]

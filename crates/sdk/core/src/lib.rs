@@ -1,9 +1,13 @@
 use crate::encoding::{Decodable, Encodable};
+pub use crate::message::{InvokeRequest, InvokeResponse, Message};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub mod encoding;
 pub mod low_level;
+pub mod message;
 pub mod mocks; // TODO: make test
+pub mod runtime_messages;
+pub mod storage_messages;
 pub mod well_known;
 
 pub type ErrorCode = u64;
@@ -33,114 +37,6 @@ impl AccountId {
 impl AccountId {
     pub fn as_bytes(&self) -> Vec<u8> {
         self.0.to_be_bytes().into()
-    }
-}
-#[derive(BorshSerialize, BorshDeserialize, Debug)]
-enum InnerMessage {
-    OwnedBytes(Vec<u8>),
-}
-
-impl InnerMessage {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        match self {
-            InnerMessage::OwnedBytes(b) => b.as_slice(),
-        }
-    }
-}
-
-#[derive(BorshSerialize, BorshDeserialize, Debug)]
-/// Defines a message, the internals of this type are hidden such that we can improve them later
-/// for performance.
-pub struct Message {
-    inner: InnerMessage,
-}
-
-impl From<Vec<u8>> for Message {
-    fn from(bytes: Vec<u8>) -> Self {
-        Message {
-            inner: InnerMessage::OwnedBytes(bytes),
-        }
-    }
-}
-
-/// Defines a request to invoke a method in an account.
-pub struct InvokeRequest {
-    /// Defines the identifier of the function.
-    function_identifier: u64,
-    /// Defines the message argument of the function.
-    message: Message,
-}
-
-impl InvokeRequest {
-    pub fn decode<T: Decodable>(&self) -> SdkResult<T> {
-        T::decode(self.message_bytes())
-    }
-}
-
-impl InvokeRequest {
-    pub fn function(&self) -> u64 {
-        self.function_identifier
-    }
-
-    pub fn message_bytes(&self) -> &[u8] {
-        self.message.inner.as_bytes()
-    }
-}
-
-impl InvokeRequest {
-    pub fn new(function_identifier: u64, message: Message) -> Self {
-        InvokeRequest {
-            function_identifier,
-            message,
-        }
-    }
-
-    pub fn new_from_encodable(
-        function_identifier: u64,
-        encodable: &impl Encodable,
-    ) -> SdkResult<Self> {
-        Ok(InvokeRequest::new(
-            function_identifier,
-            Message::from(encodable.encode()?),
-        ))
-    }
-
-    pub fn bytes(&self) -> &[u8] {
-        self.message.inner.as_bytes()
-    }
-}
-
-/// Defines the response of an [`InvokeRequest`]
-pub struct InvokeResponse {
-    response: Message,
-}
-
-impl InvokeResponse {
-    pub fn try_from_encodable(v: impl Encodable) -> SdkResult<InvokeResponse> {
-        let bytes = v.encode()?;
-        Ok(InvokeResponse::new(Message::from(bytes)))
-    }
-
-    pub fn try_into_decodable<T: Decodable>(self) -> SdkResult<T> {
-        T::decode(self.response_bytes())
-    }
-}
-
-impl InvokeResponse {
-    pub(crate) fn response_bytes(&self) -> &[u8] {
-        self.response.inner.as_bytes()
-    }
-}
-
-impl InvokeResponse {
-    pub fn into_message(self) -> Message {
-        self.response
-    }
-}
-
-impl InvokeResponse {
-    pub fn new(response: Message) -> Self {
-        InvokeResponse { response }
     }
 }
 

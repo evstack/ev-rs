@@ -548,7 +548,6 @@ fn generate_accountcode_impl(
             fn execute(&self, env: &mut dyn ::evolve_core::Environment, request: &::evolve_core::InvokeRequest)
                 -> ::evolve_core::SdkResult<::evolve_core::InvokeResponse>
             {
-                use ::evolve_core::encoding::Decodable;
                 use ::evolve_core::InvokableMessage;
 
                 match request.function() {
@@ -567,9 +566,9 @@ fn generate_accountcode_impl(
             let args = info.params.iter().map(|(n, _)| quote!(msg.#n));
             quote! {
                 #msg_name::#fn_id => {
-                    let msg = request.decode::<#msg_name>()?;
+                    let msg: #msg_name = request.get()?;
                     let resp = self.#fn_name(#(#args, )* env)?;
-                    ::evolve_core::InvokeResponse::try_from_encodable(resp)
+                    Ok(::evolve_core::InvokeResponse::new(&resp)?)
                 }
             }
         });
@@ -577,7 +576,6 @@ fn generate_accountcode_impl(
             fn query(&self, env: &dyn ::evolve_core::Environment, request: &::evolve_core::InvokeRequest)
                 -> ::evolve_core::SdkResult<::evolve_core::InvokeResponse>
             {
-                use evolve_core::encoding::Decodable;
                 use ::evolve_core::InvokableMessage;
                 match request.function() {
                     #(#arms,)*
@@ -621,13 +619,10 @@ fn generate_init_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
         fn init(&self, env: &mut dyn ::evolve_core::Environment, request: &::evolve_core::InvokeRequest)
             -> ::evolve_core::SdkResult<::evolve_core::InvokeResponse>
         {
-            use evolve_core::encoding::{Decodable, Encodable};
-            let msg = request.decode::<#msg_name>()?;
+            let msg: #msg_name = request.get()?;
             #funds_check
             let resp = self.#fn_name(#(#args, )* env)?;
-            let encoded = resp.encode()?;
-            let msg_resp = ::evolve_core::Message::from(encoded);
-            Ok(::evolve_core::InvokeResponse::new(msg_resp))
+            Ok(::evolve_core::InvokeResponse::new(&resp)?)
         }
     }
 }
@@ -653,10 +648,10 @@ fn generate_exec_match_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
 
     quote! {
         #msg_name::#fn_id => {
-            let msg = request.decode::<#msg_name>()?;
+            let msg: #msg_name = request.get()?;
             #funds_check
             let resp = self.#fn_name(#(#args, )* env)?;
-            ::evolve_core::InvokeResponse::try_from_encodable(resp)
+            Ok(::evolve_core::InvokeResponse::new(&resp)?)
         }
     }
 }
