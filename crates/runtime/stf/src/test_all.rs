@@ -90,17 +90,28 @@ pub mod asset_account {
 #[account_impl(MacroTester)]
 pub mod macro_tester {
     use super::asset_account::AssetRef;
+    use borsh::{BorshDeserialize, BorshSerialize};
     use evolve_collections::Item;
     use evolve_core::{AccountId, Environment, SdkResult};
+    use evolve_events::EventsEmitter;
     use evolve_macros::{exec, init, query};
+
+    #[derive(BorshDeserialize, BorshSerialize)]
+    pub struct TestEvent {
+        pub content: String,
+    }
 
     pub struct MacroTester {
         atom: Item<AssetRef>,
+        events_emitter: EventsEmitter,
     }
 
     impl MacroTester {
         pub(crate) fn new() -> Self {
-            MacroTester { atom: Item::new(0) }
+            MacroTester {
+                atom: Item::new(0),
+                events_emitter: EventsEmitter::new(),
+            }
         }
         #[init]
         fn initialize(&self, env: &mut dyn Environment) -> SdkResult<()> {
@@ -122,6 +133,15 @@ pub mod macro_tester {
                 .get_balance(someone_else, env)?
                 .expect("expected balance");
             assert_eq!(someone_else_balance, 500);
+
+            // emit event
+            self.events_emitter.emit_event(
+                "TEST_EVENT".to_string(),
+                TestEvent {
+                    content: "i am a test event".to_string(),
+                },
+                env,
+            )?;
 
             Ok(())
         }

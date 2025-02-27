@@ -8,14 +8,18 @@ mod test_all;
 
 use crate::checkpoint::ExecutionState;
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::runtime_messages::{CreateAccountRequest, CreateAccountResponse};
-use evolve_core::storage_messages::{
+use evolve_core::events_api::{
+    EmitEventRequest, EmitEventResponse, Event, EVENT_HANDLER_ACCOUNT_ID,
+};
+use evolve_core::runtime_api::{
+    CreateAccountRequest, CreateAccountResponse, ACCOUNT_IDENTIFIER_PREFIX,
+    ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, RUNTIME_ACCOUNT_ID,
+};
+use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageSetRequest,
     StorageSetResponse, STORAGE_ACCOUNT_ID,
 };
-use evolve_core::well_known::{
-    ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, RUNTIME_ACCOUNT_ID,
-};
+
 use evolve_core::{
     AccountCode, AccountId, Environment, FungibleAsset, InvokableMessage, InvokeRequest,
     InvokeResponse, Message, ReadonlyKV, SdkResult, ERR_UNKNOWN_FUNCTION,
@@ -30,13 +34,16 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 
 pub struct TxResult {
+    pub events: Vec<Event>,
     pub gas_used: u64,
     pub response: SdkResult<InvokeResponse>,
 }
 
 pub struct BlockResult {
+    pub begin_block_events: Vec<Event>,
     pub state_changes: Vec<StateChange>,
     pub tx_results: Vec<TxResult>,
+    pub end_block_events: Vec<Event>,
 }
 
 pub struct Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx>(
@@ -74,7 +81,7 @@ where
         storage: &'a S,
         account_codes: &mut A,
         block: &Block,
-    ) -> (Vec<TxResult>, Vec<StateChange>) {
+    ) -> BlockResult {
         // create invoker
         let mut invoker = Invoker::new_for_exec(
             RUNTIME_ACCOUNT_ID,
@@ -85,6 +92,7 @@ where
 
         // run begin blocker.
         BeginBlocker::begin_block(block, &mut invoker);
+        let begin_block_events = invoker.storage.borrow_mut().pop_events();
 
         // apply txs.
         let txs = block.txs();
@@ -98,7 +106,15 @@ where
         // run end blocker
         EndBlocker::end_block(&mut invoker);
 
-        (tx_results, invoker.into_state_changes())
+        let end_block_events = invoker.storage.borrow_mut().pop_events();
+        let state_changes = invoker.into_state_changes();
+
+        BlockResult {
+            begin_block_events,
+            state_changes,
+            tx_results,
+            end_block_events,
+        }
     }
 
     fn apply_tx<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
@@ -110,6 +126,7 @@ where
             Ok(()) => (),
             Err(err) => {
                 return TxResult {
+                    events: invoker.storage.borrow_mut().pop_events(),
                     gas_used: invoker.gas_used.borrow().clone(),
                     response: Err(err),
                 }
@@ -127,9 +144,14 @@ where
 
         // do post tx validation
         let gas_used = invoker.gas_used.borrow().clone();
+        let events = invoker.storage.borrow_mut().pop_events();
 
         // TODO: post tx executor. It is more nuanced.
-        TxResult { gas_used, response }
+        TxResult {
+            events,
+            gas_used,
+            response,
+        }
     }
 
     pub(crate) fn create_account<'a, S: ReadonlyKV, A: AccountsCodeStorage + 'a, M: Encodable>(
@@ -249,6 +271,7 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
             RUNTIME_ACCOUNT_ID => self.handle_system_exec(data, funds),
             // check if storage
             STORAGE_ACCOUNT_ID => self.handle_storage_exec(data),
+            EVENT_HANDLER_ACCOUNT_ID => self.handle_event_handler_exec(data),
             // other account
             _ => {
                 let mut invoker = self.branch_exec(to, funds);
@@ -330,6 +353,22 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
             }
             StorageRemoveRequest::FUNCTION_IDENTIFIER => {
                 todo!("impl")
+            }
+            _ => Err(ERR_UNKNOWN_FUNCTION),
+        }
+    }
+
+    fn handle_event_handler_exec(&mut self, request: &InvokeRequest) -> SdkResult<InvokeResponse> {
+        match request.function() {
+            EmitEventRequest::FUNCTION_IDENTIFIER => {
+                let req: EmitEventRequest = request.get()?;
+                let event = Event {
+                    source: self.whoami,
+                    name: req.name,
+                    contents: req.contents,
+                };
+                self.storage.borrow_mut().emit_event(event);
+                Ok(InvokeResponse::new(&EmitEventResponse {})?)
             }
             _ => Err(ERR_UNKNOWN_FUNCTION),
         }

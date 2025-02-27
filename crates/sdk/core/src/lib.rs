@@ -3,12 +3,12 @@ pub use crate::message::{InvokeRequest, InvokeResponse, Message};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub mod encoding;
+pub mod events_api;
 pub mod low_level;
 pub mod message;
 pub mod mocks; // TODO: make test
-pub mod runtime_messages;
-pub mod storage_messages;
-pub mod well_known;
+pub mod runtime_api;
+pub mod storage_api;
 
 pub type ErrorCode = u64;
 pub const ERR_ENCODING: ErrorCode = 1;

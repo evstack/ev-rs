@@ -1,6 +1,9 @@
 use crate::message::Message;
 use crate::{AccountId, InvokableMessage};
 use borsh::{BorshDeserialize, BorshSerialize};
+pub const ACCOUNT_IDENTIFIER_PREFIX: u8 = 0;
+pub const ACCOUNT_IDENTIFIER_SINGLETON_PREFIX: u8 = 1;
+pub const RUNTIME_ACCOUNT_ID: AccountId = AccountId(0);
 
 #[derive(BorshDeserialize, BorshSerialize)]
 pub struct CreateAccountRequest {

@@ -1,3 +1,4 @@
+use evolve_core::events_api::Event;
 use evolve_core::{ErrorCode, ReadonlyKV};
 use evolve_server_core::StateChange as CoreStateChange;
 use std::collections::HashMap;
@@ -56,6 +57,13 @@ impl StateChange {
     }
 }
 
+/// Defines a checkpoint at a certain point in time of the execution state
+/// which can be used to roll back `ExecutionState`.
+pub struct Checkpoint {
+    undo_log_index: usize,
+    events_index: usize,
+}
+
 /// The checkpoint overlay for a read-only store `S`.
 /// The overlay is tracked in `overlay`, which can have:
 ///  - `Some(value)` => key is set to `value`
@@ -68,6 +76,8 @@ pub struct ExecutionState<'a, S> {
     overlay: HashMap<Vec<u8>, Option<Vec<u8>>>,
     /// The log of state changes (undo log) used for checkpoint restore.
     undo_log: Vec<StateChange>,
+    /// Events emitted.
+    events: Vec<Event>,
 }
 
 impl<'a, S> ExecutionState<'a, S> {
@@ -76,7 +86,18 @@ impl<'a, S> ExecutionState<'a, S> {
             base_storage,
             overlay: HashMap::new(),
             undo_log: Vec::new(),
+            events: Vec::new(),
         }
+    }
+
+    /// Adds an event to the list of the current execution events.
+    pub fn emit_event(&mut self, event: Event) {
+        self.events.push(event);
+    }
+
+    /// Pops the events
+    pub fn pop_events(&mut self) -> Vec<Event> {
+        std::mem::replace(&mut self.events, Vec::new())
     }
 
     pub fn into_changes(self) -> Vec<CoreStateChange> {
@@ -140,16 +161,22 @@ impl<'a, S: ReadonlyKV> ExecutionState<'a, S> {
     }
 
     /// Returns a checkpoint ID (just an index in the undo log).
-    pub fn checkpoint(&self) -> u64 {
-        self.undo_log.len() as u64
+    pub fn checkpoint(&self) -> Checkpoint {
+        Checkpoint {
+            undo_log_index: self.undo_log.len(),
+            events_index: self.events.len(),
+        }
     }
 
     /// Restores the overlay to the given checkpoint by popping changes.
-    pub fn restore(&mut self, checkpoint: u64) {
-        while self.undo_log.len() as u64 > checkpoint {
+    pub fn restore(&mut self, checkpoint: Checkpoint) {
+        while self.undo_log.len() > checkpoint.undo_log_index {
             let change = self.undo_log.pop().unwrap();
             change.revert(&mut self.overlay);
         }
+
+        // truncate events to the given checkpoint
+        self.events.truncate(checkpoint.events_index);
     }
 }
 

@@ -1,5 +1,5 @@
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::storage_messages::{
+use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
 };
 use evolve_core::{Environment, InvokeRequest, SdkResult};

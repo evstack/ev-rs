@@ -16,6 +16,6 @@ fn test_block_exec() {
         txs: vec![],
     };
 
-    let (_, changes) = TestAppStf::apply_block(&mut storage, &mut codes, &block);
-    storage.apply_changes(changes).unwrap();
+    let (block) = TestAppStf::apply_block(&mut storage, &mut codes, &block);
+    storage.apply_changes(block.state_changes).unwrap();
 }

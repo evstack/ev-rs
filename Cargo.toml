@@ -28,6 +28,7 @@ evolve_scheduler = { path = "crates/sdk/x/scheduler" }
 evolve_ns = { path = "crates/sdk/x/ns" }
 evolve_block_info = { path = "crates/sdk/x/block_info" }
 evolve_token = { path = "crates/sdk/x/token" }
+evolve_events = { path = "crates/sdk/x/events" }
 
 evolve_stf = { path = "crates/runtime/stf"}
 

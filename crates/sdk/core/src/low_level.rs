@@ -1,6 +1,5 @@
 use crate::encoding::{Decodable, Encodable};
-use crate::runtime_messages::{CreateAccountRequest, CreateAccountResponse};
-use crate::well_known::RUNTIME_ACCOUNT_ID;
+use crate::runtime_api::{CreateAccountRequest, CreateAccountResponse, RUNTIME_ACCOUNT_ID};
 use crate::{
     AccountId, Environment, FungibleAsset, InvokableMessage, InvokeRequest, Message, SdkResult,
 };
