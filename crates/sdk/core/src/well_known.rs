@@ -1,5 +1,5 @@
 use crate::encoding::{Decodable, Encodable};
-use crate::{AccountId, ErrorCode, InvokeRequest, InvokeResponse, Message, SdkResult};
+use crate::{AccountId, ErrorCode, InvokableMessage, InvokeRequest, InvokeResponse, Message};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub const ACCOUNT_IDENTIFIER_PREFIX: u8 = 0;
@@ -20,27 +20,10 @@ pub struct CreateAccountRequest {
     pub init_message: Message,
 }
 
-impl CreateAccountRequest {
-    pub fn new_invoke_request<T: Encodable>(
-        code_id: String,
-        init_message: &T,
-    ) -> SdkResult<InvokeRequest> {
-        let init_message = Message::from(init_message.encode()?);
-        let create_request = Message::from(
-            CreateAccountRequest {
-                code_id,
-                init_message,
-            }
-            .encode()?,
-        );
-
-        Ok(InvokeRequest::new(
-            RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER,
-            create_request,
-        ))
-    }
+impl InvokableMessage for CreateAccountRequest {
+    const FUNCTION_IDENTIFIER: u64 = RUNTIME_CREATE_ACCOUNT_FUNCTION_IDENTIFIER;
+    const FUNCTION_IDENTIFIER_NAME: &'static str = "create_account";
 }
-
 impl TryFrom<CreateAccountRequest> for InvokeRequest {
     type Error = ErrorCode;
 
@@ -52,9 +35,9 @@ impl TryFrom<CreateAccountRequest> for InvokeRequest {
     }
 }
 
-impl TryFrom<InvokeRequest> for CreateAccountRequest {
+impl TryFrom<&InvokeRequest> for CreateAccountRequest {
     type Error = ErrorCode;
-    fn try_from(value: InvokeRequest) -> Result<Self, Self::Error> {
+    fn try_from(value: &InvokeRequest) -> Result<Self, Self::Error> {
         Ok(CreateAccountRequest::decode(value.message_bytes())?)
     }
 }
@@ -94,9 +77,9 @@ impl TryFrom<StorageSetRequest> for InvokeRequest {
     }
 }
 
-impl TryFrom<InvokeRequest> for StorageSetRequest {
+impl TryFrom<&InvokeRequest> for StorageSetRequest {
     type Error = ErrorCode;
-    fn try_from(value: InvokeRequest) -> Result<Self, Self::Error> {
+    fn try_from(value: &InvokeRequest) -> Result<Self, Self::Error> {
         Ok(StorageSetRequest::decode(value.message_bytes())?)
     }
 }
@@ -134,9 +117,9 @@ impl TryFrom<StorageGetRequest> for InvokeRequest {
     }
 }
 
-impl TryFrom<InvokeRequest> for StorageGetRequest {
+impl TryFrom<&InvokeRequest> for StorageGetRequest {
     type Error = ErrorCode;
-    fn try_from(value: InvokeRequest) -> Result<Self, Self::Error> {
+    fn try_from(value: &InvokeRequest) -> Result<Self, Self::Error> {
         Ok(StorageGetRequest::decode(value.message_bytes())?)
     }
 }

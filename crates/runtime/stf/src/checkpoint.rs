@@ -1,5 +1,5 @@
 use evolve_core::{ErrorCode, ReadonlyKV};
-use evolve_server_core::{StateChange as CoreStateChange, WritableKV};
+use evolve_server_core::StateChange as CoreStateChange;
 use std::collections::HashMap;
 
 /// Represents one change to the overlay so it can be undone.
@@ -61,7 +61,7 @@ impl StateChange {
 ///  - `Some(value)` => key is set to `value`
 ///  - `None` => key is explicitly removed / tombstone
 ///  - no entry => fallback to the underlying store
-pub struct Checkpoint<'a, S> {
+pub struct ExecutionState<'a, S> {
     /// The underlying store to fallback to.
     base_storage: &'a S,
     /// The in-memory overlay that records changes.
@@ -70,7 +70,7 @@ pub struct Checkpoint<'a, S> {
     undo_log: Vec<StateChange>,
 }
 
-impl<'a, S> Checkpoint<'a, S> {
+impl<'a, S> ExecutionState<'a, S> {
     pub fn new(base_storage: &'a S) -> Self {
         Self {
             base_storage,
@@ -94,7 +94,7 @@ impl<'a, S> Checkpoint<'a, S> {
     }
 }
 
-impl<'a, S: ReadonlyKV> Checkpoint<'a, S> {
+impl<'a, S: ReadonlyKV> ExecutionState<'a, S> {
     /// Retrieves the "logical" value for `key`.
     ///  1) If overlay has key => check if it's Some(...) or None.
     ///  2) Else fallback to the underlying store.
@@ -196,7 +196,7 @@ mod tests {
     #[test]
     fn test_basic_set_get() {
         let storage = MockReadonlyKV::new();
-        let mut cp = Checkpoint::new(&storage);
+        let mut cp = ExecutionState::new(&storage);
 
         // Key doesn't exist yet.
         assert_eq!(cp.get(b"hello").unwrap(), None);
@@ -213,7 +213,7 @@ mod tests {
     fn test_remove() {
         // Start with a backing store that already has "alpha" => "beta".
         let storage = MockReadonlyKV::new_with_data(&[(b"alpha", b"beta")]);
-        let mut cp = Checkpoint::new(&storage);
+        let mut cp = ExecutionState::new(&storage);
 
         // Key "alpha" should come from the backing store.
         assert_eq!(cp.get(b"alpha").unwrap(), Some(b"beta".to_vec()));
@@ -229,7 +229,7 @@ mod tests {
     #[test]
     fn test_checkpoint_restore() {
         let storage = MockReadonlyKV::new();
-        let mut cp = Checkpoint::new(&storage);
+        let mut cp = ExecutionState::new(&storage);
 
         // Set key1 => "A".
         cp.set(b"key1", b"A".to_vec()).unwrap();
@@ -262,7 +262,7 @@ mod tests {
     #[test]
     fn test_multiple_checkpoints() {
         let storage = MockReadonlyKV::new();
-        let mut cp = Checkpoint::new(&storage);
+        let mut cp = ExecutionState::new(&storage);
 
         // Start with nothing, set key1 => "one".
         cp.set(b"key1", b"one".to_vec()).unwrap();
@@ -294,7 +294,7 @@ mod tests {
     fn test_remove_and_restore() {
         // Backing store has key => "store_val".
         let storage = MockReadonlyKV::new_with_data(&[(b"key", b"store_val")]);
-        let mut cp = Checkpoint::new(&storage);
+        let mut cp = ExecutionState::new(&storage);
 
         // checkpoint #1.
         let c1 = cp.checkpoint();
@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn test_remove_nonexistent_key() {
         let storage = MockReadonlyKV::new(); // empty store.
-        let mut cp = Checkpoint::new(&storage);
+        let mut cp = ExecutionState::new(&storage);
 
         let c1 = cp.checkpoint();
         cp.remove(b"nonexistent").unwrap();
@@ -334,7 +334,7 @@ mod tests {
     #[test]
     fn test_multiple_sets_of_same_key() {
         let storage = MockReadonlyKV::new();
-        let mut cp = Checkpoint::new(&storage);
+        let mut cp = ExecutionState::new(&storage);
 
         cp.set(b"k", b"v1".to_vec()).unwrap();
         let c1 = cp.checkpoint();

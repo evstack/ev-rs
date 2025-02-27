@@ -6,7 +6,9 @@ members = [
     "crates/sdk/core",
     "crates/sdk/macros",
     "crates/sdk/server_core",
-    "crates/sdk/standards/*"
+    "crates/sdk/standards/*",
+    "crates/sdk/x/*",
+    "crates/testapp",
 ]
 
 [workspace.package]
@@ -19,9 +21,19 @@ evolve_core = { path = "crates/sdk/core" }
 evolve_macros = { path = "crates/sdk/macros" }
 evolve_server_core = { path = "crates/sdk/server_core" }
 evolve_collections = { path = "crates/sdk/collections" }
+
 evolve_fungible_asset = { path = "crates/sdk/standards/evolve_fungible_asset" }
 
+evolve_scheduler = { path = "crates/sdk/x/scheduler" }
+evolve_ns = { path = "crates/sdk/x/ns" }
+evolve_block_info = { path = "crates/sdk/x/block_info" }
+evolve_token = { path = "crates/sdk/x/token" }
+
+evolve_stf = { path = "crates/runtime/stf"}
+
+# outside deps
 borsh = { features = ["derive"], version = "1.5.5" }
+
 [workspace.lints.rust]
 # missing_docs = "deny"
 

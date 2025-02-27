@@ -89,37 +89,36 @@ pub mod asset_account {
 
 #[account_impl(MacroTester)]
 pub mod macro_tester {
-    use crate::test_all::asset_account::AssetAccount;
+    use super::asset_account::AssetRef;
+    use evolve_collections::Item;
     use evolve_core::{AccountId, Environment, SdkResult};
     use evolve_macros::{exec, init, query};
 
     pub struct MacroTester {
-        atom: AssetAccount,
+        atom: Item<AssetRef>,
     }
 
     impl MacroTester {
         pub(crate) fn new() -> Self {
-            let account = AssetAccount::new(0);
-            MacroTester { atom: account }
+            MacroTester { atom: Item::new(0) }
         }
         #[init]
         fn initialize(&self, env: &mut dyn Environment) -> SdkResult<()> {
             // tests initting a new atom account
-            self.atom
-                .initialize("atom".to_string(), vec![(env.whoami(), 1000)], env)?;
-            let self_balance = self
-                .atom
+            let (atom, _) =
+                AssetRef::initialize("atom".to_string(), vec![(env.whoami(), 1000)], env)?;
+            self.atom.set(&atom, env)?;
+            let self_balance = atom
                 .get_balance(env.whoami(), env)?
                 .expect("expected balance");
             assert_eq!(self_balance, 1000);
 
             // send balance
             let someone_else = AccountId::new(1000u128);
-            self.atom.transfer(someone_else, 500, env)?;
+            atom.transfer(someone_else, 500, env)?;
 
             // check someone else balance
-            let someone_else_balance = self
-                .atom
+            let someone_else_balance = atom
                 .get_balance(someone_else, env)?
                 .expect("expected balance");
             assert_eq!(someone_else_balance, 500);
@@ -152,8 +151,7 @@ mod tests {
     use super::asset_account::Asset;
     use crate::mocks::TestStf;
     use crate::test_all::macro_tester::MacroTester;
-    use evolve_core::encoding::Encodable;
-    use evolve_core::{AccountId, InvokeRequest, Message};
+    use evolve_core::AccountId;
     use evolve_server_core::mocks::MockedAccountsCodeStorage;
     use evolve_server_core::{AccountsCodeStorage, WritableKV};
     use std::collections::HashMap;
@@ -172,7 +170,7 @@ mod tests {
             &mut account_codes,
             AccountId::new(100u128),
             "MacroTester".to_owned(),
-            Message::from(super::macro_tester::InitializeMsg {}.encode().unwrap()),
+            super::macro_tester::InitializeMsg {},
             vec![],
         )
         .unwrap();
@@ -184,10 +182,7 @@ mod tests {
             &storage,
             &mut account_codes,
             resp.new_account_id,
-            InvokeRequest::new(
-                super::macro_tester::QueryMsg::FUNCTION_IDENTIFIER,
-                Message::from(super::macro_tester::QueryMsg {}.encode().unwrap()),
-            ),
+            &super::macro_tester::QueryMsg {},
         );
     }
 

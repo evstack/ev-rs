@@ -27,7 +27,7 @@ where
     pub fn set(&self, key: &K, value: &V, backend: &mut dyn Environment) -> SdkResult<()> {
         backend.do_exec(
             STORAGE_ACCOUNT_ID,
-            InvokeRequest::try_from(StorageSetRequest {
+            &InvokeRequest::try_from(StorageSetRequest {
                 key: self.make_key(key)?,
                 value: value.encode()?,
             })?,
@@ -40,7 +40,7 @@ where
     pub fn get(&self, key: &K, backend: &dyn Environment) -> SdkResult<Option<V>> {
         let resp = backend.do_query(
             STORAGE_ACCOUNT_ID,
-            InvokeRequest::try_from(StorageGetRequest {
+            &InvokeRequest::try_from(StorageGetRequest {
                 account_id: backend.whoami(),
                 key: self.make_key(key)?,
             })?,

@@ -1,0 +1,22 @@
+[package]
+name = "evolve_testapp"
+version = "0.1.0"
+edition = "2021"
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+documentation = "A test application for the evolve stack."
+
+[dependencies]
+evolve_core.workspace = true
+evolve_fungible_asset.workspace = true
+evolve_server_core.workspace = true
+evolve_stf.workspace = true
+
+evolve_block_info.workspace = true
+evolve_ns.workspace = true
+evolve_scheduler.workspace = true
+evolve_token.workspace = true
+
+[lints]
+workspace = true

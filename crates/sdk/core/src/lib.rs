@@ -25,8 +25,8 @@ impl AccountId {
 }
 
 impl AccountId {
-    pub fn new(u: impl Into<u128>) -> Self {
-        Self(u.into())
+    pub const fn new(u: u128) -> Self {
+        Self(u)
     }
 }
 
@@ -97,7 +97,7 @@ impl InvokeRequest {
 
     pub fn new_from_encodable(
         function_identifier: u64,
-        encodable: impl Encodable,
+        encodable: &impl Encodable,
     ) -> SdkResult<Self> {
         Ok(InvokeRequest::new(
             function_identifier,
@@ -154,11 +154,11 @@ pub trait Environment {
     fn whoami(&self) -> AccountId;
     fn sender(&self) -> AccountId;
     fn funds(&self) -> &[FungibleAsset];
-    fn do_query(&self, to: AccountId, data: InvokeRequest) -> SdkResult<InvokeResponse>;
+    fn do_query(&self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse>;
     fn do_exec(
         &mut self,
         to: AccountId,
-        data: InvokeRequest,
+        data: &InvokeRequest,
         funds: Vec<FungibleAsset>,
     ) -> SdkResult<InvokeResponse>;
 }
@@ -166,15 +166,27 @@ pub trait Environment {
 /// Defines some arbitrary code that can handle account execution logic.
 pub trait AccountCode {
     fn identifier(&self) -> String;
-    fn init(&self, env: &mut dyn Environment, request: InvokeRequest) -> SdkResult<InvokeResponse>;
+    fn init(&self, env: &mut dyn Environment, request: &InvokeRequest)
+        -> SdkResult<InvokeResponse>;
     fn execute(
         &self,
         env: &mut dyn Environment,
-        request: InvokeRequest,
+        request: &InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
-    fn query(&self, env: &dyn Environment, request: InvokeRequest) -> SdkResult<InvokeResponse>;
+    fn query(&self, env: &dyn Environment, request: &InvokeRequest) -> SdkResult<InvokeResponse>;
 }
 
 pub trait ReadonlyKV {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode>;
+}
+
+pub trait InvokableMessage: Encodable {
+    const FUNCTION_IDENTIFIER: u64;
+    const FUNCTION_IDENTIFIER_NAME: &'static str;
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_invoke_request_encode_decode() {}
 }

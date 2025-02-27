@@ -137,15 +137,15 @@ pub mod staking {
 
 #[account_impl(Lst)]
 pub mod lst {
-    use crate::example_test::asset::AssetAccount;
-    use crate::example_test::staking::StakingAccount;
+    use crate::example_test::asset::AssetRef;
+    use crate::example_test::staking::StakingRef;
     use evolve_collections::Item;
     use evolve_core::{AccountId, Environment, SdkResult};
     use evolve_macros::{exec, init};
 
     pub struct Lst {
-        staking: StakingAccount,
-        lst_token: AssetAccount,
+        staking: Item<StakingRef>,
+        lst_token: Item<AssetRef>,
         stake_asset: Item<AccountId>,
         total_staked_amount: Item<u128>,
     }
@@ -153,8 +153,8 @@ pub mod lst {
     impl Lst {
         pub const fn new() -> Self {
             Self {
-                staking: StakingAccount::new(0),
-                lst_token: AssetAccount::new(1),
+                staking: Item::new(0),
+                lst_token: Item::new(1),
                 stake_asset: Item::new(2),
                 total_staked_amount: Item::new(3),
             }
@@ -169,9 +169,10 @@ pub mod lst {
             env: &mut dyn Environment,
         ) -> SdkResult<()> {
             // set staking
-            self.staking.set_account_id_ptr(staking_address, env)?;
+            self.staking.set(&StakingRef(staking_address), env)?;
             // create lst token
-            self.lst_token.initialize(vec![], env)?;
+            let lst_token = AssetRef::initialize(vec![], env)?.0;
+            self.lst_token.set(&lst_token, env)?;
             Ok(())
         }
         #[exec(payable)]
@@ -185,7 +186,7 @@ pub mod lst {
             )?;
 
             // stake
-            self.staking.stake(vec![token], env)?;
+            self.staking.get(env)?.unwrap().stake(vec![token], env)?;
 
             // TODO :mint
 
@@ -200,8 +201,7 @@ mod tests {
     use crate::example_test::lst::Lst;
     use crate::example_test::staking::Staking;
     use crate::mocks::TestStf;
-    use evolve_core::encoding::Encodable;
-    use evolve_core::{AccountId, FungibleAsset, InvokeRequest, Message};
+    use evolve_core::{AccountId, FungibleAsset};
     use evolve_server_core::mocks::MockedAccountsCodeStorage;
     use evolve_server_core::{AccountsCodeStorage, WritableKV};
     use std::collections::HashMap;
@@ -224,13 +224,9 @@ mod tests {
             &mut account_codes,
             alice,
             "Asset".to_string(),
-            Message::from(
-                super::asset::InitializeMsg {
-                    balances: vec![(alice, 100000)],
-                }
-                .encode()
-                .unwrap(),
-            ),
+            super::asset::InitializeMsg {
+                balances: vec![(alice, 100000)],
+            },
             vec![],
         )
         .unwrap();
@@ -243,13 +239,9 @@ mod tests {
             &mut account_codes,
             alice,
             "Staking".to_string(),
-            Message::from(
-                super::staking::InitializeMsg {
-                    staking_asset: atom_token.new_account_id,
-                }
-                .encode()
-                .unwrap(),
-            ),
+            super::staking::InitializeMsg {
+                staking_asset: atom_token.new_account_id,
+            },
             vec![],
         )
         .unwrap();
@@ -262,13 +254,9 @@ mod tests {
             &mut account_codes,
             alice,
             "Lst".to_string(),
-            Message::from(
-                super::lst::InitializeMsg {
-                    staking_address: staking.new_account_id,
-                }
-                .encode()
-                .unwrap(),
-            ),
+            super::lst::InitializeMsg {
+                staking_address: staking.new_account_id,
+            },
             vec![],
         )
         .unwrap();
@@ -280,11 +268,7 @@ mod tests {
             &mut account_codes,
             alice,
             lst.new_account_id,
-            InvokeRequest::new_from_encodable(
-                super::lst::MintLstMsg::FUNCTION_IDENTIFIER,
-                super::lst::MintLstMsg {},
-            )
-            .unwrap(),
+            &super::lst::MintLstMsg {},
             vec![FungibleAsset {
                 asset_id: atom_token.new_account_id,
                 amount: 100,

@@ -508,9 +508,10 @@ fn generate_msg_struct(info: &FunctionInfo) -> proc_macro2::TokenStream {
                 pub struct #msg_name {
                     #(#fields)*
                 }
-                impl #msg_name {
-                    pub const NAME: &'static str = #fn_name_str;
-                    pub const FUNCTION_IDENTIFIER: u64 = #fn_id;
+
+                impl ::evolve_core::InvokableMessage for #msg_name {
+                    const FUNCTION_IDENTIFIER: u64 = #fn_id;
+                    const FUNCTION_IDENTIFIER_NAME: &'static str = #fn_name_str;
                 }
             }
         }
@@ -533,7 +534,7 @@ fn generate_accountcode_impl(
         generate_init_arm(info)
     } else {
         quote! {
-            fn init(&self, _env: &mut dyn ::evolve_core::Environment, _request: ::evolve_core::InvokeRequest)
+            fn init(&self, _env: &mut dyn ::evolve_core::Environment, _request: &::evolve_core::InvokeRequest)
                 -> ::evolve_core::SdkResult<::evolve_core::InvokeResponse>
             {
                 Err(::evolve_core::ERR_UNKNOWN_FUNCTION)
@@ -544,10 +545,12 @@ fn generate_accountcode_impl(
     let exec_impl = {
         let arms = exec_fns.iter().map(|info| generate_exec_match_arm(info));
         quote! {
-            fn execute(&self, env: &mut dyn ::evolve_core::Environment, request: ::evolve_core::InvokeRequest)
+            fn execute(&self, env: &mut dyn ::evolve_core::Environment, request: &::evolve_core::InvokeRequest)
                 -> ::evolve_core::SdkResult<::evolve_core::InvokeResponse>
             {
-                use evolve_core::encoding::Decodable;
+                use ::evolve_core::encoding::Decodable;
+                use ::evolve_core::InvokableMessage;
+
                 match request.function() {
                     #(#arms,)*
                     _ => Err(::evolve_core::ERR_UNKNOWN_FUNCTION)
@@ -571,10 +574,11 @@ fn generate_accountcode_impl(
             }
         });
         quote! {
-            fn query(&self, env: &dyn ::evolve_core::Environment, request: ::evolve_core::InvokeRequest)
+            fn query(&self, env: &dyn ::evolve_core::Environment, request: &::evolve_core::InvokeRequest)
                 -> ::evolve_core::SdkResult<::evolve_core::InvokeResponse>
             {
                 use evolve_core::encoding::Decodable;
+                use ::evolve_core::InvokableMessage;
                 match request.function() {
                     #(#arms,)*
                     _ => Err(::evolve_core::ERR_UNKNOWN_FUNCTION)
@@ -614,7 +618,7 @@ fn generate_init_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
     };
 
     quote! {
-        fn init(&self, env: &mut dyn ::evolve_core::Environment, request: ::evolve_core::InvokeRequest)
+        fn init(&self, env: &mut dyn ::evolve_core::Environment, request: &::evolve_core::InvokeRequest)
             -> ::evolve_core::SdkResult<::evolve_core::InvokeResponse>
         {
             use evolve_core::encoding::{Decodable, Encodable};
@@ -667,7 +671,7 @@ fn generate_wrapper_struct(
     exec_fns: &[FunctionInfo],
     query_fns: &[FunctionInfo],
 ) -> proc_macro2::TokenStream {
-    let wrapper_ident = format_ident!("{}Account", account_ident);
+    let wrapper_ident = format_ident!("{}Ref", account_ident);
 
     // init wrapper method
     let init_method = init_fn
@@ -683,26 +687,25 @@ fn generate_wrapper_struct(
     quote! {
         /// A generated "wrapper" struct that holds the account-id pointer
         /// and provides convenience methods for init/exec/query calls.
-        pub struct #wrapper_ident(pub ::evolve_collections::Item<::evolve_core::AccountId>);
+        #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize)]
+        pub struct #wrapper_ident(pub ::evolve_core::AccountId);
 
         impl #wrapper_ident {
-            /// Create the item pointer with a user-supplied prefix
-            pub const fn new(prefix: u8) -> Self {
-                Self(::evolve_collections::Item::new(prefix))
-            }
-
-            /// Manually set the account ID after creation, if desired
-            pub fn set_account_id_ptr(
-                &self,
-                account_id: ::evolve_core::AccountId,
-                env: &mut dyn ::evolve_core::Environment
-            ) -> ::evolve_core::SdkResult<()> {
-                self.0.set(&account_id, env)
-            }
-
             #init_method
             #( #exec_methods )*
             #( #query_methods )*
+        }
+
+        impl #wrapper_ident {
+            pub const fn new(account_id: ::evolve_core::AccountId) -> Self {
+                Self(account_id)
+            }
+        }
+
+        impl ::core::convert::From<::evolve_core::AccountId> for #wrapper_ident {
+            fn from(account_id: ::evolve_core::AccountId) -> Self {
+                Self(account_id)
+            }
         }
     }
 }
@@ -727,19 +730,17 @@ fn generate_init_wrapper(account_ident: &Ident, info: &FunctionInfo) -> proc_mac
 
     quote! {
         pub fn #fn_name(
-            &self,
             #funds_param
             #( #params_decl, )*
             env: &mut dyn ::evolve_core::Environment
-        ) -> ::evolve_core::SdkResult<#return_ty> {
+        ) -> ::evolve_core::SdkResult<(Self, #return_ty)> {
             let (acc_id, resp) = ::evolve_core::low_level::create_account(
                 stringify!(#account_ident).to_string(),
                 &#msg_name { #( #param_names, )* },
                 #funds_arg,
                 env,
             )?;
-            self.0.set(&acc_id, env)?;
-            Ok(resp)
+            Ok((acc_id.into(), resp))
         }
     }
 }
@@ -770,8 +771,7 @@ fn generate_exec_wrapper(info: &FunctionInfo) -> proc_macro2::TokenStream {
             env: &mut dyn ::evolve_core::Environment
         ) -> ::evolve_core::SdkResult<#return_ty> {
             ::evolve_core::low_level::exec_account(
-                self.0.get(env)?.ok_or(::evolve_core::ERR_ACCOUNT_NOT_INITIALIZED)?,
-                #msg_name::FUNCTION_IDENTIFIER,
+                self.0,
                 &#msg_name { #( #param_names, )* },
                 #funds_arg,
                 env,
@@ -797,8 +797,7 @@ fn generate_query_wrapper(info: &FunctionInfo) -> proc_macro2::TokenStream {
             env: &dyn ::evolve_core::Environment
         ) -> ::evolve_core::SdkResult<#return_ty> {
             ::evolve_core::low_level::query_account(
-                self.0.get(env)?.ok_or(::evolve_core::ERR_ACCOUNT_NOT_INITIALIZED)?,
-                #msg_name::FUNCTION_IDENTIFIER,
+                self.0,
                 &#msg_name { #( #param_names, )* },
                 env,
             )

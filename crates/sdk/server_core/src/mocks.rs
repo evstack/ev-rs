@@ -12,6 +12,12 @@ impl MockedAccountsCodeStorage {
             codes: HashMap::new(),
         }
     }
+
+    pub fn add_code<T: AccountCode + 'static>(&mut self, account_code: T) -> Result<(), ErrorCode> {
+        self.codes
+            .insert(account_code.identifier(), Box::new(account_code));
+        Ok(())
+    }
 }
 
 impl AccountsCodeStorage for MockedAccountsCodeStorage {
@@ -21,12 +27,6 @@ impl AccountsCodeStorage for MockedAccountsCodeStorage {
     {
         let code = self.codes.get(identifier).map(|e| e.as_ref());
         Ok(f(code))
-    }
-
-    fn add_code<T: AccountCode + 'static>(&mut self, account_code: T) -> Result<(), ErrorCode> {
-        self.codes
-            .insert(account_code.identifier(), Box::new(account_code));
-        Ok(())
     }
 }
 
