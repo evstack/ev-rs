@@ -203,7 +203,7 @@ mod tests {
     use crate::mocks::TestStf;
     use evolve_core::{AccountId, FungibleAsset};
     use evolve_server_core::mocks::MockedAccountsCodeStorage;
-    use evolve_server_core::{AccountsCodeStorage, WritableKV};
+    use evolve_server_core::WritableKV;
     use std::collections::HashMap;
 
     #[test]
@@ -229,7 +229,7 @@ mod tests {
             },
             vec![],
         )
-        .unwrap();
+            .unwrap();
 
         storage.apply_changes(state.into_changes()).unwrap();
 
@@ -244,7 +244,7 @@ mod tests {
             },
             vec![],
         )
-        .unwrap();
+            .unwrap();
 
         storage.apply_changes(state.into_changes()).unwrap();
 
@@ -259,7 +259,7 @@ mod tests {
             },
             vec![],
         )
-        .unwrap();
+            .unwrap();
         storage.apply_changes(state.into_changes()).unwrap();
 
         // finally execute a message in which alice execs via LST
@@ -274,6 +274,6 @@ mod tests {
                 amount: 100,
             }],
         )
-        .unwrap();
+            .unwrap();
     }
 }

@@ -76,4 +76,4 @@ impl PostTxExecution<MockTx> for NoOpPostTx {
 }
 
 pub(crate) type TestStf =
-    Stf<MockTx, MockBlock, NoOpBeginBlocker, NoOpTxValidator, NoOpEndBlocker, NoOpPostTx>;
+Stf<MockTx, MockBlock, NoOpBeginBlocker, NoOpTxValidator, NoOpEndBlocker, NoOpPostTx>;

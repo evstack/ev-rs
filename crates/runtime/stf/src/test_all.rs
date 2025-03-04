@@ -90,8 +90,10 @@ pub mod asset_account {
 #[account_impl(MacroTester)]
 pub mod macro_tester {
     use super::asset_account::AssetRef;
+    use crate::test_all::migration_test;
     use borsh::{BorshDeserialize, BorshSerialize};
     use evolve_collections::Item;
+    use evolve_core::low_level::migrate_account;
     use evolve_core::{AccountId, Environment, SdkResult};
     use evolve_events::EventsEmitter;
     use evolve_macros::{exec, init, query};
@@ -104,6 +106,7 @@ pub mod macro_tester {
     pub struct MacroTester {
         atom: Item<AssetRef>,
         events_emitter: EventsEmitter,
+        migration_happened: Item<bool>,
     }
 
     impl MacroTester {
@@ -111,6 +114,7 @@ pub mod macro_tester {
             MacroTester {
                 atom: Item::new(0),
                 events_emitter: EventsEmitter::new(),
+                migration_happened: Item::new(1),
             }
         }
         #[init]
@@ -159,9 +163,60 @@ pub mod macro_tester {
             Ok(())
         }
 
+        #[exec]
+        fn do_migration(&self, env: &mut dyn Environment) -> SdkResult<()> {
+            migrate_account(
+                env.whoami(),
+                "MigrationTester".to_string(),
+                &migration_test::Migrate1to2Msg { value: 10 },
+                vec![],
+                env,
+            )
+        }
+
         #[query]
-        fn query(&self, env: &dyn Environment) -> SdkResult<()> {
+        fn atom_id(&self, env: &dyn Environment) -> SdkResult<AccountId> {
+            Ok(self.atom.get(env)?.expect("expected atom_id").0)
+        }
+    }
+}
+#[account_impl(MigrationTester)]
+mod migration_test {
+    use evolve_collections::Item;
+    use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
+    use evolve_core::{Environment, SdkResult};
+    use evolve_macros::{exec, init, query};
+    use evolve_scheduler::scheduler_account::ERR_UNAUTHORIZED;
+
+    pub struct MigrationTester {
+        pub migration_happened: Item<u64>,
+    }
+    impl MigrationTester {
+        pub const fn new() -> Self {
+            Self {
+                migration_happened: Item::new(0),
+            }
+        }
+
+        #[init]
+        fn initialize(&self, _env: &mut dyn Environment) -> SdkResult<()> {
             Ok(())
+        }
+        #[exec]
+        pub fn migrate1to2(&self, value: u64, env: &mut dyn Environment) -> SdkResult<()> {
+            // only runtime can call migrate.
+            if env.sender() != RUNTIME_ACCOUNT_ID {
+                return Err(ERR_UNAUTHORIZED);
+            }
+
+            // make migration happen.
+            self.migration_happened.set(&value, env)?;
+            Ok(())
+        }
+
+        #[query]
+        pub fn value(&self, env: &dyn Environment) -> SdkResult<u64> {
+            Ok(self.migration_happened.get(env)?.expect("expected value"))
         }
     }
 }
@@ -171,6 +226,7 @@ mod tests {
     use super::asset_account::Asset;
     use crate::mocks::TestStf;
     use crate::test_all::macro_tester::MacroTester;
+    use crate::test_all::migration_test::MigrationTester;
     use evolve_core::AccountId;
     use evolve_server_core::mocks::MockedAccountsCodeStorage;
     use evolve_server_core::WritableKV;
@@ -182,6 +238,7 @@ mod tests {
 
         account_codes.add_code(Asset::new()).unwrap();
         account_codes.add_code(MacroTester::new()).unwrap();
+        account_codes.add_code(MigrationTester::new()).unwrap();
 
         let mut storage: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
 
@@ -193,17 +250,44 @@ mod tests {
             super::macro_tester::InitializeMsg {},
             vec![],
         )
-        .unwrap();
+            .unwrap();
 
         storage.apply_changes(state_changes.into_changes()).unwrap();
 
         // query account
-        let resp = TestStf::query(
+        let query_resp = TestStf::query(
             &storage,
             &mut account_codes,
             resp.new_account_id,
-            &super::macro_tester::QueryMsg {},
-        );
+            &super::macro_tester::AtomIdMsg {},
+        )
+            .expect("expected no error")
+            .get::<AccountId>()
+            .expect("expected AccountId");
+
+        // force migration to happen
+        let (_, state_changes) = TestStf::exec(
+            &storage,
+            &mut account_codes,
+            AccountId::new(100u128),
+            resp.new_account_id,
+            &super::macro_tester::DoMigrationMsg {},
+            vec![],
+        )
+            .unwrap();
+        storage.apply_changes(state_changes.into_changes()).unwrap();
+
+        // now ensure the account was swapped correctly
+        let value_resp = TestStf::query(
+            &storage,
+            &mut account_codes,
+            resp.new_account_id,
+            &super::migration_test::ValueMsg {},
+        )
+            .unwrap()
+            .get::<u64>()
+            .expect("expected u64");
+        assert_eq!(10, value_resp);
     }
 
     #[test]

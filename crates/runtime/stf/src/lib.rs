@@ -12,7 +12,7 @@ use evolve_core::events_api::{
     EmitEventRequest, EmitEventResponse, Event, EVENT_HANDLER_ACCOUNT_ID,
 };
 use evolve_core::runtime_api::{
-    CreateAccountRequest, CreateAccountResponse, ACCOUNT_IDENTIFIER_PREFIX,
+    CreateAccountRequest, CreateAccountResponse, MigrateRequest, ACCOUNT_IDENTIFIER_PREFIX,
     ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, RUNTIME_ACCOUNT_ID,
 };
 use evolve_core::storage_api::{
@@ -22,7 +22,7 @@ use evolve_core::storage_api::{
 
 use evolve_core::{
     AccountCode, AccountId, Environment, FungibleAsset, InvokableMessage, InvokeRequest,
-    InvokeResponse, Message, ReadonlyKV, SdkResult, ERR_UNKNOWN_FUNCTION,
+    InvokeResponse, Message, ReadonlyKV, SdkResult, ERR_UNAUTHORIZED, ERR_UNKNOWN_FUNCTION,
 };
 use evolve_server_core::{
     AccountsCodeStorage, BeginBlocker as BeginBlockerTrait, Block as BlockTrait,
@@ -51,7 +51,7 @@ pub struct Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx>(
 );
 
 impl<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx>
-    Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx>
+Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx>
 where
     Tx: Transaction,
     Block: BlockTrait<Tx>,
@@ -330,6 +330,24 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
                     init_response,
                 };
                 Ok(InvokeResponse::new(&resp)?)
+            }
+            MigrateRequest::FUNCTION_IDENTIFIER => {
+                // exec on behalf of runtime the migration request, runtime has the money
+                // so runtime needs to send the money to the account, so here we simulate that
+                // we branch exec to runtime account ID, which is the one receiving the money
+                let mut invoker = self
+                    .branch_exec(RUNTIME_ACCOUNT_ID, vec![]);
+
+                let req: MigrateRequest = request.get()?;
+                // TODO: enhance with more migration delegation rights
+                if req.account_id != invoker.sender {
+                    return Err(ERR_UNAUTHORIZED);
+                }
+
+                // set new account id
+                self.set_account_code_identifier_for_account(req.account_id, &req.new_code_id)?;
+                // make runtime invoke the exec msg
+                invoker.do_exec(req.account_id, &req.execute_message, funds)
             }
             _ => Err(ERR_UNKNOWN_FUNCTION),
         }

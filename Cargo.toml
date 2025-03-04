@@ -30,7 +30,7 @@ evolve_block_info = { path = "crates/sdk/x/block_info" }
 evolve_token = { path = "crates/sdk/x/token" }
 evolve_events = { path = "crates/sdk/x/events" }
 
-evolve_stf = { path = "crates/runtime/stf"}
+evolve_stf = { path = "crates/runtime/stf" }
 
 # outside deps
 borsh = { features = ["derive"], version = "1.5.5" }

@@ -48,6 +48,7 @@ impl BorshDeserialize for Message {
     }
 }
 
+#[derive(Debug, BorshSerialize, BorshDeserialize)]
 pub struct InvokeRequest {
     function: u64,
     message: Message,
@@ -73,6 +74,7 @@ impl InvokeRequest {
     }
 }
 
+#[derive(BorshSerialize, BorshDeserialize)]
 pub struct InvokeResponse {
     message: Message,
 }

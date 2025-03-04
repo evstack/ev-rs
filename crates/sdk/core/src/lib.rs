@@ -1,4 +1,4 @@
-use crate::encoding::{Decodable, Encodable};
+use crate::encoding::Encodable;
 pub use crate::message::{InvokeRequest, InvokeResponse, Message};
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -14,6 +14,7 @@ pub type ErrorCode = u64;
 pub const ERR_ENCODING: ErrorCode = 1;
 pub const ERR_UNKNOWN_FUNCTION: ErrorCode = 2;
 pub const ERR_ACCOUNT_NOT_INITIALIZED: ErrorCode = 3;
+pub const ERR_UNAUTHORIZED: ErrorCode = 4;
 
 pub type SdkResult<T> = Result<T, ErrorCode>;
 
@@ -63,7 +64,7 @@ pub trait Environment {
 pub trait AccountCode {
     fn identifier(&self) -> String;
     fn init(&self, env: &mut dyn Environment, request: &InvokeRequest)
-        -> SdkResult<InvokeResponse>;
+            -> SdkResult<InvokeResponse>;
     fn execute(
         &self,
         env: &mut dyn Environment,

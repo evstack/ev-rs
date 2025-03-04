@@ -1,6 +1,5 @@
 pub mod server;
 
-use evolve_core::Environment;
 use evolve_macros::account_impl;
 
 #[account_impl(BeginBlockAccountInterface)]

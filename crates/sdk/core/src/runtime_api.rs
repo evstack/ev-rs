@@ -1,5 +1,5 @@
 use crate::message::Message;
-use crate::{AccountId, InvokableMessage};
+use crate::{AccountId, InvokableMessage, InvokeRequest, InvokeResponse};
 use borsh::{BorshDeserialize, BorshSerialize};
 pub const ACCOUNT_IDENTIFIER_PREFIX: u8 = 0;
 pub const ACCOUNT_IDENTIFIER_SINGLETON_PREFIX: u8 = 1;
@@ -20,4 +20,21 @@ impl InvokableMessage for CreateAccountRequest {
 pub struct CreateAccountResponse {
     pub new_account_id: AccountId,
     pub init_response: Message,
+}
+
+#[derive(BorshDeserialize, BorshSerialize)]
+pub struct MigrateRequest {
+    pub account_id: AccountId,
+    pub new_code_id: String,
+    pub execute_message: InvokeRequest,
+}
+
+impl InvokableMessage for MigrateRequest {
+    const FUNCTION_IDENTIFIER: u64 = 2;
+    const FUNCTION_IDENTIFIER_NAME: &'static str = "migrate";
+}
+
+#[derive(BorshDeserialize, BorshSerialize)]
+pub struct MigrateResponse {
+    pub migrate_response: InvokeResponse,
 }

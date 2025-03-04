@@ -18,11 +18,11 @@ mod fa_interface {
     pub trait FungibleAssetInterface {
         #[exec]
         fn transfer(&self, to: AccountId, amount: u128, env: &mut dyn Environment)
-            -> SdkResult<()>;
+                    -> SdkResult<()>;
         #[query]
         fn metadata(&self, env: &dyn Environment) -> SdkResult<FungibleAssetMetadata>;
         #[query]
         fn get_balance(&self, account: AccountId, env: &dyn Environment)
-            -> SdkResult<Option<u128>>;
+                       -> SdkResult<Option<u128>>;
     }
 }
