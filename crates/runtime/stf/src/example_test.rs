@@ -2,7 +2,7 @@ use evolve_macros::account_impl;
 
 #[account_impl(Asset)]
 pub mod asset {
-    use evolve_collections::Map;
+    use evolve_collections::map::Map;
     use evolve_core::{AccountId, Environment, SdkResult};
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
@@ -74,7 +74,7 @@ pub mod asset {
 
 #[account_impl(Staking)]
 pub mod staking {
-    use evolve_collections::{Item, Map};
+    use evolve_collections::{item::Item, map::Map};
     use evolve_core::{AccountId, Environment, ErrorCode, SdkResult};
     use evolve_macros::{exec, init, query};
 
@@ -139,7 +139,7 @@ pub mod staking {
 pub mod lst {
     use crate::example_test::asset::AssetRef;
     use crate::example_test::staking::StakingRef;
-    use evolve_collections::Item;
+    use evolve_collections::item::Item;
     use evolve_core::{AccountId, Environment, SdkResult};
     use evolve_macros::{exec, init};
 
@@ -229,7 +229,7 @@ mod tests {
             },
             vec![],
         )
-            .unwrap();
+        .unwrap();
 
         storage.apply_changes(state.into_changes()).unwrap();
 
@@ -244,7 +244,7 @@ mod tests {
             },
             vec![],
         )
-            .unwrap();
+        .unwrap();
 
         storage.apply_changes(state.into_changes()).unwrap();
 
@@ -259,7 +259,7 @@ mod tests {
             },
             vec![],
         )
-            .unwrap();
+        .unwrap();
         storage.apply_changes(state.into_changes()).unwrap();
 
         // finally execute a message in which alice execs via LST
@@ -274,6 +274,6 @@ mod tests {
                 amount: 100,
             }],
         )
-            .unwrap();
+        .unwrap();
     }
 }

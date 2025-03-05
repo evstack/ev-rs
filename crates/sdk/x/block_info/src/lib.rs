@@ -3,7 +3,7 @@ use evolve_macros::account_impl;
 pub mod server;
 #[account_impl(BlockInfo)]
 pub mod account {
-    use evolve_collections::Item;
+    use evolve_collections::item::Item;
     use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
     use evolve_core::{Environment, SdkResult};
     use evolve_macros::{exec, init};

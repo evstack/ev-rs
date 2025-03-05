@@ -51,7 +51,7 @@ pub struct Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx>(
 );
 
 impl<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx>
-Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx>
+    Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx>
 where
     Tx: Transaction,
     Block: BlockTrait<Tx>,
@@ -335,8 +335,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
                 // exec on behalf of runtime the migration request, runtime has the money
                 // so runtime needs to send the money to the account, so here we simulate that
                 // we branch exec to runtime account ID, which is the one receiving the money
-                let mut invoker = self
-                    .branch_exec(RUNTIME_ACCOUNT_ID, vec![]);
+                let mut invoker = self.branch_exec(RUNTIME_ACCOUNT_ID, vec![]);
 
                 let req: MigrateRequest = request.get()?;
                 // TODO: enhance with more migration delegation rights

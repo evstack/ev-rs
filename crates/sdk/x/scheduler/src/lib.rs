@@ -28,7 +28,7 @@ pub mod end_block_account_interface {
 pub mod scheduler_account {
     use crate::begin_block_account_interface::BeginBlockAccountInterfaceRef;
     use crate::end_block_account_interface::EndBlockAccountInterfaceRef;
-    use evolve_collections::Item;
+    use evolve_collections::item::Item;
     use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
     use evolve_core::{AccountId, Environment, ErrorCode, SdkResult};
     use evolve_macros::{exec, init};

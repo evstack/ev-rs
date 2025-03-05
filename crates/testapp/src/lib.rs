@@ -82,7 +82,7 @@ impl PostTxExecution<Tx> for NoOpPostTx {
 }
 
 pub type TestAppStf =
-Stf<Tx, Block, SchedulerBeginBlocker, TxValidatorHandler, SchedulerEndBlocker, NoOpPostTx>;
+    Stf<Tx, Block, SchedulerBeginBlocker, TxValidatorHandler, SchedulerEndBlocker, NoOpPostTx>;
 
 /// List of accounts installed.
 pub fn account_codes() -> impl AccountsCodeStorage {
@@ -115,7 +115,7 @@ pub fn do_genesis<S: WritableKV, A: AccountsCodeStorage>(
             vec![],
             env,
         )?
-            .0;
+        .0;
         // Create scheduler
         let scheduler_acc = SchedulerRef::initialize(vec![], vec![], env)?.0;
         // Update well known names in the name service.

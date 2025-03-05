@@ -21,7 +21,7 @@ pub fn resolve_as_ref<T: From<AccountId>>(
 
 #[account_impl(NameService)]
 pub mod account {
-    use evolve_collections::{Item, Map};
+    use evolve_collections::{item::Item, map::Map};
     use evolve_core::{AccountId, Environment, ErrorCode, SdkResult};
     use evolve_macros::{exec, init, query};
 

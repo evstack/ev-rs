@@ -4,7 +4,7 @@ use evolve_fungible_asset::FungibleAssetInterface;
 
 #[account_impl(Asset)]
 pub mod asset_account {
-    use evolve_collections::{Item, Map};
+    use evolve_collections::{item::Item, map::Map};
     use evolve_core::{AccountId, Environment, ErrorCode, SdkResult};
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
@@ -92,7 +92,7 @@ pub mod macro_tester {
     use super::asset_account::AssetRef;
     use crate::test_all::migration_test;
     use borsh::{BorshDeserialize, BorshSerialize};
-    use evolve_collections::Item;
+    use evolve_collections::item::Item;
     use evolve_core::low_level::migrate_account;
     use evolve_core::{AccountId, Environment, SdkResult};
     use evolve_events::EventsEmitter;
@@ -182,7 +182,7 @@ pub mod macro_tester {
 }
 #[account_impl(MigrationTester)]
 mod migration_test {
-    use evolve_collections::Item;
+    use evolve_collections::item::Item;
     use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
     use evolve_core::{Environment, SdkResult};
     use evolve_macros::{exec, init, query};
@@ -250,7 +250,7 @@ mod tests {
             super::macro_tester::InitializeMsg {},
             vec![],
         )
-            .unwrap();
+        .unwrap();
 
         storage.apply_changes(state_changes.into_changes()).unwrap();
 
@@ -261,9 +261,9 @@ mod tests {
             resp.new_account_id,
             &super::macro_tester::AtomIdMsg {},
         )
-            .expect("expected no error")
-            .get::<AccountId>()
-            .expect("expected AccountId");
+        .expect("expected no error")
+        .get::<AccountId>()
+        .expect("expected AccountId");
 
         // force migration to happen
         let (_, state_changes) = TestStf::exec(
@@ -274,7 +274,7 @@ mod tests {
             &super::macro_tester::DoMigrationMsg {},
             vec![],
         )
-            .unwrap();
+        .unwrap();
         storage.apply_changes(state_changes.into_changes()).unwrap();
 
         // now ensure the account was swapped correctly
@@ -284,9 +284,9 @@ mod tests {
             resp.new_account_id,
             &super::migration_test::ValueMsg {},
         )
-            .unwrap()
-            .get::<u64>()
-            .expect("expected u64");
+        .unwrap()
+        .get::<u64>()
+        .expect("expected u64");
         assert_eq!(10, value_resp);
     }
 

@@ -64,7 +64,7 @@ pub trait Environment {
 pub trait AccountCode {
     fn identifier(&self) -> String;
     fn init(&self, env: &mut dyn Environment, request: &InvokeRequest)
-            -> SdkResult<InvokeResponse>;
+        -> SdkResult<InvokeResponse>;
     fn execute(
         &self,
         env: &mut dyn Environment,

@@ -2,7 +2,7 @@ use evolve_macros::account_impl;
 
 #[account_impl(Token)]
 pub mod account {
-    use evolve_collections::{Item, Map};
+    use evolve_collections::{item::Item, map::Map};
     use evolve_core::{AccountId, Environment, ErrorCode, SdkResult};
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
