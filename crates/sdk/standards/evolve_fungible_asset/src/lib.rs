@@ -3,10 +3,8 @@ pub use fa_interface::*;
 
 #[account_impl(FungibleAssetInterface)]
 mod fa_interface {
-    use evolve_core::{AccountId, Environment, ErrorCode, SdkResult};
+    use evolve_core::{AccountId, Environment, SdkResult};
     use evolve_macros::{exec, query};
-    pub const ERR_NOT_PAYABLE: ErrorCode = 0;
-
     #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
     pub struct FungibleAssetMetadata {
         pub name: String,

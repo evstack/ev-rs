@@ -39,7 +39,7 @@ mod tests {
         storage_api::{
             StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
         },
-        AccountId, FungibleAsset, InvokeRequest, InvokeResponse, SdkResult,
+        AccountId, ErrorCode, FungibleAsset, InvokeRequest, InvokeResponse, SdkResult,
     };
     use std::collections::HashMap;
 
@@ -84,11 +84,11 @@ mod tests {
 
         fn do_query(&self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse> {
             if self.should_fail {
-                return Err(99); // Simulate a failure
+                return Err(ErrorCode::new(99, "failure")); // Simulate a failure
             }
 
             if to != STORAGE_ACCOUNT_ID {
-                return Err(1); // Error code for unsupported account
+                return Err(ErrorCode::new(1, "failure")); // Error code for unsupported account
             }
 
             let request = data.get::<StorageGetRequest>()?;
@@ -104,11 +104,11 @@ mod tests {
             _funds: Vec<FungibleAsset>,
         ) -> SdkResult<InvokeResponse> {
             if self.should_fail {
-                return Err(99); // Simulate a failure
+                return Err(ErrorCode::new(99, "failure")); // Simulate a failure
             }
 
             if to != STORAGE_ACCOUNT_ID {
-                return Err(1); // Error code for unsupported account
+                return Err(ErrorCode::new(1, "failure")); // Error code for unsupported account
             }
 
             let request = data.get::<StorageSetRequest>()?;
@@ -246,12 +246,12 @@ mod tests {
 
         // Update with an error
         let update_result = item.update(
-            |_| Err(42), // Return an error
+            |_| Err(ErrorCode::new(42, "custom")), // Return an error
             &mut env,
         );
 
         assert!(update_result.is_err());
-        assert_eq!(update_result.unwrap_err(), 42);
+        assert_eq!(update_result.unwrap_err(), ErrorCode::new(42, "custom"));
 
         // Verify the value was not changed
         let get_result = item.get(&env).unwrap();
@@ -296,7 +296,7 @@ mod tests {
 
         let result = item.get(&env);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), 99);
+        assert_eq!(result.unwrap_err().code(), 99);
     }
 
     #[test]
@@ -312,7 +312,7 @@ mod tests {
 
         let result = item.set(&test_data, &mut env);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), 99);
+        assert_eq!(result.unwrap_err().code(), 99);
     }
 
     #[test]
@@ -332,7 +332,7 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), 99);
+        assert_eq!(result.unwrap_err().code(), 99);
     }
 
     #[test]

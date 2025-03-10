@@ -5,7 +5,6 @@ mod example_test;
 mod mocks;
 #[cfg(test)]
 mod test_all;
-
 use crate::checkpoint::ExecutionState;
 use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::events_api::{

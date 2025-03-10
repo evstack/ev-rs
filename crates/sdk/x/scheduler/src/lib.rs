@@ -30,10 +30,8 @@ pub mod scheduler_account {
     use crate::end_block_account_interface::EndBlockAccountInterfaceRef;
     use evolve_collections::item::Item;
     use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
-    use evolve_core::{AccountId, Environment, ErrorCode, SdkResult};
+    use evolve_core::{AccountId, Environment, SdkResult, ERR_UNAUTHORIZED};
     use evolve_macros::{exec, init};
-
-    pub const ERR_UNAUTHORIZED: ErrorCode = 0;
 
     pub struct Scheduler {
         pub begin_block_accounts: Item<Vec<BeginBlockAccountInterfaceRef>>,

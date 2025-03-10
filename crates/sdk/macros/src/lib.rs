@@ -608,7 +608,7 @@ fn generate_init_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
         FunctionKind::Init { payable } if !payable => {
             quote! {
                 if !env.funds().is_empty() {
-                    return Err(::evolve_fungible_asset::ERR_NOT_PAYABLE);
+                    return Err(::evolve_core::ERR_NOT_PAYABLE);
                 }
             }
         }
@@ -639,7 +639,7 @@ fn generate_exec_match_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
         FunctionKind::Exec { payable } if !payable => {
             quote! {
                 if !env.funds().is_empty() {
-                    return Err(::evolve_fungible_asset::ERR_NOT_PAYABLE);
+                    return Err(::evolve_core::ERR_NOT_PAYABLE);
                 }
             }
         }

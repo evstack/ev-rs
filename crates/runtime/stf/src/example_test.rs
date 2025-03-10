@@ -3,7 +3,7 @@ use evolve_macros::account_impl;
 #[account_impl(Asset)]
 pub mod asset {
     use evolve_collections::map::Map;
-    use evolve_core::{AccountId, Environment, SdkResult};
+    use evolve_core::{AccountId, Environment, ErrorCode, SdkResult};
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
 
@@ -44,7 +44,9 @@ pub mod asset {
                 &env.sender(),
                 |value| {
                     let balance = value.unwrap_or_default();
-                    balance.checked_sub(amount).ok_or(1)
+                    balance
+                        .checked_sub(amount)
+                        .ok_or(ErrorCode::new(0, "balance"))
                 },
                 env,
             )?;
@@ -84,8 +86,8 @@ pub mod staking {
     }
 
     impl Staking {
-        pub const ERR_NO_FUNDS: ErrorCode = 0;
-        pub const ERR_INVALID_STAKING_ASSET: ErrorCode = 1;
+        pub const ERR_NO_FUNDS: ErrorCode = ErrorCode::new(0, "no funds");
+        pub const ERR_INVALID_STAKING_ASSET: ErrorCode = ErrorCode::new(1, "invalid staking asset");
 
         pub const fn new() -> Self {
             Self {

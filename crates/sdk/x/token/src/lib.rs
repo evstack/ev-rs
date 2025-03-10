@@ -7,7 +7,7 @@ pub mod account {
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
 
-    pub const ERR_NOT_ENOUGH_BALANCE: ErrorCode = 0;
+    pub const ERR_NOT_ENOUGH_BALANCE: ErrorCode = ErrorCode::new(0, "no balance");
 
     pub struct Token {
         pub metadata: Item<FungibleAssetMetadata>,

@@ -22,15 +22,13 @@ pub fn resolve_as_ref<T: From<AccountId>>(
 #[account_impl(NameService)]
 pub mod account {
     use evolve_collections::{item::Item, map::Map};
-    use evolve_core::{AccountId, Environment, ErrorCode, SdkResult};
+    use evolve_core::{AccountId, Environment, SdkResult, ERR_UNAUTHORIZED};
     use evolve_macros::{exec, init, query};
 
     pub struct NameService {
         pub owner: Item<AccountId>,
         pub name_to_account: Map<String, AccountId>,
     }
-
-    pub const ERR_UNAUTHORIZED: ErrorCode = 0;
 
     impl NameService {
         pub const fn new() -> Self {

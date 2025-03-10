@@ -3,6 +3,7 @@ pub use crate::message::{InvokeRequest, InvokeResponse, Message};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub mod encoding;
+pub mod error;
 pub mod events_api;
 pub mod low_level;
 pub mod message;
@@ -10,11 +11,13 @@ pub mod mocks; // TODO: make test
 pub mod runtime_api;
 pub mod storage_api;
 
-pub type ErrorCode = u64;
-pub const ERR_ENCODING: ErrorCode = 1;
-pub const ERR_UNKNOWN_FUNCTION: ErrorCode = 2;
-pub const ERR_ACCOUNT_NOT_INITIALIZED: ErrorCode = 3;
-pub const ERR_UNAUTHORIZED: ErrorCode = 4;
+pub use error::ErrorCode;
+
+pub const ERR_ENCODING: ErrorCode = ErrorCode::new(0, "encoding error");
+pub const ERR_UNKNOWN_FUNCTION: ErrorCode = ErrorCode::new(1, "unknown function");
+pub const ERR_ACCOUNT_NOT_INITIALIZED: ErrorCode = ErrorCode::new(2, "account not initialized");
+pub const ERR_UNAUTHORIZED: ErrorCode = ErrorCode::new(3, "unauthorized");
+pub const ERR_NOT_PAYABLE: ErrorCode = ErrorCode::new(4, "not payable");
 
 pub type SdkResult<T> = Result<T, ErrorCode>;
 
