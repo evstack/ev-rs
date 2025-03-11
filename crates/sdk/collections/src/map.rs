@@ -79,12 +79,9 @@ where
 mod tests {
     use super::*;
     use borsh::{BorshDeserialize, BorshSerialize};
-    use evolve_core::{
-        storage_api::{
-            StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
-        },
-        AccountId, FungibleAsset, InvokeRequest, InvokeResponse, SdkResult,
-    };
+    use evolve_core::{storage_api::{
+        StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
+    }, AccountId, ErrorCode, FungibleAsset, InvokeRequest, InvokeResponse, SdkResult};
     use std::collections::HashMap;
 
     // A simple mock implementation of the Environment trait for testing
@@ -128,11 +125,11 @@ mod tests {
 
         fn do_query(&self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse> {
             if self.should_fail {
-                return Err(99); // Simulate a failure
+                return Err(ErrorCode::new(99, "fail")); // Simulate a failure
             }
 
             if to != STORAGE_ACCOUNT_ID {
-                return Err(1); // Error code for unsupported account
+                return Err(ErrorCode::new(1, "fail")); // Error code for unsupported account
             }
 
             let request = data.get::<StorageGetRequest>()?;
@@ -148,11 +145,11 @@ mod tests {
             _funds: Vec<FungibleAsset>,
         ) -> SdkResult<InvokeResponse> {
             if self.should_fail {
-                return Err(99); // Simulate a failure
+                return Err(ErrorCode::new(99, "fail")); // Simulate a failure
             }
 
             if to != STORAGE_ACCOUNT_ID {
-                return Err(1); // Error code for unsupported account
+                return Err(ErrorCode::new(1, "fail")); // Error code for unsupported account
             }
 
             let request = data.get::<StorageSetRequest>()?;
@@ -342,7 +339,7 @@ mod tests {
 
         let result = map.get(&"test_key".to_string(), &env);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), 99);
+        assert_eq!(result.unwrap_err().code(), 99);
     }
 
     #[test]
@@ -358,7 +355,7 @@ mod tests {
 
         let result = map.set(&"test_key".to_string(), &test_data, &mut env);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), 99);
+        assert_eq!(result.unwrap_err().code(), 99);
     }
 
     #[test]
@@ -379,7 +376,7 @@ mod tests {
         );
 
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), 99);
+        assert_eq!(result.unwrap_err().code(), 99);
     }
 
     #[test]

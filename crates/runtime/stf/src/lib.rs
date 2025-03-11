@@ -79,7 +79,7 @@ where
         );
 
         // run begin blocker.
-        BeginBlocker::begin_block(block, &mut block_state);
+        Self::do_begin_block(block, &mut block_state);
         let begin_block_events = block_state.storage.borrow_mut().pop_events();
 
         // find gas service account: TODO maybe better way to do it
@@ -114,6 +114,16 @@ where
             tx_results,
             end_block_events,
         }
+    }
+
+    fn do_begin_block<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
+        block: &Block,
+        block_state: &mut Invoker<'a, S, A>,
+    ) -> Vec<Event> {
+        let mut invoker = block_state.clone_with_gas(GasCounter::infinite());
+        BeginBlocker::begin_block(block, &mut invoker);
+        let events = invoker.storage.borrow_mut().pop_events();
+        events
     }
 
     fn do_end_block<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
