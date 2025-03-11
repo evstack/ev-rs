@@ -50,6 +50,7 @@ impl BorshDeserialize for Message {
 
 #[derive(Debug, BorshSerialize, BorshDeserialize)]
 pub struct InvokeRequest {
+    human_name: String,
     function: u64,
     message: Message,
 }
@@ -57,16 +58,25 @@ pub struct InvokeRequest {
 impl InvokeRequest {
     pub fn new<M: InvokableMessage>(msg: &M) -> SdkResult<Self> {
         Ok(Self {
+            human_name: M::FUNCTION_IDENTIFIER_NAME.to_string(),
             function: M::FUNCTION_IDENTIFIER,
             message: Message::new(msg)?,
         })
     }
-    pub fn new_from_message(function: u64, message: Message) -> Self {
-        Self { function, message }
+    pub fn new_from_message(human_name: &'static str, function: u64, message: Message) -> Self {
+        Self {
+            human_name: human_name.to_string(),
+            function,
+            message,
+        }
     }
 
     pub fn function(&self) -> u64 {
         self.function
+    }
+
+    pub fn human_name(&self) -> &str {
+        &self.human_name
     }
 
     pub fn get<T: Decodable>(&self) -> SdkResult<T> {
@@ -74,7 +84,7 @@ impl InvokeRequest {
     }
 }
 
-#[derive(BorshSerialize, BorshDeserialize)]
+#[derive(BorshSerialize, BorshDeserialize, Debug)]
 pub struct InvokeResponse {
     message: Message,
 }

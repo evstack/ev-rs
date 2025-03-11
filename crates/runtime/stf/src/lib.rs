@@ -1,11 +1,9 @@
-mod checkpoint;
-#[cfg(test)]
-mod example_test;
-#[cfg(test)]
-mod mocks;
-#[cfg(test)]
-mod test_all;
-use crate::checkpoint::ExecutionState;
+mod execution_state;
+pub mod gas;
+pub mod results;
+
+use crate::execution_state::ExecutionState;
+use crate::results::BlockResult;
 use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::events_api::{
     EmitEventRequest, EmitEventResponse, Event, EVENT_HANDLER_ACCOUNT_ID,
@@ -15,14 +13,18 @@ use evolve_core::runtime_api::{
     ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, RUNTIME_ACCOUNT_ID,
 };
 use evolve_core::storage_api::{
-    StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageSetRequest,
-    StorageSetResponse, STORAGE_ACCOUNT_ID,
+    StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageRemoveResponse,
+    StorageSetRequest, StorageSetResponse, STORAGE_ACCOUNT_ID,
 };
 
+use crate::gas::GasCounter;
+use crate::results::TxResult;
 use evolve_core::{
     AccountCode, AccountId, Environment, FungibleAsset, InvokableMessage, InvokeRequest,
     InvokeResponse, Message, ReadonlyKV, SdkResult, ERR_UNAUTHORIZED, ERR_UNKNOWN_FUNCTION,
 };
+use evolve_gas::account::{GasService, StorageGasConfig};
+use evolve_ns::resolve_name;
 use evolve_server_core::{
     AccountsCodeStorage, BeginBlocker as BeginBlockerTrait, Block as BlockTrait,
     EndBlocker as EndBlockerTrait, PostTxExecution, StateChange, Transaction,
@@ -31,19 +33,6 @@ use evolve_server_core::{
 use std::cell::RefCell;
 use std::marker::PhantomData;
 use std::rc::Rc;
-
-pub struct TxResult {
-    pub events: Vec<Event>,
-    pub gas_used: u64,
-    pub response: SdkResult<InvokeResponse>,
-}
-
-pub struct BlockResult {
-    pub begin_block_events: Vec<Event>,
-    pub state_changes: Vec<StateChange>,
-    pub tx_results: Vec<TxResult>,
-    pub end_block_events: Vec<Event>,
-}
 
 pub struct Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx>(
     PhantomData<(Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx)>,
@@ -65,11 +54,11 @@ where
         account_codes: &mut A,
         action: impl Fn(&mut dyn Environment) -> SdkResult<R>,
     ) -> SdkResult<(R, Vec<StateChange>)> {
-        let mut invoker = Invoker::new_for_exec(
+        let mut invoker = Invoker::new_block_state(
             RUNTIME_ACCOUNT_ID,
-            0,
             ExecutionState::new(storage),
             account_codes,
+            GasCounter::infinite(),
         );
 
         let resp = action(&mut invoker)?;
@@ -82,31 +71,42 @@ where
         block: &Block,
     ) -> BlockResult {
         // create invoker
-        let mut invoker = Invoker::new_for_exec(
+        let mut block_state = Invoker::new_block_state(
             RUNTIME_ACCOUNT_ID,
-            0,
             ExecutionState::new(storage),
             account_codes,
+            GasCounter::infinite(),
         );
 
         // run begin blocker.
-        BeginBlocker::begin_block(block, &mut invoker);
-        let begin_block_events = invoker.storage.borrow_mut().pop_events();
+        BeginBlocker::begin_block(block, &mut block_state);
+        let begin_block_events = block_state.storage.borrow_mut().pop_events();
+
+        // find gas service account: TODO maybe better way to do it
+        let gas_service_account = resolve_name("gas".to_string(), &block_state)
+            .unwrap()
+            .unwrap();
+
+        // get system gas config
+        let gas_config = block_state
+            .run_as(
+                gas_service_account,
+                |account: &GasService, env: &dyn Environment| account.storage_gas_config.get(env),
+            )
+            .unwrap()
+            .unwrap();
 
         // apply txs.
         let txs = block.txs();
         let mut tx_results = Vec::with_capacity(txs.len());
         for tx in txs {
             // apply tx
-            let tx_result = Self::apply_tx(&mut invoker, tx);
+            let tx_result = Self::apply_tx(&mut block_state, tx, &gas_config);
             tx_results.push(tx_result);
         }
 
-        // run end blocker
-        EndBlocker::end_block(&mut invoker);
-
-        let end_block_events = invoker.storage.borrow_mut().pop_events();
-        let state_changes = invoker.into_state_changes();
+        let end_block_events = Self::do_end_block(&mut block_state);
+        let state_changes = block_state.into_state_changes();
 
         BlockResult {
             begin_block_events,
@@ -116,34 +116,47 @@ where
         }
     }
 
+    fn do_end_block<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
+        block_state: &mut Invoker<'a, S, A>,
+    ) -> Vec<Event> {
+        let mut invoker = block_state.clone_with_gas(GasCounter::infinite());
+        EndBlocker::end_block(&mut invoker);
+        let events = invoker.storage.borrow_mut().pop_events();
+        events
+    }
+
     fn apply_tx<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
-        invoker: &mut Invoker<'a, S, A>,
+        parent: &Invoker<'a, S, A>,
         tx: &Tx,
+        gas_config: &'a StorageGasConfig,
     ) -> TxResult {
+        // add gas
+        let mut validate_ctx =
+            parent.clone_with_gas(GasCounter::finite(tx.gas_limit(), gas_config));
         // do tx validation; we do not swap invoker
-        match TxValidator::validate_tx(tx, invoker) {
+        match TxValidator::validate_tx(tx, &mut validate_ctx) {
             Ok(()) => (),
             Err(err) => {
                 return TxResult {
-                    events: invoker.storage.borrow_mut().pop_events(),
-                    gas_used: invoker.gas_used.borrow().clone(),
+                    events: validate_ctx.storage.borrow_mut().pop_events(),
+                    gas_used: validate_ctx.gas_counter.borrow().gas_used(),
                     response: Err(err),
                 }
             }
         }
 
         // exec tx
-        let mut invoker = invoker.branch_for_new_exec(tx.sender());
+        let mut exec_ctx = validate_ctx.branch_for_new_exec(tx.sender());
 
-        let response = invoker.do_exec(
+        let response = exec_ctx.do_exec(
             tx.recipient(),
             tx.request(),
             tx.funds().iter().cloned().collect(),
         );
 
         // do post tx validation
-        let gas_used = invoker.gas_used.borrow().clone();
-        let events = invoker.storage.borrow_mut().pop_events();
+        let gas_used = exec_ctx.gas_counter.borrow().gas_used();
+        let events = exec_ctx.storage.borrow_mut().pop_events();
 
         // TODO: post tx executor. It is more nuanced.
         TxResult {
@@ -153,67 +166,15 @@ where
         }
     }
 
-    pub(crate) fn create_account<'a, S: ReadonlyKV, A: AccountsCodeStorage + 'a, M: Encodable>(
-        storage: &'a S,
-        account_storage: &'a mut A,
-        from: AccountId,
-        code_id: String,
-        init_message: M,
-        funds: Vec<FungibleAsset>,
-    ) -> SdkResult<(CreateAccountResponse, ExecutionState<'a, S>)> {
-        let init_message = Message::new(&init_message)?;
-        let req = CreateAccountRequest {
-            code_id,
-            init_message,
-        };
-
-        let (resp, state) = Self::exec(
-            storage,
-            account_storage,
-            from,
-            RUNTIME_ACCOUNT_ID,
-            &req,
-            funds,
-        )?;
-
-        Ok((resp.get::<CreateAccountResponse>()?, state))
-    }
-
-    pub(crate) fn exec<'a, S: ReadonlyKV, A: AccountsCodeStorage + 'a, R: InvokableMessage>(
-        storage: &'a S,
-        account_storage: &'a mut A,
-        from: AccountId,
-        to: AccountId,
-        req: &R,
-        funds: Vec<FungibleAsset>,
-    ) -> SdkResult<(InvokeResponse, ExecutionState<'a, S>)> {
-        let req = InvokeRequest::new(req)?;
-        let writable_storage = ExecutionState::new(storage);
-        let mut invoker = Invoker::new_for_exec(from, 0, writable_storage, account_storage);
-        let resp = invoker.do_exec(to, &req, funds);
-        resp.map(|resp| {
-            (
-                resp,
-                Rc::try_unwrap(invoker.storage)
-                    .unwrap_or_else(|_i| panic!("expected unwrap"))
-                    .into_inner(),
-            )
-        })
-    }
-
-    pub(crate) fn query<
-        'a,
-        S: ReadonlyKV + 'a,
-        A: AccountsCodeStorage + 'a,
-        R: InvokableMessage,
-    >(
+    pub fn query<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a, R: InvokableMessage>(
         storage: &'a S,
         account_storage: &'a mut A,
         to: AccountId,
         req: &R,
+        gc: GasCounter,
     ) -> SdkResult<InvokeResponse> {
         let writable_storage = ExecutionState::new(storage);
-        let invoker = Invoker::new_for_query(0, writable_storage, account_storage);
+        let invoker = Invoker::new_for_query(writable_storage, account_storage, gc);
         invoker.do_query(to, &InvokeRequest::new(req)?)
     }
 }
@@ -222,13 +183,11 @@ struct Invoker<'a, S, A> {
     whoami: AccountId,
     sender: AccountId,
 
-    gas_limit: u64,
-
     funds: Vec<FungibleAsset>,
-
-    gas_used: Rc<RefCell<u64>>,
-    account_codes: Rc<RefCell<&'a mut A>>,
+    account_codes: Rc<RefCell<&'a A>>,
     storage: Rc<RefCell<ExecutionState<'a, S>>>,
+
+    gas_counter: Rc<RefCell<GasCounter<'a>>>,
 }
 
 impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
@@ -288,27 +247,31 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
 
 impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
     fn new_for_query(
-        gas_limit: u64,
         storage: ExecutionState<'a, S>,
         account_code_storage: &'a mut A,
+        gas_counter: GasCounter<'a>,
     ) -> Self {
-        Self::new_for_exec(RUNTIME_ACCOUNT_ID, gas_limit, storage, account_code_storage)
+        Self::new_block_state(
+            RUNTIME_ACCOUNT_ID,
+            storage,
+            account_code_storage,
+            gas_counter,
+        )
     }
-    fn new_for_exec(
+    fn new_block_state(
         exec_source: AccountId,
-        gas_limit: u64,
         storage: ExecutionState<'a, S>,
         account_code_storage: &'a mut A,
+        gas_counter: GasCounter<'a>,
     ) -> Self {
         Self {
             whoami: exec_source,
             sender: AccountId::new(u128::MAX),
-            gas_limit,
 
             funds: vec![],
-            gas_used: Rc::new(RefCell::new(0)),
             account_codes: Rc::new(RefCell::new(account_code_storage)),
             storage: Rc::new(RefCell::new(storage)),
+            gas_counter: Rc::new(RefCell::new(gas_counter)),
         }
     }
 
@@ -363,12 +326,21 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
                 let mut key = self.whoami.as_bytes();
                 key.extend(storage_set.key);
 
+                // increase gas costs
+                self.gas_counter
+                    .borrow_mut()
+                    .consume_set_gas(&key, &storage_set.value)?;
                 self.storage.borrow_mut().set(&key, storage_set.value)?;
 
                 Ok(InvokeResponse::new(&StorageSetResponse {})?)
             }
             StorageRemoveRequest::FUNCTION_IDENTIFIER => {
-                todo!("impl")
+                let storage_remove: StorageRemoveRequest = request.get()?;
+                let mut key = self.whoami.as_bytes();
+                key.extend(storage_remove.key);
+                self.gas_counter.borrow_mut().consume_remove_gas(&key)?;
+                self.storage.borrow_mut().remove(&key)?;
+                Ok(InvokeResponse::new(&StorageRemoveResponse {})?)
             }
             _ => Err(ERR_UNKNOWN_FUNCTION),
         }
@@ -400,6 +372,10 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
 
                 let value = self.storage.borrow().get(&key)?;
 
+                self.gas_counter
+                    .borrow_mut()
+                    .consume_get_gas(&key, &value)?;
+
                 Ok(InvokeResponse::new(&StorageGetResponse { value })?)
             }
             _ => Err(ERR_UNKNOWN_FUNCTION),
@@ -430,7 +406,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         let new_account_id = self.next_account_number()?;
         self.set_account_code_identifier_for_account(new_account_id, code_id)?;
         // prepare request params
-        let req = InvokeRequest::new_from_message(0, msg);
+        let req = InvokeRequest::new_from_message("init", 0, msg);
         let mut invoker = self.branch_exec(new_account_id, funds);
         // do account init
         let init_resp =
@@ -500,11 +476,10 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         Self {
             whoami,
             sender: RUNTIME_ACCOUNT_ID,
-            gas_limit: self.gas_limit,
             funds: vec![],
-            gas_used: self.gas_used.clone(),
             account_codes: self.account_codes.clone(),
             storage: self.storage.clone(),
+            gas_counter: self.gas_counter.clone(),
         }
     }
 
@@ -512,30 +487,49 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         Self {
             whoami: to,
             sender: self.whoami,
-            gas_limit: self.gas_limit,
             funds,
-            gas_used: self.gas_used.clone(),
             account_codes: self.account_codes.clone(),
             storage: self.storage.clone(),
+            gas_counter: self.gas_counter.clone(),
         }
     }
 
     /// TODO: change the name, but this is invoked when u executed another action
     fn branch_for_new_exec(&self, sender: AccountId) -> Self {
         Self {
-            whoami: AccountId::new(u128::MAX),
-            sender,
-            gas_limit: self.gas_limit,
+            whoami: sender,
+            sender: AccountId::invalid(),
             funds: vec![],
-            gas_used: self.gas_used.clone(),
             account_codes: self.account_codes.clone(),
             storage: self.storage.clone(),
+            gas_counter: self.gas_counter.clone(),
         }
+    }
+
+    fn clone_with_gas(&self, gas_counter: GasCounter<'a>) -> Self {
+        Self {
+            whoami: self.whoami,
+            sender: self.sender,
+            funds: vec![],
+            account_codes: self.account_codes.clone(),
+            storage: self.storage.clone(),
+            gas_counter: Rc::new(RefCell::new(gas_counter)),
+        }
+    }
+
+    pub fn run_as<T: AccountCode + Default, R>(
+        &self,
+        account_id: AccountId,
+        handle: impl FnOnce(&T, &dyn Environment) -> SdkResult<R>,
+    ) -> SdkResult<R> {
+        let env = self.branch_query(account_id);
+        let code = T::default();
+        handle(&code, &env)
     }
 
     fn into_state_changes(self) -> Vec<StateChange> {
         Rc::try_unwrap(self.storage)
-            .unwrap_or_else(|_err| panic!("expected unwrap"))
+            .unwrap_or_else(|_rc| panic!("expected unwrap"))
             .into_inner()
             .into_changes()
     }

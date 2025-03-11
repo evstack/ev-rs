@@ -70,7 +70,7 @@ pub struct Checkpoint {
 ///  - `None` => key is explicitly removed / tombstone
 ///  - no entry => fallback to the underlying store
 pub struct ExecutionState<'a, S> {
-    /// The underlying store to fallback to.
+    /// The underlying store to fall back to.
     base_storage: &'a S,
     /// The in-memory overlay that records changes.
     overlay: HashMap<Vec<u8>, Option<Vec<u8>>>,

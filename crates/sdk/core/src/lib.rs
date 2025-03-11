@@ -27,6 +27,12 @@ pub type SdkResult<T> = Result<T, ErrorCode>;
 pub struct AccountId(u128);
 
 impl AccountId {
+    pub fn invalid() -> AccountId {
+        AccountId(u128::MAX)
+    }
+}
+
+impl AccountId {
     pub fn increase(&self) -> Self {
         Self(self.0 + 1)
     }

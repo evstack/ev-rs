@@ -1,5 +1,5 @@
 [package]
-name = "evolve_block_info"
+name = "evolve_gas"
 version = "0.1.0"
 edition = "2021"
 repository.workspace = true
@@ -10,10 +10,7 @@ rust-version.workspace = true
 evolve_core.workspace = true
 evolve_collections.workspace = true
 evolve_macros.workspace = true
-evolve_ns.workspace = true
-
-evolve_server_core.workspace = true
-
 borsh.workspace = true
+
 [lints]
 workspace = true

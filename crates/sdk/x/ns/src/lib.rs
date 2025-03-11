@@ -3,7 +3,7 @@ use evolve_core::{AccountId, Environment, SdkResult};
 use evolve_macros::account_impl;
 
 /// TODO: make this magic with daemon accounts
-const GLOBAL_NAME_SERVICE_REF: NameServiceRef = NameServiceRef::new(AccountId::new(65535));
+pub const GLOBAL_NAME_SERVICE_REF: NameServiceRef = NameServiceRef::new(AccountId::new(65535));
 
 /// This is kind of magic right now, but NameService is a global account sitting at a very well known
 /// address, contrary to others.
@@ -28,6 +28,12 @@ pub mod account {
     pub struct NameService {
         pub owner: Item<AccountId>,
         pub name_to_account: Map<String, AccountId>,
+    }
+
+    impl Default for NameService {
+        fn default() -> Self {
+            Self::new()
+        }
     }
 
     impl NameService {

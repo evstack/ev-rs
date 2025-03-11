@@ -1,6 +1,7 @@
 # Evolve Collections
 
-The `evolve_collections` crate provides persistent collection types for the Evolve blockchain framework. These collections allow smart contracts to store and retrieve data in a structured way.
+The `evolve_collections` crate provides persistent collection types for the Evolve blockchain framework. These
+collections allow smart contracts to store and retrieve data in a structured way.
 
 ## Available Collections
 
@@ -154,12 +155,16 @@ fn update_config(
 
 2. **Error handling**: Always handle errors returned by the collection methods, as storage operations may fail.
 
-3. **Serialization**: The collections require types that implement `Encodable` and `Decodable` traits. The easiest way to achieve this is by using Borsh serialization with `BorshSerialize` and `BorshDeserialize` derive macros.
+3. **Serialization**: The collections require types that implement `Encodable` and `Decodable` traits. The easiest way
+   to achieve this is by using Borsh serialization with `BorshSerialize` and `BorshDeserialize` derive macros.
 
 4. **Atomic updates**: Use the `update` method for atomic read-modify-write operations to avoid race conditions.
 
 ## Implementation Details
 
-Both `Map` and `Item` collections store data in the blockchain's key-value storage. The `Map` collection prefixes each key with a byte to distinguish between different maps. The `Item` collection is implemented as a `Map` with a unit type `()` as the key.
+Both `Map` and `Item` collections store data in the blockchain's key-value storage. The `Map` collection prefixes each
+key with a byte to distinguish between different maps. The `Item` collection is implemented as a `Map` with a unit type
+`()` as the key.
 
-The collections interact with the blockchain's storage through the `Environment` trait, which provides methods for querying and executing storage operations. 
+The collections interact with the blockchain's storage through the `Environment` trait, which provides methods for
+querying and executing storage operations. 

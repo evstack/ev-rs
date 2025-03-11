@@ -3,7 +3,7 @@ use borsh::{BorshDeserialize, BorshSerialize};
 
 pub const EVENT_HANDLER_ACCOUNT_ID: AccountId = AccountId(2);
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, Debug)]
 pub struct Event {
     pub source: AccountId,
     pub name: String,

@@ -17,6 +17,7 @@ evolve_block_info.workspace = true
 evolve_ns.workspace = true
 evolve_scheduler.workspace = true
 evolve_token.workspace = true
+evolve_gas.workspace = true
 
 [lints]
 workspace = true
