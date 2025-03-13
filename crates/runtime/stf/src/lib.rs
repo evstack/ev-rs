@@ -1,6 +1,7 @@
 mod execution_state;
 pub mod gas;
 pub mod results;
+mod runtime_api_impl;
 
 use crate::execution_state::ExecutionState;
 use crate::results::BlockResult;
@@ -91,7 +92,9 @@ where
         let gas_config = block_state
             .run_as(
                 gas_service_account,
-                |account: &GasService, env: &dyn Environment| account.storage_gas_config.get(env),
+                |account: &GasService, env: &dyn Environment| {
+                    account.storage_gas_config.may_get(env)
+                },
             )
             .unwrap()
             .unwrap();
@@ -285,6 +288,51 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         }
     }
 
+    fn branch_query(&self, whoami: AccountId) -> Self {
+        Self {
+            whoami,
+            sender: RUNTIME_ACCOUNT_ID,
+            funds: vec![],
+            account_codes: self.account_codes.clone(),
+            storage: self.storage.clone(),
+            gas_counter: self.gas_counter.clone(),
+        }
+    }
+
+    fn branch_exec(&self, to: AccountId, funds: Vec<FungibleAsset>) -> Self {
+        Self {
+            whoami: to,
+            sender: self.whoami,
+            funds,
+            account_codes: self.account_codes.clone(),
+            storage: self.storage.clone(),
+            gas_counter: self.gas_counter.clone(),
+        }
+    }
+
+    /// TODO: change the name, but this is invoked when u executed another action
+    fn branch_for_new_exec(&self, sender: AccountId) -> Self {
+        Self {
+            whoami: sender,
+            sender: AccountId::invalid(),
+            funds: vec![],
+            account_codes: self.account_codes.clone(),
+            storage: self.storage.clone(),
+            gas_counter: self.gas_counter.clone(),
+        }
+    }
+
+    fn clone_with_gas(&self, gas_counter: GasCounter<'a>) -> Self {
+        Self {
+            whoami: self.whoami,
+            sender: self.sender,
+            funds: vec![],
+            account_codes: self.account_codes.clone(),
+            storage: self.storage.clone(),
+            gas_counter: Rc::new(RefCell::new(gas_counter)),
+        }
+    }
+
     fn handle_system_exec(
         &mut self,
         request: &InvokeRequest,
@@ -316,7 +364,11 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
                 }
 
                 // set new account id
-                self.set_account_code_identifier_for_account(req.account_id, &req.new_code_id)?;
+                runtime_api_impl::set_account_code_identifier_for_account(
+                    &mut self.storage.borrow_mut(),
+                    req.account_id,
+                    &req.new_code_id,
+                )?;
                 // make runtime invoke the exec msg
                 invoker.do_exec(req.account_id, &req.execute_message, funds)
             }
@@ -413,8 +465,12 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         funds: Vec<FungibleAsset>,
     ) -> SdkResult<(AccountId, Message)> {
         // get new account and associate it with new code ID
-        let new_account_id = self.next_account_number()?;
-        self.set_account_code_identifier_for_account(new_account_id, code_id)?;
+        let new_account_id = runtime_api_impl::next_account_number(&mut self.storage.borrow_mut())?;
+        runtime_api_impl::set_account_code_identifier_for_account(
+            &mut self.storage.borrow_mut(),
+            new_account_id,
+            code_id,
+        )?;
         // prepare request params
         let req = InvokeRequest::new_from_message("init", 0, msg);
         let mut invoker = self.branch_exec(new_account_id, funds);
@@ -430,101 +486,16 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         account: AccountId,
         f: impl FnOnce(&dyn AccountCode) -> R,
     ) -> SdkResult<R> {
-        let code_id = self
-            .get_account_code_identifier_for_account(account)?
-            .unwrap(); // TODO
+        let code_id = runtime_api_impl::get_account_code_identifier_for_account(
+            &self.storage.borrow(),
+            account,
+        )?
+        .unwrap(); // TODO
 
         let account_storage = self.account_codes.borrow();
 
         // 3. Get a reference out of the storage
         account_storage.with_code(&code_id, |code| f(code.unwrap())) // todo remove unwrap
-    }
-    fn get_account_code_identifier_for_account(
-        &self,
-        account: AccountId,
-    ) -> SdkResult<Option<String>> {
-        let key = Self::get_account_code_identifier_for_account_key(account);
-        let code_id = self.storage.borrow().get(&key)?;
-
-        Ok(code_id.map(|e| String::from_utf8(e).unwrap())) // TODO
-    }
-
-    fn set_account_code_identifier_for_account(
-        &mut self,
-        account: AccountId,
-        account_identifier: &str,
-    ) -> SdkResult<()> {
-        let key = Self::get_account_code_identifier_for_account_key(account);
-        Ok(self
-            .storage
-            .borrow_mut()
-            .set(&key, account_identifier.as_bytes().to_vec())?)
-    }
-
-    fn get_account_code_identifier_for_account_key(account: AccountId) -> Vec<u8> {
-        let mut key = vec![ACCOUNT_IDENTIFIER_PREFIX];
-        key.extend_from_slice(&account.as_bytes());
-        key
-    }
-
-    fn next_account_number(&mut self) -> SdkResult<AccountId> {
-        let key = vec![ACCOUNT_IDENTIFIER_SINGLETON_PREFIX];
-
-        // get last
-        let mut storage = self.storage.borrow_mut();
-        let last = storage
-            .get(&key)?
-            .map(|bytes| AccountId::decode(&bytes))
-            .unwrap_or(Ok(AccountId::new(u16::MAX.into())))?;
-
-        // set next
-        storage.set(&key, last.increase().encode()?)?;
-        Ok(last)
-    }
-
-    fn branch_query(&self, whoami: AccountId) -> Self {
-        Self {
-            whoami,
-            sender: RUNTIME_ACCOUNT_ID,
-            funds: vec![],
-            account_codes: self.account_codes.clone(),
-            storage: self.storage.clone(),
-            gas_counter: self.gas_counter.clone(),
-        }
-    }
-
-    fn branch_exec(&self, to: AccountId, funds: Vec<FungibleAsset>) -> Self {
-        Self {
-            whoami: to,
-            sender: self.whoami,
-            funds,
-            account_codes: self.account_codes.clone(),
-            storage: self.storage.clone(),
-            gas_counter: self.gas_counter.clone(),
-        }
-    }
-
-    /// TODO: change the name, but this is invoked when u executed another action
-    fn branch_for_new_exec(&self, sender: AccountId) -> Self {
-        Self {
-            whoami: sender,
-            sender: AccountId::invalid(),
-            funds: vec![],
-            account_codes: self.account_codes.clone(),
-            storage: self.storage.clone(),
-            gas_counter: self.gas_counter.clone(),
-        }
-    }
-
-    fn clone_with_gas(&self, gas_counter: GasCounter<'a>) -> Self {
-        Self {
-            whoami: self.whoami,
-            sender: self.sender,
-            funds: vec![],
-            account_codes: self.account_codes.clone(),
-            storage: self.storage.clone(),
-            gas_counter: Rc::new(RefCell::new(gas_counter)),
-        }
     }
 
     pub fn run_as<T: AccountCode + Default, R>(

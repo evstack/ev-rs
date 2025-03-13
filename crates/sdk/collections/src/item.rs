@@ -1,6 +1,7 @@
 use crate::map::Map;
+use crate::ERR_NOT_FOUND;
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{Environment, SdkResult};
+use evolve_core::{Environment, ErrorCode, SdkResult};
 
 pub struct Item<V>(Map<(), V>);
 
@@ -14,8 +15,13 @@ impl<V> Item<V>
 where
     V: Encodable + Decodable,
 {
-    pub fn get(&self, backend: &dyn Environment) -> SdkResult<Option<V>> {
-        self.0.get(&(), backend)
+    /// Returns [`Ok(V)`] if it exists, or an [`Err`].
+    pub fn get(&self, backend: &dyn Environment) -> SdkResult<V> {
+        self.may_get(backend)?.ok_or(ERR_NOT_FOUND)
+    }
+    /// Returns [`Some(V)`] if the item exists, otherwise [`None`].
+    pub fn may_get(&self, backend: &dyn Environment) -> SdkResult<Option<V>> {
+        self.0.may_get(&(), backend)
     }
 
     pub fn set(&self, value: &V, backend: &mut dyn Environment) -> SdkResult<()> {
@@ -138,7 +144,7 @@ mod tests {
         let item: Item<TestData> = Item::new(42);
         let env = MockEnvironment::new(1, 2);
 
-        let result = item.get(&env);
+        let result = item.may_get(&env);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), None);
     }
@@ -159,7 +165,7 @@ mod tests {
         assert!(set_result.is_ok());
 
         // Get the value
-        let get_result = item.get(&env);
+        let get_result = item.may_get(&env);
         assert!(get_result.is_ok());
 
         let retrieved_data = get_result.unwrap();
@@ -190,7 +196,7 @@ mod tests {
         assert_eq!(updated_data.name, "updated");
 
         // Verify the value was stored
-        let get_result = item.get(&env).unwrap();
+        let get_result = item.may_get(&env).unwrap();
         assert!(get_result.is_some());
         assert_eq!(get_result.unwrap(), updated_data);
     }
@@ -226,7 +232,7 @@ mod tests {
         assert_eq!(updated_data.name, "initial_updated");
 
         // Verify the value was stored
-        let get_result = item.get(&env).unwrap();
+        let get_result = item.may_get(&env).unwrap();
         assert!(get_result.is_some());
         assert_eq!(get_result.unwrap(), updated_data);
     }
@@ -254,7 +260,7 @@ mod tests {
         assert_eq!(update_result.unwrap_err(), ErrorCode::new(42, "custom"));
 
         // Verify the value was not changed
-        let get_result = item.get(&env).unwrap();
+        let get_result = item.may_get(&env).unwrap();
         assert!(get_result.is_some());
         assert_eq!(get_result.unwrap(), initial_data);
     }
@@ -280,8 +286,8 @@ mod tests {
         item2.set(&data2, &mut env).unwrap();
 
         // Verify they have different values
-        let get1 = item1.get(&env).unwrap().unwrap();
-        let get2 = item2.get(&env).unwrap().unwrap();
+        let get1 = item1.may_get(&env).unwrap().unwrap();
+        let get2 = item2.may_get(&env).unwrap().unwrap();
 
         assert_eq!(get1, data1);
         assert_eq!(get2, data2);
@@ -294,7 +300,7 @@ mod tests {
         let item: Item<TestData> = Item::new(42);
         let env = MockEnvironment::with_failure();
 
-        let result = item.get(&env);
+        let result = item.may_get(&env);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), 99);
     }
@@ -356,7 +362,7 @@ mod tests {
         item.set(&new_data, &mut env).unwrap();
 
         // Verify the value was overwritten
-        let get_result = item.get(&env).unwrap();
+        let get_result = item.may_get(&env).unwrap();
         assert!(get_result.is_some());
         assert_eq!(get_result.unwrap(), new_data);
     }
@@ -384,8 +390,8 @@ mod tests {
         item.set(&data2, &mut env2).unwrap();
 
         // Verify they have different values
-        let get1 = item.get(&env1).unwrap().unwrap();
-        let get2 = item.get(&env2).unwrap().unwrap();
+        let get1 = item.may_get(&env1).unwrap().unwrap();
+        let get2 = item.may_get(&env2).unwrap().unwrap();
 
         assert_eq!(get1, data1);
         assert_eq!(get2, data2);

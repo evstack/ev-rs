@@ -63,7 +63,7 @@ pub mod account {
         /// Reads the storage gas config.
         #[query]
         pub fn get_storage_gas_config(&self, env: &dyn Environment) -> SdkResult<StorageGasConfig> {
-            Ok(self.storage_gas_config.get(env)?.unwrap())
+            Ok(self.storage_gas_config.may_get(env)?.unwrap())
         }
     }
 }

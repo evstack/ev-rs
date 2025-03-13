@@ -1,3 +1,4 @@
+use crate::ERR_NOT_FOUND;
 use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
@@ -37,7 +38,11 @@ where
         Ok(())
     }
 
-    pub fn get(&self, key: &K, env: &dyn Environment) -> SdkResult<Option<V>> {
+    pub fn get(&self, key: &K, backend: &dyn Environment) -> SdkResult<V> {
+        self.may_get(key, backend)?.ok_or(ERR_NOT_FOUND)
+    }
+
+    pub fn may_get(&self, key: &K, env: &dyn Environment) -> SdkResult<Option<V>> {
         let bytes_key = self.make_key(key)?;
 
         let resp = env
@@ -62,7 +67,7 @@ where
         update_fn: impl FnOnce(Option<V>) -> SdkResult<V>,
         backend: &mut dyn Environment,
     ) -> SdkResult<V> {
-        let old_value = self.get(key, backend)?;
+        let old_value = self.may_get(key, backend)?;
         let new_value = update_fn(old_value)?;
         self.set(key, &new_value, backend)?;
         Ok(new_value)
@@ -79,9 +84,12 @@ where
 mod tests {
     use super::*;
     use borsh::{BorshDeserialize, BorshSerialize};
-    use evolve_core::{storage_api::{
-        StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
-    }, AccountId, ErrorCode, FungibleAsset, InvokeRequest, InvokeResponse, SdkResult};
+    use evolve_core::{
+        storage_api::{
+            StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
+        },
+        AccountId, ErrorCode, FungibleAsset, InvokeRequest, InvokeResponse, SdkResult,
+    };
     use std::collections::HashMap;
 
     // A simple mock implementation of the Environment trait for testing
@@ -179,7 +187,7 @@ mod tests {
         let map: Map<String, TestData> = Map::new(42);
         let env = MockEnvironment::new(1, 2);
 
-        let result = map.get(&"test_key".to_string(), &env);
+        let result = map.may_get(&"test_key".to_string(), &env);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), None);
     }
@@ -200,7 +208,7 @@ mod tests {
         assert!(set_result.is_ok());
 
         // Get the value
-        let get_result = map.get(&"test_key".to_string(), &env);
+        let get_result = map.may_get(&"test_key".to_string(), &env);
         assert!(get_result.is_ok());
 
         let retrieved_data = get_result.unwrap();
@@ -232,7 +240,7 @@ mod tests {
         assert_eq!(updated_data.name, "updated");
 
         // Verify the value was stored
-        let get_result = map.get(&"test_key".to_string(), &env).unwrap();
+        let get_result = map.may_get(&"test_key".to_string(), &env).unwrap();
         assert!(get_result.is_some());
         assert_eq!(get_result.unwrap(), updated_data);
     }
@@ -269,7 +277,7 @@ mod tests {
         assert_eq!(updated_data.name, "initial_updated");
 
         // Verify the value was stored
-        let get_result = map.get(&"test_key".to_string(), &env).unwrap();
+        let get_result = map.may_get(&"test_key".to_string(), &env).unwrap();
         assert!(get_result.is_some());
         assert_eq!(get_result.unwrap(), updated_data);
     }
@@ -295,8 +303,14 @@ mod tests {
         map2.set(&"same_key".to_string(), &data2, &mut env).unwrap();
 
         // Verify they have different values
-        let get1 = map1.get(&"same_key".to_string(), &env).unwrap().unwrap();
-        let get2 = map2.get(&"same_key".to_string(), &env).unwrap().unwrap();
+        let get1 = map1
+            .may_get(&"same_key".to_string(), &env)
+            .unwrap()
+            .unwrap();
+        let get2 = map2
+            .may_get(&"same_key".to_string(), &env)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(get1, data1);
         assert_eq!(get2, data2);
@@ -323,8 +337,8 @@ mod tests {
         map.set(&"key2".to_string(), &data2, &mut env).unwrap();
 
         // Verify they have different values
-        let get1 = map.get(&"key1".to_string(), &env).unwrap().unwrap();
-        let get2 = map.get(&"key2".to_string(), &env).unwrap().unwrap();
+        let get1 = map.may_get(&"key1".to_string(), &env).unwrap().unwrap();
+        let get2 = map.may_get(&"key2".to_string(), &env).unwrap().unwrap();
 
         assert_eq!(get1, data1);
         assert_eq!(get2, data2);
@@ -337,7 +351,7 @@ mod tests {
         let map: Map<String, TestData> = Map::new(42);
         let env = MockEnvironment::with_failure();
 
-        let result = map.get(&"test_key".to_string(), &env);
+        let result = map.may_get(&"test_key".to_string(), &env);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), 99);
     }
@@ -421,8 +435,14 @@ mod tests {
         map.set(&"same_key".to_string(), &data2, &mut env2).unwrap();
 
         // Verify they have different values
-        let get1 = map.get(&"same_key".to_string(), &env1).unwrap().unwrap();
-        let get2 = map.get(&"same_key".to_string(), &env2).unwrap().unwrap();
+        let get1 = map
+            .may_get(&"same_key".to_string(), &env1)
+            .unwrap()
+            .unwrap();
+        let get2 = map
+            .may_get(&"same_key".to_string(), &env2)
+            .unwrap()
+            .unwrap();
 
         assert_eq!(get1, data1);
         assert_eq!(get2, data2);

@@ -105,7 +105,7 @@ pub mod scheduler_account {
             }
 
             // if one begin block fails should we continue?? TODO
-            for account in self.begin_block_accounts.get(env)?.unwrap() {
+            for account in self.begin_block_accounts.may_get(env)?.unwrap() {
                 account.do_begin_block(env)?;
             }
 
@@ -119,7 +119,7 @@ pub mod scheduler_account {
             }
 
             // if one end block fails should we continue?? TODO
-            for account in self.end_block_accounts.get(env)?.unwrap() {
+            for account in self.end_block_accounts.may_get(env)?.unwrap() {
                 account.do_end_block(env)?;
             }
 

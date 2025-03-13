@@ -74,7 +74,7 @@ pub mod account {
             names: Vec<(String, AccountId)>,
             env: &mut dyn Environment,
         ) -> SdkResult<()> {
-            if env.sender() != self.owner.get(env)?.unwrap() {
+            if env.sender() != self.owner.may_get(env)?.unwrap() {
                 return Err(ERR_UNAUTHORIZED);
             }
 
@@ -91,7 +91,7 @@ pub mod account {
             name: String,
             env: &dyn Environment,
         ) -> SdkResult<Option<AccountId>> {
-            self.name_to_account.get(&name, env)
+            self.name_to_account.may_get(&name, env)
         }
     }
 }

@@ -6,7 +6,7 @@ pub mod account {
     use evolve_collections::item::Item;
     use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
     use evolve_core::{Environment, SdkResult, ERR_UNAUTHORIZED};
-    use evolve_macros::{exec, init};
+    use evolve_macros::{exec, init, query};
 
     pub struct BlockInfo {
         pub block_time_unix_ms: Item<u64>,

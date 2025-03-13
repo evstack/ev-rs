@@ -63,7 +63,7 @@ pub mod account {
 
         #[query]
         fn metadata(&self, env: &dyn Environment) -> SdkResult<FungibleAssetMetadata> {
-            Ok(self.metadata.get(env)?.unwrap())
+            Ok(self.metadata.may_get(env)?.unwrap())
         }
 
         #[query]
@@ -72,7 +72,7 @@ pub mod account {
             account: AccountId,
             env: &dyn Environment,
         ) -> SdkResult<Option<u128>> {
-            self.balances.get(&account, env)
+            self.balances.may_get(&account, env)
         }
     }
 }
