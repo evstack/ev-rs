@@ -8,9 +8,55 @@ pub struct Message {
     inner: InnerMessage,
 }
 
+impl Message {
+    pub fn into_bytes(self) -> SdkResult<Vec<u8>> {
+        self.inner.into_bytes()
+    }
+
+    pub fn as_vec(&self) -> SdkResult<Vec<u8>> {
+        self.inner.as_vec()
+    }
+
+    pub fn as_bytes(&self) -> SdkResult<&[u8]> {
+        self.inner.as_bytes()
+    }
+
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self {
+            inner: InnerMessage::OwnedBytes(bytes),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        match &self.inner {
+            InnerMessage::OwnedBytes(bytes) => bytes.len(),
+        }
+    }
+}
+
 #[derive(Debug)]
 enum InnerMessage {
     OwnedBytes(Vec<u8>),
+}
+
+impl InnerMessage {
+    pub(crate) fn as_vec(&self) -> SdkResult<Vec<u8>> {
+        match self {
+            InnerMessage::OwnedBytes(bytes) => Ok(bytes.clone()),
+        }
+    }
+
+    pub(crate) fn as_bytes(&self) -> SdkResult<&[u8]> {
+        match self {
+            InnerMessage::OwnedBytes(bytes) => Ok(bytes),
+        }
+    }
+
+    pub(crate) fn into_bytes(self) -> SdkResult<Vec<u8>> {
+        match self {
+            InnerMessage::OwnedBytes(bytes) => Ok(bytes),
+        }
+    }
 }
 
 impl Clone for InnerMessage {

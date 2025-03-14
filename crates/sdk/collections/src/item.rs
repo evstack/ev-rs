@@ -45,7 +45,7 @@ mod tests {
         storage_api::{
             StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
         },
-        AccountId, ErrorCode, FungibleAsset, InvokeRequest, InvokeResponse, SdkResult,
+        AccountId, ErrorCode, FungibleAsset, InvokeRequest, InvokeResponse, Message, SdkResult,
     };
     use std::collections::HashMap;
 
@@ -53,7 +53,7 @@ mod tests {
     struct MockEnvironment {
         account_id: AccountId,
         sender_id: AccountId,
-        storage: HashMap<Vec<u8>, Vec<u8>>,
+        storage: HashMap<Vec<u8>, Message>,
         // Add a flag to simulate errors
         should_fail: bool,
     }

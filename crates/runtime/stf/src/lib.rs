@@ -62,7 +62,7 @@ where
 
         let resp = action(&mut invoker)?;
 
-        Ok((resp, invoker.into_state_changes()))
+        Ok((resp, invoker.into_state_changes()?))
     }
     pub fn apply_block<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
         storage: &'a S,
@@ -107,7 +107,7 @@ where
         }
 
         let end_block_events = Self::do_end_block(&mut block_state);
-        let state_changes = block_state.into_state_changes();
+        let state_changes = block_state.into_state_changes().unwrap();
 
         BlockResult {
             begin_block_events,
@@ -502,7 +502,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         handle(&code, &env)
     }
 
-    fn into_state_changes(self) -> Vec<StateChange> {
+    fn into_state_changes(self) -> SdkResult<Vec<StateChange>> {
         Rc::try_unwrap(self.storage)
             .unwrap_or_else(|_rc| panic!("expected unwrap"))
             .into_inner()

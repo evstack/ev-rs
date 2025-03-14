@@ -1,4 +1,4 @@
-use evolve_core::SdkResult;
+use evolve_core::{Message, SdkResult};
 use evolve_gas::account::{StorageGasConfig, ERR_OUT_OF_GAS};
 
 /// Represents how gas is tracked and consumed.
@@ -121,7 +121,7 @@ impl GasCounter<'_> {
     /// # Errors
     ///
     /// Returns [`ERR_OUT_OF_GAS`] if the resulting gas usage exceeds the limit in finite mode.
-    pub fn consume_get_gas(&mut self, key: &[u8], value: &Option<Vec<u8>>) -> SdkResult<()> {
+    pub fn consume_get_gas(&mut self, key: &[u8], value: &Option<Message>) -> SdkResult<()> {
         match self {
             GasCounter::Infinite => Ok(()),
             GasCounter::Finite {
@@ -148,7 +148,7 @@ impl GasCounter<'_> {
     /// # Errors
     ///
     /// Returns [`ERR_OUT_OF_GAS`] if the resulting gas usage exceeds the limit in finite mode.
-    pub fn consume_set_gas(&mut self, key: &[u8], value: &[u8]) -> SdkResult<()> {
+    pub fn consume_set_gas(&mut self, key: &[u8], value: &Message) -> SdkResult<()> {
         match self {
             GasCounter::Infinite => Ok(()),
             GasCounter::Finite {
@@ -209,7 +209,8 @@ impl GasCounter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evolve_gas::account::StorageGasConfig;
+    use evolve_core::{Message, SdkResult};
+    use evolve_gas::account::{StorageGasConfig, ERR_OUT_OF_GAS};
 
     #[test]
     fn test_infinite_mode() {
@@ -220,8 +221,12 @@ mod tests {
         assert_eq!(gc.gas_used(), 0);
 
         // Test other consume_* methods in infinite mode.
-        assert!(gc.consume_get_gas(b"key", &Some(vec![1, 2, 3])).is_ok());
-        assert!(gc.consume_set_gas(b"key", b"value").is_ok());
+        assert!(gc
+            .consume_get_gas(b"key", &Some(Message::from_bytes(vec![1, 2, 3])))
+            .is_ok());
+        assert!(gc
+            .consume_set_gas(b"key", &Message::from_bytes(b"value".to_vec()))
+            .is_ok());
         assert!(gc.consume_remove_gas(b"key").is_ok());
         assert_eq!(gc.gas_used(), 0);
     }
@@ -263,7 +268,8 @@ mod tests {
 
         // key len = 3, value len = 3 => total length considered = (3+1) + (3+1) = 8
         // gas = 10 * 8 = 80
-        gc.consume_get_gas(b"key", &Some(vec![1, 2, 3])).unwrap();
+        gc.consume_get_gas(b"key", &Some(Message::from_bytes(vec![1, 2, 3])))
+            .unwrap();
         assert_eq!(gc.gas_used(), 80);
 
         // Next operation to see if we can still consume more gas
@@ -284,12 +290,12 @@ mod tests {
 
         // key len = 3, value len = 5 => total length considered = (3+1) + (5+1) = 10
         // gas = 5 * 10 = 50
-        let result = gc.consume_set_gas(b"key", b"value");
+        let result = gc.consume_set_gas(b"key", &Message::from_bytes(b"value".to_vec()));
         assert!(result.is_ok());
         assert_eq!(gc.gas_used(), 50);
 
         // Next consume would exceed the limit
-        let result = gc.consume_set_gas(b"key", b"v");
+        let result = gc.consume_set_gas(b"key", &Message::from_bytes(b"v".to_vec()));
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), ERR_OUT_OF_GAS);
     }

@@ -1,7 +1,7 @@
 use crate::execution_state::ExecutionState;
 use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::runtime_api::{ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_IDENTIFIER_SINGLETON_PREFIX};
-use evolve_core::{AccountId, ReadonlyKV, SdkResult};
+use evolve_core::{AccountId, Message, ReadonlyKV, SdkResult};
 
 pub(crate) fn get_account_code_identifier_for_account<S: ReadonlyKV>(
     storage: &ExecutionState<S>,
@@ -9,8 +9,10 @@ pub(crate) fn get_account_code_identifier_for_account<S: ReadonlyKV>(
 ) -> SdkResult<Option<String>> {
     let key = get_account_code_identifier_for_account_key(account);
     let code_id = storage.get(&key)?;
-
-    Ok(code_id.map(|e| String::from_utf8(e).unwrap())) // TODO
+    match code_id {
+        None => Ok(None),
+        Some(code_id) => Ok(Some(code_id.get()?)),
+    }
 }
 
 pub(crate) fn set_account_code_identifier_for_account<S: ReadonlyKV>(
@@ -19,7 +21,7 @@ pub(crate) fn set_account_code_identifier_for_account<S: ReadonlyKV>(
     account_identifier: &str,
 ) -> SdkResult<()> {
     let key = get_account_code_identifier_for_account_key(account);
-    storage.set(&key, account_identifier.as_bytes().to_vec())
+    storage.set(&key, Message::new(&account_identifier)?)
 }
 
 fn get_account_code_identifier_for_account_key(account: AccountId) -> Vec<u8> {
@@ -36,10 +38,10 @@ pub(crate) fn next_account_number<S: ReadonlyKV>(
     // get last
     let last = storage
         .get(&key)?
-        .map(|bytes| AccountId::decode(&bytes))
+        .map(|msg| msg.get())
         .unwrap_or(Ok(AccountId::new(u16::MAX.into())))?;
 
     // set next
-    storage.set(&key, last.increase().encode()?)?;
+    storage.set(&key, Message::new(&last.increase())?)?;
     Ok(last)
 }

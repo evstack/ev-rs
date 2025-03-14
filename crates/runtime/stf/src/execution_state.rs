@@ -1,5 +1,5 @@
 use evolve_core::events_api::Event;
-use evolve_core::{ErrorCode, ReadonlyKV};
+use evolve_core::{ErrorCode, Message, ReadonlyKV, SdkResult};
 use evolve_server_core::StateChange as CoreStateChange;
 use std::collections::HashMap;
 
@@ -10,18 +10,18 @@ enum StateChange {
     /// (including falling back to storage if needed).
     Set {
         key: Vec<u8>,
-        previous_value: Option<Vec<u8>>,
+        previous_value: Option<Message>,
     },
     /// We removed a key. `previous_value` is the old value if it existed.
     Remove {
         key: Vec<u8>,
-        previous_value: Option<Vec<u8>>,
+        previous_value: Option<Message>,
     },
 }
 
 impl StateChange {
     /// Undo this change by reverting the overlay to its prior state.
-    fn revert(self, overlay: &mut HashMap<Vec<u8>, Option<Vec<u8>>>) {
+    fn revert(self, overlay: &mut HashMap<Vec<u8>, Option<Message>>) {
         match self {
             StateChange::Set {
                 key,
@@ -73,7 +73,7 @@ pub struct ExecutionState<'a, S> {
     /// The underlying store to fall back to.
     base_storage: &'a S,
     /// The in-memory overlay that records changes.
-    overlay: HashMap<Vec<u8>, Option<Vec<u8>>>,
+    overlay: HashMap<Vec<u8>, Option<Message>>,
     /// The log of state changes (undo log) used for checkpoint restore.
     undo_log: Vec<StateChange>,
     /// Events emitted.
@@ -100,18 +100,24 @@ impl<'a, S> ExecutionState<'a, S> {
         std::mem::take(&mut self.events)
     }
 
-    pub fn into_changes(self) -> Vec<CoreStateChange> {
+    pub fn into_changes(self) -> SdkResult<Vec<CoreStateChange>> {
         // The final overlay is stored in self.overlay.
         // For each key in the overlay:
         //   - If the value is Some(v), then we want to persist a "set" operation.
         //   - If the value is None, then we want to persist a "remove" operation.
-        self.overlay
+        let values = self
+            .overlay
             .into_iter()
             .map(|(key, maybe_value)| match maybe_value {
-                Some(value) => CoreStateChange::Set { key, value },
-                None => CoreStateChange::Remove { key },
+                Some(value) => {
+                    let value = value.into_bytes()?;
+                    SdkResult::Ok(CoreStateChange::Set { key, value })
+                }
+                None => Ok(CoreStateChange::Remove { key }),
             })
-            .collect()
+            .collect();
+
+        values
     }
 }
 
@@ -119,18 +125,20 @@ impl<'a, S: ReadonlyKV> ExecutionState<'a, S> {
     /// Retrieves the "logical" value for `key`.
     ///  1) If overlay has key => check if it's Some(...) or None.
     ///  2) Else fallback to the underlying store.
-    pub fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
+    pub fn get(&self, key: &[u8]) -> Result<Option<Message>, ErrorCode> {
         if let Some(opt) = self.overlay.get(key) {
             // If the overlay says Some(v), return that.
             // If the overlay says None, it's explicitly removed => return None.
             return Ok(opt.clone());
         }
         // No overlay entry => fallback to underlying store
-        self.base_storage.get(key)
+        self.base_storage
+            .get(key)
+            .map(|value| value.map(|value| Message::from_bytes(value)))
     }
 
     /// Sets `key` to `value`, recording the old logical value for undo.
-    pub fn set(&mut self, key: &[u8], value: Vec<u8>) -> Result<(), ErrorCode> {
+    pub fn set(&mut self, key: &[u8], value: Message) -> Result<(), ErrorCode> {
         // Get old logical value (including store fallback).
         let old_value = self.get(key)?;
 
@@ -184,7 +192,7 @@ impl<'a, S: ReadonlyKV> ExecutionState<'a, S> {
 mod tests {
     use super::*;
     // bring in the Checkpoint and StateChange
-    use evolve_core::{ErrorCode, ReadonlyKV};
+    use evolve_core::{ErrorCode, Message, ReadonlyKV};
     use std::collections::HashMap;
 
     /// A simple in-memory mock that implements `ReadonlyKV`.
@@ -226,13 +234,16 @@ mod tests {
         let mut cp = ExecutionState::new(&storage);
 
         // Key doesn't exist yet.
-        assert_eq!(cp.get(b"hello").unwrap(), None);
+        assert!(cp.get(b"hello").unwrap().is_none());
 
-        // Set the key.
-        cp.set(b"hello", b"world".to_vec()).unwrap();
+        // Set the key (store "world" as a Message).
+        cp.set(b"hello", Message::from_bytes(b"world".to_vec()))
+            .unwrap();
 
-        // Now we should see it in the overlay.
-        assert_eq!(cp.get(b"hello").unwrap(), Some(b"world".to_vec()));
+        // Now we should see it in the overlay. Compare via as_bytes().
+        let val = cp.get(b"hello").unwrap();
+        assert!(val.is_some());
+        assert_eq!(val.unwrap().as_bytes().unwrap(), b"world");
     }
 
     /// Test removing a key and verifying it no longer appears in the overlay.
@@ -243,13 +254,15 @@ mod tests {
         let mut cp = ExecutionState::new(&storage);
 
         // Key "alpha" should come from the backing store.
-        assert_eq!(cp.get(b"alpha").unwrap(), Some(b"beta".to_vec()));
+        let val = cp.get(b"alpha").unwrap();
+        assert!(val.is_some());
+        assert_eq!(val.unwrap().as_bytes().unwrap(), b"beta");
 
         // Remove "alpha".
         cp.remove(b"alpha").unwrap();
 
         // Now "alpha" is gone (overlaid removal).
-        assert_eq!(cp.get(b"alpha").unwrap(), None);
+        assert!(cp.get(b"alpha").unwrap().is_none());
     }
 
     /// Test that checkpointing and restoring reverts set/remove operations.
@@ -259,30 +272,42 @@ mod tests {
         let mut cp = ExecutionState::new(&storage);
 
         // Set key1 => "A".
-        cp.set(b"key1", b"A".to_vec()).unwrap();
-        assert_eq!(cp.get(b"key1").unwrap(), Some(b"A".to_vec()));
+        cp.set(b"key1", Message::from_bytes(b"A".to_vec())).unwrap();
+        let val = cp.get(b"key1").unwrap();
+        assert!(val.is_some());
+        assert_eq!(val.unwrap().as_bytes().unwrap(), b"A");
 
         // Take a checkpoint here.
         let c1 = cp.checkpoint();
 
         // Set key1 => "B" and key2 => "ZZ".
-        cp.set(b"key1", b"B".to_vec()).unwrap();
-        cp.set(b"key2", b"ZZ".to_vec()).unwrap();
+        cp.set(b"key1", Message::from_bytes(b"B".to_vec())).unwrap();
+        cp.set(b"key2", Message::from_bytes(b"ZZ".to_vec()))
+            .unwrap();
 
         // Now:
         //  key1 => "B"
         //  key2 => "ZZ"
-        assert_eq!(cp.get(b"key1").unwrap(), Some(b"B".to_vec()));
-        assert_eq!(cp.get(b"key2").unwrap(), Some(b"ZZ".to_vec()));
+        let val1 = cp.get(b"key1").unwrap();
+        assert!(val1.is_some());
+        assert_eq!(val1.unwrap().as_bytes().unwrap(), b"B");
+
+        let val2 = cp.get(b"key2").unwrap();
+        assert!(val2.is_some());
+        assert_eq!(val2.unwrap().as_bytes().unwrap(), b"ZZ");
 
         // Restore back to c1.
         cp.restore(c1);
 
         // After restoring:
-        //   key1 should go back to "A"
-        //   key2 was never set prior to c1, so it should disappear.
-        assert_eq!(cp.get(b"key1").unwrap(), Some(b"A".to_vec()));
-        assert_eq!(cp.get(b"key2").unwrap(), None);
+        //   key1 => "A"
+        //   key2 => None
+        let val1_restored = cp.get(b"key1").unwrap();
+        assert!(val1_restored.is_some());
+        assert_eq!(val1_restored.unwrap().as_bytes().unwrap(), b"A");
+
+        let val2_restored = cp.get(b"key2").unwrap();
+        assert!(val2_restored.is_none());
     }
 
     /// Test multiple checkpoints and partial restores.
@@ -292,28 +317,37 @@ mod tests {
         let mut cp = ExecutionState::new(&storage);
 
         // Start with nothing, set key1 => "one".
-        cp.set(b"key1", b"one".to_vec()).unwrap();
+        cp.set(b"key1", Message::from_bytes(b"one".to_vec()))
+            .unwrap();
         // checkpoint #1.
         let c1 = cp.checkpoint();
 
         // Overwrite key1 => "uno".
-        cp.set(b"key1", b"uno".to_vec()).unwrap();
+        cp.set(b"key1", Message::from_bytes(b"uno".to_vec()))
+            .unwrap();
         // checkpoint #2.
         let c2 = cp.checkpoint();
 
         // Overwrite key1 => "eins".
-        cp.set(b"key1", b"eins".to_vec()).unwrap();
+        cp.set(b"key1", Message::from_bytes(b"eins".to_vec()))
+            .unwrap();
 
         // Confirm current state.
-        assert_eq!(cp.get(b"key1").unwrap(), Some(b"eins".to_vec()));
+        let val = cp.get(b"key1").unwrap();
+        assert!(val.is_some());
+        assert_eq!(val.unwrap().as_bytes().unwrap(), b"eins");
 
         // Restore to checkpoint #2 => "uno".
         cp.restore(c2);
-        assert_eq!(cp.get(b"key1").unwrap(), Some(b"uno".to_vec()));
+        let val = cp.get(b"key1").unwrap();
+        assert!(val.is_some());
+        assert_eq!(val.unwrap().as_bytes().unwrap(), b"uno");
 
         // Restore to checkpoint #1 => "one".
         cp.restore(c1);
-        assert_eq!(cp.get(b"key1").unwrap(), Some(b"one".to_vec()));
+        let val = cp.get(b"key1").unwrap();
+        assert!(val.is_some());
+        assert_eq!(val.unwrap().as_bytes().unwrap(), b"one");
     }
 
     /// Test removing a key that was originally in the store, and then restoring.
@@ -328,12 +362,15 @@ mod tests {
 
         // Remove key.
         cp.remove(b"key").unwrap();
-        assert_eq!(cp.get(b"key").unwrap(), None);
+        assert!(cp.get(b"key").unwrap().is_none());
 
         // Restore to c1.
         cp.restore(c1);
+
         // Key should come back from the backing store.
-        assert_eq!(cp.get(b"key").unwrap(), Some(b"store_val".to_vec()));
+        let val = cp.get(b"key").unwrap();
+        assert!(val.is_some());
+        assert_eq!(val.unwrap().as_bytes().unwrap(), b"store_val");
     }
 
     /// Test removing a key that doesn't exist in either store or overlay,
@@ -347,13 +384,13 @@ mod tests {
         cp.remove(b"nonexistent").unwrap();
 
         // Should still be None.
-        assert_eq!(cp.get(b"nonexistent").unwrap(), None);
+        assert!(cp.get(b"nonexistent").unwrap().is_none());
 
         // Restore.
         cp.restore(c1);
 
         // Still None.
-        assert_eq!(cp.get(b"nonexistent").unwrap(), None);
+        assert!(cp.get(b"nonexistent").unwrap().is_none());
     }
 
     /// Test setting a key multiple times and verify that each restore
@@ -363,23 +400,32 @@ mod tests {
         let storage = MockReadonlyKV::new();
         let mut cp = ExecutionState::new(&storage);
 
-        cp.set(b"k", b"v1".to_vec()).unwrap();
+        // Set k => "v1".
+        cp.set(b"k", Message::from_bytes(b"v1".to_vec())).unwrap();
         let c1 = cp.checkpoint();
 
-        // Overwrite: k => "v2".
-        cp.set(b"k", b"v2".to_vec()).unwrap();
+        // Overwrite k => "v2".
+        cp.set(b"k", Message::from_bytes(b"v2".to_vec())).unwrap();
         let c2 = cp.checkpoint();
 
-        // Overwrite: k => "v3".
-        cp.set(b"k", b"v3".to_vec()).unwrap();
-        assert_eq!(cp.get(b"k").unwrap(), Some(b"v3".to_vec()));
+        // Overwrite k => "v3".
+        cp.set(b"k", Message::from_bytes(b"v3".to_vec())).unwrap();
 
-        // Restore to c2 => "v2".
+        // k should now be "v3".
+        let val = cp.get(b"k").unwrap();
+        assert!(val.is_some());
+        assert_eq!(val.unwrap().as_bytes().unwrap(), b"v3");
+
+        // Restore to c2 => k => "v2".
         cp.restore(c2);
-        assert_eq!(cp.get(b"k").unwrap(), Some(b"v2".to_vec()));
+        let val = cp.get(b"k").unwrap();
+        assert!(val.is_some());
+        assert_eq!(val.unwrap().as_bytes().unwrap(), b"v2");
 
-        // Restore to c1 => "v1".
+        // Restore to c1 => k => "v1".
         cp.restore(c1);
-        assert_eq!(cp.get(b"k").unwrap(), Some(b"v1".to_vec()));
+        let val = cp.get(b"k").unwrap();
+        assert!(val.is_some());
+        assert_eq!(val.unwrap().as_bytes().unwrap(), b"v1");
     }
 }

@@ -3,7 +3,7 @@ use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
 };
-use evolve_core::{Environment, InvokeRequest, SdkResult};
+use evolve_core::{Environment, InvokeRequest, Message, SdkResult};
 use std::marker::PhantomData;
 
 pub struct Map<K, V> {
@@ -30,7 +30,7 @@ where
             STORAGE_ACCOUNT_ID,
             &InvokeRequest::new(&StorageSetRequest {
                 key: self.make_key(key)?,
-                value: value.encode()?,
+                value: Message::new(value)?,
             })?,
             vec![],
         )?;
@@ -57,7 +57,7 @@ where
 
         match resp.value {
             None => Ok(None),
-            Some(v) => Ok(Some(V::decode(&v)?)),
+            Some(v) => Ok(Some(v.get()?)),
         }
     }
 
@@ -96,7 +96,7 @@ mod tests {
     struct MockEnvironment {
         account_id: AccountId,
         sender_id: AccountId,
-        storage: HashMap<Vec<u8>, Vec<u8>>,
+        storage: HashMap<Vec<u8>, Message>,
         // Add a flag to simulate errors
         should_fail: bool,
     }
