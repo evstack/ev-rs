@@ -5,7 +5,7 @@ pub use fa_interface::*;
 mod fa_interface {
     use evolve_core::{AccountId, Environment, SdkResult};
     use evolve_macros::{exec, query};
-    #[derive(borsh::BorshSerialize, borsh::BorshDeserialize)]
+    #[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Clone)]
     pub struct FungibleAssetMetadata {
         pub name: String,
         pub symbol: String,

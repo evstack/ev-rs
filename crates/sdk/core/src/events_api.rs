@@ -10,7 +10,7 @@ pub struct Event {
     pub contents: Message,
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, Clone)]
 pub struct EmitEventRequest {
     pub name: String,
     pub contents: Message,
@@ -21,5 +21,5 @@ impl InvokableMessage for EmitEventRequest {
     const FUNCTION_IDENTIFIER_NAME: &'static str = "emit_event";
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, Clone)]
 pub struct EmitEventResponse {}

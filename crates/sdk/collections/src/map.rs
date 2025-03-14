@@ -168,7 +168,7 @@ mod tests {
     }
 
     // Test data structure that implements Encodable and Decodable via BorshSerialize and BorshDeserialize
-    #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+    #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Clone)]
     struct TestData {
         value: u32,
         name: String,

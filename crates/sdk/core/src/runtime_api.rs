@@ -5,7 +5,7 @@ pub const ACCOUNT_IDENTIFIER_PREFIX: u8 = 0;
 pub const ACCOUNT_IDENTIFIER_SINGLETON_PREFIX: u8 = 1;
 pub const RUNTIME_ACCOUNT_ID: AccountId = AccountId(0);
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, Clone)]
 pub struct CreateAccountRequest {
     pub code_id: String,
     pub init_message: Message,
@@ -16,13 +16,13 @@ impl InvokableMessage for CreateAccountRequest {
     const FUNCTION_IDENTIFIER_NAME: &'static str = "create_account";
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, Clone)]
 pub struct CreateAccountResponse {
     pub new_account_id: AccountId,
     pub init_response: Message,
 }
 
-#[derive(BorshDeserialize, BorshSerialize)]
+#[derive(BorshDeserialize, BorshSerialize, Clone)]
 pub struct MigrateRequest {
     pub account_id: AccountId,
     pub new_code_id: String,

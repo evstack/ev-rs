@@ -497,14 +497,14 @@ fn generate_msg_struct(info: &FunctionInfo) -> proc_macro2::TokenStream {
 
     match info.kind {
         FunctionKind::Init { .. } => quote! {
-            #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize)]
+            #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize, ::core::clone::Clone)]
             pub struct #msg_name {
                 #(#fields)*
             }
         },
         FunctionKind::Exec { .. } | FunctionKind::Query => {
             quote! {
-                #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize)]
+                #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize, ::core::clone::Clone)]
                 pub struct #msg_name {
                     #(#fields)*
                 }
@@ -682,7 +682,7 @@ fn generate_wrapper_struct(
     quote! {
         /// A generated "wrapper" struct that holds the account-id pointer
         /// and provides convenience methods for init/exec/query calls.
-        #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize)]
+        #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize, ::core::clone::Clone)]
         pub struct #wrapper_ident(pub ::evolve_core::AccountId);
 
         impl #wrapper_ident {

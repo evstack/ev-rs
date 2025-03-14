@@ -86,7 +86,7 @@ pub trait ReadonlyKV {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode>;
 }
 
-pub trait InvokableMessage: Encodable {
+pub trait InvokableMessage: Encodable + Clone {
     const FUNCTION_IDENTIFIER: u64;
     const FUNCTION_IDENTIFIER_NAME: &'static str;
 }

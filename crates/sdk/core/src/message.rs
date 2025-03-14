@@ -3,7 +3,7 @@ use crate::{InvokableMessage, SdkResult};
 use borsh::{BorshDeserialize, BorshSerialize};
 use std::io::{Read, Write};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Message {
     inner: InnerMessage,
 }
@@ -11,6 +11,14 @@ pub struct Message {
 #[derive(Debug)]
 enum InnerMessage {
     OwnedBytes(Vec<u8>),
+}
+
+impl Clone for InnerMessage {
+    fn clone(&self) -> Self {
+        match self {
+            InnerMessage::OwnedBytes(bytes) => InnerMessage::OwnedBytes(bytes.clone()),
+        }
+    }
 }
 
 impl Message {
@@ -48,7 +56,7 @@ impl BorshDeserialize for Message {
     }
 }
 
-#[derive(Debug, BorshSerialize, BorshDeserialize)]
+#[derive(Debug, BorshSerialize, BorshDeserialize, Clone)]
 pub struct InvokeRequest {
     human_name: String,
     function: u64,
