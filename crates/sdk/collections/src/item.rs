@@ -1,7 +1,7 @@
 use crate::map::Map;
 use crate::ERR_NOT_FOUND;
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{Environment, ErrorCode, SdkResult};
+use evolve_core::{Environment, SdkResult};
 
 pub struct Item<V>(Map<(), V>);
 

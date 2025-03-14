@@ -543,7 +543,7 @@ fn generate_accountcode_impl(
     };
 
     let exec_impl = {
-        let arms = exec_fns.iter().map(|info| generate_exec_match_arm(info));
+        let arms = exec_fns.iter().map(generate_exec_match_arm);
         quote! {
             fn execute(&self, env: &mut dyn ::evolve_core::Environment, request: &::evolve_core::InvokeRequest)
                 -> ::evolve_core::SdkResult<::evolve_core::InvokeResponse>

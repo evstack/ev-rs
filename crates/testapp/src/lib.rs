@@ -1,3 +1,4 @@
+#[cfg(test)]
 mod test_block_exec;
 
 use evolve_block_info::account::BlockInfo;

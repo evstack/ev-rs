@@ -19,7 +19,7 @@ pub(crate) fn set_account_code_identifier_for_account<S: ReadonlyKV>(
     account_identifier: &str,
 ) -> SdkResult<()> {
     let key = get_account_code_identifier_for_account_key(account);
-    Ok(storage.set(&key, account_identifier.as_bytes().to_vec())?)
+    storage.set(&key, account_identifier.as_bytes().to_vec())
 }
 
 fn get_account_code_identifier_for_account_key(account: AccountId) -> Vec<u8> {

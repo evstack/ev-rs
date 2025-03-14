@@ -97,7 +97,7 @@ impl<'a, S> ExecutionState<'a, S> {
 
     /// Pops the events
     pub fn pop_events(&mut self) -> Vec<Event> {
-        std::mem::replace(&mut self.events, Vec::new())
+        std::mem::take(&mut self.events)
     }
 
     pub fn into_changes(self) -> Vec<CoreStateChange> {

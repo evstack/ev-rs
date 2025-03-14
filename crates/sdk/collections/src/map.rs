@@ -177,8 +177,7 @@ mod tests {
     #[test]
     fn test_new() {
         // Test that Map::new creates a Map with the correct prefix
-        let map: Map<String, TestData> = Map::new(42);
-        assert!(true); // We can't directly test the prefix, but we can verify it works correctly in other tests
+        let _map: Map<String, TestData> = Map::new(42);
     }
 
     #[test]

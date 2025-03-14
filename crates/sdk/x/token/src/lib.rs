@@ -47,10 +47,10 @@ pub mod account {
             self.balances.update(
                 &env.sender(),
                 |balance| {
-                    Ok(balance
+                    balance
                         .unwrap_or_default()
                         .checked_sub(amount)
-                        .ok_or(ERR_NOT_ENOUGH_BALANCE)?)
+                        .ok_or(ERR_NOT_ENOUGH_BALANCE)
                 },
                 env,
             )?;

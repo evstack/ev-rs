@@ -5,13 +5,11 @@ mod runtime_api_impl;
 
 use crate::execution_state::ExecutionState;
 use crate::results::BlockResult;
-use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::events_api::{
     EmitEventRequest, EmitEventResponse, Event, EVENT_HANDLER_ACCOUNT_ID,
 };
 use evolve_core::runtime_api::{
-    CreateAccountRequest, CreateAccountResponse, MigrateRequest, ACCOUNT_IDENTIFIER_PREFIX,
-    ACCOUNT_IDENTIFIER_SINGLETON_PREFIX, RUNTIME_ACCOUNT_ID,
+    CreateAccountRequest, CreateAccountResponse, MigrateRequest, RUNTIME_ACCOUNT_ID,
 };
 use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageRemoveResponse,
@@ -104,7 +102,7 @@ where
         let mut tx_results = Vec::with_capacity(txs.len());
         for tx in txs {
             // apply tx
-            let tx_result = Self::apply_tx(&mut block_state, tx, &gas_config);
+            let tx_result = Self::apply_tx(&block_state, tx, &gas_config);
             tx_results.push(tx_result);
         }
 
@@ -161,11 +159,7 @@ where
         // exec tx
         let mut exec_ctx = validate_ctx.branch_for_new_exec(tx.sender());
 
-        let response = exec_ctx.do_exec(
-            tx.recipient(),
-            tx.request(),
-            tx.funds().iter().cloned().collect(),
-        );
+        let response = exec_ctx.do_exec(tx.recipient(), tx.request(), tx.funds().to_vec());
 
         // do post tx validation
         let gas_used = exec_ctx.gas_counter.borrow().gas_used();
