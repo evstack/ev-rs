@@ -98,6 +98,7 @@ pub fn account_codes() -> impl AccountsCodeStorage {
     codes.add_code(Scheduler::new()).unwrap();
     codes.add_code(GasService::new()).unwrap();
     codes.add_code(BlockInfo::new()).unwrap();
+    //codes.add_code(Poa::new()).unwrap();
 
     codes
 }
@@ -122,6 +123,8 @@ pub fn do_genesis<S: WritableKV, A: AccountsCodeStorage>(
             env,
         )?
         .0;
+        // Create PoA
+
         // Create scheduler
         let scheduler_acc = SchedulerRef::initialize(vec![], vec![], env)?.0;
         // Create gas config service.
@@ -140,9 +143,13 @@ pub fn do_genesis<S: WritableKV, A: AccountsCodeStorage>(
                 ("scheduler".to_string(), scheduler_acc.0),
                 ("atom".to_string(), atom.0),
                 ("gas".to_string(), gas_service_acc.0),
+                //("poa".to_string(), 0),
             ],
             env,
         )?;
+
+        // Update scheduler's account's list.
+
         Ok(())
     })?;
 

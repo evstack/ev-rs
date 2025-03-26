@@ -1,5 +1,5 @@
 [package]
-name = "evolve_scheduler"
+name = "evolve_poa"
 version = "0.1.0"
 edition = "2021"
 repository.workspace = true
@@ -9,8 +9,8 @@ rust-version.workspace = true
 [dependencies]
 evolve_collections.workspace = true
 evolve_core.workspace = true
+evolve_scheduler.workspace = true
 evolve_macros.workspace = true
-evolve_server_core.workspace = true
 evolve_ns.workspace = true
 
 borsh.workspace = true

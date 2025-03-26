@@ -1,7 +1,8 @@
 use crate::ERR_NOT_FOUND;
 use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::storage_api::{
-    StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
+    StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageSetRequest,
+    STORAGE_ACCOUNT_ID,
 };
 use evolve_core::{Environment, InvokeRequest, Message, SdkResult};
 use std::marker::PhantomData;
@@ -61,6 +62,18 @@ where
         }
     }
 
+    pub fn remove(&self, key: &K, backend: &mut dyn Environment) -> SdkResult<()> {
+        backend.do_exec(
+            STORAGE_ACCOUNT_ID,
+            &InvokeRequest::new(&StorageRemoveRequest {
+                key: self.make_key(key)?,
+            })?,
+            vec![],
+        )?;
+
+        Ok(())
+    }
+
     pub fn update(
         &self,
         key: &K,
@@ -83,89 +96,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mocks::MockEnvironment;
     use borsh::{BorshDeserialize, BorshSerialize};
-    use evolve_core::{
-        storage_api::{
-            StorageGetRequest, StorageGetResponse, StorageSetRequest, STORAGE_ACCOUNT_ID,
-        },
-        AccountId, ErrorCode, FungibleAsset, InvokeRequest, InvokeResponse, SdkResult,
-    };
-    use std::collections::HashMap;
-
-    // A simple mock implementation of the Environment trait for testing
-    struct MockEnvironment {
-        account_id: AccountId,
-        sender_id: AccountId,
-        storage: HashMap<Vec<u8>, Message>,
-        // Add a flag to simulate errors
-        should_fail: bool,
-    }
-
-    impl MockEnvironment {
-        fn new(account_id: u128, sender_id: u128) -> Self {
-            Self {
-                account_id: AccountId::new(account_id),
-                sender_id: AccountId::new(sender_id),
-                storage: HashMap::new(),
-                should_fail: false,
-            }
-        }
-
-        fn with_failure() -> Self {
-            let mut env = Self::new(1, 2);
-            env.should_fail = true;
-            env
-        }
-    }
-
-    impl Environment for MockEnvironment {
-        fn whoami(&self) -> AccountId {
-            self.account_id
-        }
-
-        fn sender(&self) -> AccountId {
-            self.sender_id
-        }
-
-        fn funds(&self) -> &[FungibleAsset] {
-            &[]
-        }
-
-        fn do_query(&self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse> {
-            if self.should_fail {
-                return Err(ErrorCode::new(99, "fail")); // Simulate a failure
-            }
-
-            if to != STORAGE_ACCOUNT_ID {
-                return Err(ErrorCode::new(1, "fail")); // Error code for unsupported account
-            }
-
-            let request = data.get::<StorageGetRequest>()?;
-            let value = self.storage.get(&request.key).cloned();
-
-            Ok(InvokeResponse::new(&StorageGetResponse { value })?)
-        }
-
-        fn do_exec(
-            &mut self,
-            to: AccountId,
-            data: &InvokeRequest,
-            _funds: Vec<FungibleAsset>,
-        ) -> SdkResult<InvokeResponse> {
-            if self.should_fail {
-                return Err(ErrorCode::new(99, "fail")); // Simulate a failure
-            }
-
-            if to != STORAGE_ACCOUNT_ID {
-                return Err(ErrorCode::new(1, "fail")); // Error code for unsupported account
-            }
-
-            let request = data.get::<StorageSetRequest>()?;
-            self.storage.insert(request.key, request.value);
-
-            Ok(InvokeResponse::new(&())?)
-        }
-    }
 
     // Test data structure that implements Encodable and Decodable via BorshSerialize and BorshDeserialize
     #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Clone)]
