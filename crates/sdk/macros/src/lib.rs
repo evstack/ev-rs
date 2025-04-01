@@ -568,7 +568,7 @@ fn generate_accountcode_impl(
                 #msg_name::#fn_id => {
                     let msg: #msg_name = request.get()?;
                     let resp = self.#fn_name(#(#args, )* env)?;
-                    Ok(::evolve_core::InvokeResponse::new(&resp)?)
+                    ::evolve_core::InvokeResponse::new(&resp)
                 }
             }
         });
@@ -622,7 +622,7 @@ fn generate_init_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
             let msg: #msg_name = request.get()?;
             #funds_check
             let resp = self.#fn_name(#(#args, )* env)?;
-            Ok(::evolve_core::InvokeResponse::new(&resp)?)
+            ::evolve_core::InvokeResponse::new(&resp)
         }
     }
 }
@@ -651,7 +651,7 @@ fn generate_exec_match_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
             let msg: #msg_name = request.get()?;
             #funds_check
             let resp = self.#fn_name(#(#args, )* env)?;
-            Ok(::evolve_core::InvokeResponse::new(&resp)?)
+            ::evolve_core::InvokeResponse::new(&resp)
         }
     }
 }

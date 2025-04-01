@@ -84,7 +84,7 @@ where
     /// - If the key **was** present, updates the value and returns `Ok(Some(old_value))`.
     pub fn insert(&self, key: &K, value: &V, env: &mut dyn Environment) -> SdkResult<Option<V>> {
         // Check if this key already exists
-        if let Some(_) = self.index_map.may_get(key, env)? {
+        if self.index_map.may_get(key, env)?.is_some() {
             // The key exists; update its value and return the old value
             let old_value = self.values_map.get(key, env)?;
             self.values_map.set(key, value, env)?;
@@ -164,7 +164,7 @@ pub struct UnorderedMapIter<'a, K, V> {
     length: u64,
 }
 
-impl<'a, K, V> Iterator for UnorderedMapIter<'a, K, V>
+impl<K, V> Iterator for UnorderedMapIter<'_, K, V>
 where
     K: Encodable + Decodable + Clone,
     V: Encodable + Decodable,
@@ -205,7 +205,7 @@ mod tests {
     use super::*; // Brings UnorderedMap, etc. into scope
     use crate::mocks::MockEnvironment;
     use borsh::{BorshDeserialize, BorshSerialize};
-    use evolve_core::{Environment, ErrorCode, SdkResult};
+    use evolve_core::SdkResult;
 
     /// Simple data type for testing our UnorderedMap
     #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Clone)]
@@ -419,7 +419,7 @@ mod tests {
         let mut env = MockEnvironment::with_failure(); // triggers error code=99 on any storage op
 
         let result = map.insert(&123, &TestData { x: 999 }, &mut env);
-        let err = result.err().expect("should fail");
+        let err = result.expect_err("should fail");
         assert_eq!(err.code(), 99);
     }
 }

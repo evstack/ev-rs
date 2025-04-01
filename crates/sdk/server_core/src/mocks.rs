@@ -6,6 +6,12 @@ pub struct MockedAccountsCodeStorage {
     codes: HashMap<String, Box<dyn AccountCode>>,
 }
 
+impl Default for MockedAccountsCodeStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockedAccountsCodeStorage {
     pub fn new() -> Self {
         Self {

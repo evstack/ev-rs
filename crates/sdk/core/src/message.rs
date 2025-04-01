@@ -32,6 +32,12 @@ impl Message {
             InnerMessage::OwnedBytes(bytes) => bytes.len(),
         }
     }
+
+    pub fn is_empty(&self) -> bool {
+        match &self.inner {
+            InnerMessage::OwnedBytes(bytes) => bytes.is_empty(),
+        }
+    }
 }
 
 #[derive(Debug)]

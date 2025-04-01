@@ -209,7 +209,7 @@ impl GasCounter<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use evolve_core::{Message};
+    use evolve_core::Message;
     use evolve_gas::account::{StorageGasConfig, ERR_OUT_OF_GAS};
 
     #[test]

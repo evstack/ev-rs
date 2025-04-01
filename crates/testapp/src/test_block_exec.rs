@@ -62,7 +62,7 @@ fn test_block_exec() {
         txs: vec![ok_tx, out_of_gas_tx],
     };
 
-    let mut block_results = TestAppStf::apply_block(&mut storage, &mut codes, &block);
+    let mut block_results = TestAppStf::apply_block(&storage, &mut codes, &block);
     storage.apply_changes(block_results.state_changes).unwrap();
 
     let out_of_gas_result = block_results.tx_results.pop().unwrap();

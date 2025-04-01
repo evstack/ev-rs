@@ -14,6 +14,12 @@ pub mod account {
         pub balances: Map<AccountId, u128>,
     }
 
+    impl Default for Token {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl Token {
         pub const fn new() -> Self {
             Self {

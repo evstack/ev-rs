@@ -105,8 +105,7 @@ impl<'a, S> ExecutionState<'a, S> {
         // For each key in the overlay:
         //   - If the value is Some(v), then we want to persist a "set" operation.
         //   - If the value is None, then we want to persist a "remove" operation.
-        let values = self
-            .overlay
+        self.overlay
             .into_iter()
             .map(|(key, maybe_value)| match maybe_value {
                 Some(value) => {
@@ -115,9 +114,7 @@ impl<'a, S> ExecutionState<'a, S> {
                 }
                 None => Ok(CoreStateChange::Remove { key }),
             })
-            .collect();
-
-        values
+            .collect()
     }
 }
 
@@ -134,7 +131,7 @@ impl<'a, S: ReadonlyKV> ExecutionState<'a, S> {
         // No overlay entry => fallback to underlying store
         self.base_storage
             .get(key)
-            .map(|value| value.map(|value| Message::from_bytes(value)))
+            .map(|value| value.map(Message::from_bytes))
     }
 
     /// Sets `key` to `value`, recording the old logical value for undo.

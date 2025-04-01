@@ -59,7 +59,6 @@ mod tests {
     fn test_new() {
         // Test that Item::new creates an Item with the correct prefix
         // We can't directly test the prefix, but we can verify it works correctly in other tests
-        assert!(true);
     }
 
     #[test]

@@ -55,7 +55,7 @@ impl Environment for MockEnvironment {
 
         let request = data.get::<StorageGetRequest>()?;
         let value = self.storage.get(&request.key).cloned();
-        Ok(InvokeResponse::new(&StorageGetResponse { value })?)
+        InvokeResponse::new(&StorageGetResponse { value })
     }
 
     fn do_exec(

@@ -18,6 +18,12 @@ pub mod account {
         validators: UnorderedMap<AccountId, Validator>,
     }
 
+    impl Default for Poa {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl Poa {
         pub const fn new() -> Self {
             Self {
@@ -45,21 +51,21 @@ pub mod account {
 
         pub fn remove_validator(
             &self,
-            validator: AccountId,
-            env: &mut dyn Environment,
+            _validator: AccountId,
+            _env: &mut dyn Environment,
         ) -> SdkResult<()> {
             todo!("impl")
         }
 
         pub fn add_validator(
             &self,
-            validator: Validator,
-            env: &mut dyn Environment,
+            _validator: Validator,
+            _env: &mut dyn Environment,
         ) -> SdkResult<()> {
             todo!()
         }
 
-        pub fn get_validator_set(&self, env: &mut dyn Environment) -> SdkResult<Vec<Validator>> {
+        pub fn get_validator_set(&self, _env: &mut dyn Environment) -> SdkResult<Vec<Validator>> {
             todo!()
         }
     }

@@ -38,6 +38,12 @@ pub mod scheduler_account {
         pub end_block_accounts: Item<Vec<EndBlockAccountInterfaceRef>>,
     }
 
+    impl Default for Scheduler {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl Scheduler {
         pub const fn new() -> Scheduler {
             Scheduler {

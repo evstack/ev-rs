@@ -13,6 +13,12 @@ pub mod account {
         pub block: Item<u64>,
     }
 
+    impl Default for BlockInfo {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl BlockInfo {
         pub const fn new() -> Self {
             Self {
