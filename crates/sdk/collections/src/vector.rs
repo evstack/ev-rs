@@ -72,6 +72,43 @@ where
         //   - `None` if no count is stored (meaning zero).
         Ok(self.index.may_get(env)?.unwrap_or(0))
     }
+
+    /// Returns an iterator over the elements in this `Vector`.
+    /// Each `next()` call does a storage read to fetch the item at the current index.
+    pub fn iter<'a>(&'a self, env: &'a dyn Environment) -> SdkResult<VectorIter<'a, V>> {
+        let length = self.len(env)?;
+        Ok(VectorIter {
+            vector: self,
+            env,
+            index: 0,
+            length,
+        })
+    }
+}
+
+/// An iterator over the values stored in a `Vector<V>`.
+/// Each `next()` will yield a `SdkResult<V>`, since storage reads can fail.
+pub struct VectorIter<'a, V> {
+    vector: &'a Vector<V>,
+    env: &'a dyn Environment,
+    index: u64,
+    length: u64,
+}
+
+impl<V> Iterator for VectorIter<'_, V>
+where
+    V: Encodable + Decodable,
+{
+    type Item = SdkResult<V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.index >= self.length {
+            return None;
+        }
+        let result = self.vector.get(self.index, self.env);
+        self.index += 1;
+        Some(result)
+    }
 }
 
 #[cfg(test)]
@@ -339,5 +376,47 @@ mod vector_tests {
         // Each environment's storage is separate
         assert_eq!(vec.may_get(0, &env1).unwrap(), Some(data1));
         assert_eq!(vec.may_get(0, &env2).unwrap(), Some(data2));
+    }
+
+    #[test]
+    fn test_vector_iter() -> SdkResult<()> {
+        let vec: Vector<TestData> = Vector::new(10, 20);
+        let mut env = MockEnvironment::new(1, 2);
+
+        // Push a few items
+        vec.push(
+            &TestData {
+                value: 100,
+                name: "".to_string(),
+            },
+            &mut env,
+        )?;
+        vec.push(
+            &TestData {
+                value: 200,
+                name: "".to_string(),
+            },
+            &mut env,
+        )?;
+        vec.push(
+            &TestData {
+                value: 300,
+                name: "".to_string(),
+            },
+            &mut env,
+        )?;
+
+        // Use the iter() method
+        let mut iter = vec.iter(&env)?;
+
+        // Because `next()` returns `Option<SdkResult<V>>`,
+        // we handle it accordingly:
+        assert_eq!(iter.next().unwrap()?.value, 100);
+        assert_eq!(iter.next().unwrap()?.value, 200);
+        assert_eq!(iter.next().unwrap()?.value, 300);
+        // No more items -> `None`
+        assert!(iter.next().is_none());
+
+        Ok(())
     }
 }

@@ -2,12 +2,14 @@
 mod test_block_exec;
 
 use evolve_block_info::account::BlockInfo;
+use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
 use evolve_core::{
     AccountId, Environment, FungibleAsset, InvokeRequest, InvokeResponse, SdkResult,
 };
 use evolve_fungible_asset::FungibleAssetMetadata;
 use evolve_gas::account::{GasService, GasServiceRef, StorageGasConfig};
 use evolve_ns::account::{NameService, NameServiceRef};
+use evolve_poa::account::{Poa, PoaRef};
 use evolve_scheduler::scheduler_account::{Scheduler, SchedulerRef};
 use evolve_scheduler::server::{SchedulerBeginBlocker, SchedulerEndBlocker};
 use evolve_server_core::mocks::MockedAccountsCodeStorage;
@@ -98,7 +100,7 @@ pub fn account_codes() -> impl AccountsCodeStorage {
     codes.add_code(Scheduler::new()).unwrap();
     codes.add_code(GasService::new()).unwrap();
     codes.add_code(BlockInfo::new()).unwrap();
-    //codes.add_code(Poa::new()).unwrap();
+    codes.add_code(Poa::new()).unwrap();
 
     codes
 }
@@ -123,8 +125,6 @@ pub fn do_genesis<S: WritableKV, A: AccountsCodeStorage>(
             env,
         )?
         .0;
-        // Create PoA
-
         // Create scheduler
         let scheduler_acc = SchedulerRef::initialize(vec![], vec![], env)?.0;
         // Create gas config service.
@@ -137,19 +137,22 @@ pub fn do_genesis<S: WritableKV, A: AccountsCodeStorage>(
             env,
         )?
         .0;
+        // Create poa
+        let poa = PoaRef::initialize(RUNTIME_ACCOUNT_ID, scheduler_acc.0, vec![], env)?.0;
+
         // Update well known names in the name service.
         ns_acc.updates_names(
             vec![
                 ("scheduler".to_string(), scheduler_acc.0),
                 ("atom".to_string(), atom.0),
                 ("gas".to_string(), gas_service_acc.0),
-                //("poa".to_string(), 0),
+                ("poa".to_string(), poa.0),
             ],
             env,
         )?;
 
         // Update scheduler's account's list.
-
+        scheduler_acc.update_begin_blockers(vec![poa.0], env)?;
         Ok(())
     })?;
 

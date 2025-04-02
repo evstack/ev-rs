@@ -1,5 +1,5 @@
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{Environment, ErrorCode, SdkResult}; // or your local error handling
+use evolve_core::{Environment, ErrorCode, SdkResult};
 use std::marker::PhantomData;
 
 use crate::map::Map;
@@ -202,7 +202,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*; // Brings UnorderedMap, etc. into scope
+    use super::*;
+    // Brings UnorderedMap, etc. into scope
     use crate::mocks::MockEnvironment;
     use borsh::{BorshDeserialize, BorshSerialize};
     use evolve_core::SdkResult;

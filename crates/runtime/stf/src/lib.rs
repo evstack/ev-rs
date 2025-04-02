@@ -184,6 +184,30 @@ where
         let invoker = Invoker::new_for_query(writable_storage, account_storage, gc);
         invoker.do_query(to, &InvokeRequest::new(req)?)
     }
+    /// Allows to execute in readonly mode over the given account ID with the provided
+    /// AccountCode handle.
+    /// It can be used to extract data from state, after execution.
+    /// For example a consensus engine wanting to extract the validator set changes after block
+    /// execution.
+    /// Such things could be done by reading into state keys manually but it's less developer friendly.
+    pub fn run_as<
+        'a,
+        T: AccountCode + Default,
+        R,
+        S: ReadonlyKV + 'a,
+        A: AccountsCodeStorage + 'a,
+    >(
+        storage: &'a S,
+        account_storage: &'a mut A,
+        account_id: AccountId,
+        handle: impl FnOnce(&T, &dyn Environment) -> SdkResult<R>,
+    ) -> SdkResult<R> {
+        let exec_state = ExecutionState::new(storage);
+        let invoker = Invoker::new_for_query(exec_state, account_storage, GasCounter::infinite());
+        let account_id_invoker = invoker.branch_query(account_id);
+        let code = T::default();
+        handle(&code, &account_id_invoker)
+    }
 }
 
 struct Invoker<'a, S, A> {

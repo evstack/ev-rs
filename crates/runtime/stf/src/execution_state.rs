@@ -118,7 +118,7 @@ impl<'a, S> ExecutionState<'a, S> {
     }
 }
 
-impl<'a, S: ReadonlyKV> ExecutionState<'a, S> {
+impl<S: ReadonlyKV> ExecutionState<'_, S> {
     /// Retrieves the "logical" value for `key`.
     ///  1) If overlay has key => check if it's Some(...) or None.
     ///  2) Else fallback to the underlying store.

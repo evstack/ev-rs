@@ -1,10 +1,25 @@
+use evolve_macros::account_impl;
+
+#[account_impl(Poa)]
 pub mod account {
     use borsh::{BorshDeserialize, BorshSerialize};
     use evolve_collections::item::Item;
     use evolve_collections::unordered_map::UnorderedMap;
-    use evolve_core::{AccountId, Environment, SdkResult, ERR_UNAUTHORIZED};
+    use evolve_collections::vector::Vector;
+    use evolve_core::{AccountId, Environment, ErrorCode, SdkResult, ERR_UNAUTHORIZED};
+    use evolve_macros::{exec, init, query};
     use evolve_scheduler::begin_block_account_interface::BeginBlockAccountInterface;
-    use evolve_scheduler::end_block_account_interface::EndBlockAccountInterface;
+
+    pub const ERR_NO_VALIDATORS: ErrorCode = ErrorCode::new(0, "no validators left");
+    pub const ERR_VALIDATOR_NOT_FOUND: ErrorCode = ErrorCode::new(1, "validator not found");
+    pub const ERR_VALIDATOR_ALREADY_EXISTS: ErrorCode =
+        ErrorCode::new(2, "validator already exists");
+
+    #[derive(BorshSerialize, BorshDeserialize, Clone)]
+    pub enum ValsetChange {
+        Add(AccountId),
+        Remove(AccountId),
+    }
 
     #[derive(BorshSerialize, BorshDeserialize, Clone)]
     pub struct Validator {
@@ -16,6 +31,7 @@ pub mod account {
         scheduler_authority: Item<AccountId>,
         update_authority: Item<AccountId>,
         validators: UnorderedMap<AccountId, Validator>,
+        valset_changes: Vector<ValsetChange>,
     }
 
     impl Default for Poa {
@@ -30,8 +46,10 @@ pub mod account {
                 scheduler_authority: Item::new(0),
                 update_authority: Item::new(1),
                 validators: UnorderedMap::new(2, 3, 4, 5),
+                valset_changes: Vector::new(6, 7),
             }
         }
+        #[init]
         pub fn initialize(
             &self,
             update_authority: AccountId,
@@ -49,44 +67,88 @@ pub mod account {
             Ok(())
         }
 
+        #[exec]
         pub fn remove_validator(
             &self,
-            _validator: AccountId,
-            _env: &mut dyn Environment,
+            validator: AccountId,
+            env: &mut dyn Environment,
         ) -> SdkResult<()> {
-            todo!("impl")
-        }
-
-        pub fn add_validator(
-            &self,
-            _validator: Validator,
-            _env: &mut dyn Environment,
-        ) -> SdkResult<()> {
-            todo!()
-        }
-
-        pub fn get_validator_set(&self, _env: &mut dyn Environment) -> SdkResult<Vec<Validator>> {
-            todo!()
-        }
-    }
-
-    impl EndBlockAccountInterface for Poa {
-        fn do_end_block(&self, env: &mut dyn Environment) -> SdkResult<()> {
-            if self.scheduler_authority.get(env)? != env.sender() {
+            if self.update_authority.get(env)? != env.sender() {
                 return Err(ERR_UNAUTHORIZED);
             }
 
-            todo!("process valset changes")
+            // ensure not empty
+            if self.validators.len(env)? == 1 {
+                return Err(ERR_NO_VALIDATORS);
+            }
+
+            // check it exists
+            if self.validators.may_get(&validator, env)?.is_none() {
+                return Err(ERR_VALIDATOR_NOT_FOUND);
+            }
+
+            self.validators.remove(&validator, env)?;
+            self.valset_changes
+                .push(&ValsetChange::Remove(validator), env)?;
+            Ok(())
+        }
+
+        #[exec]
+        pub fn add_validator(
+            &self,
+            validator: Validator,
+            env: &mut dyn Environment,
+        ) -> SdkResult<()> {
+            if self.update_authority.get(env)? != env.sender() {
+                return Err(ERR_UNAUTHORIZED);
+            }
+
+            // check it does not already exist
+            if self.validators.may_get(&validator.account, env)?.is_some() {
+                return Err(ERR_VALIDATOR_ALREADY_EXISTS);
+            }
+
+            self.validators
+                .insert(&validator.account, &validator, env)?;
+            self.valset_changes
+                .push(&ValsetChange::Add(validator.account), env)?;
+
+            Ok(())
+        }
+
+        #[query]
+        pub fn get_validator_set(&self, env: &dyn Environment) -> SdkResult<Vec<Validator>> {
+            self.validators
+                .iter(env)?
+                .map(|v| v.map(|v| v.1))
+                .collect::<SdkResult<Vec<_>>>()
+        }
+
+        #[query]
+        pub fn get_valset_changes(&self, env: &dyn Environment) -> SdkResult<Vec<ValsetChange>> {
+            self.valset_changes.iter(env)?.collect()
         }
     }
 
     impl BeginBlockAccountInterface for Poa {
+        #[exec]
         fn do_begin_block(&self, env: &mut dyn Environment) -> SdkResult<()> {
             if self.scheduler_authority.get(env)? != env.sender() {
                 return Err(ERR_UNAUTHORIZED);
             }
 
-            todo!("kill previoius valset changes ")
+            // clear.
+            loop {
+                if self.valset_changes.pop(env)?.is_none() {
+                    return Ok(());
+                }
+            }
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn success() {}
 }

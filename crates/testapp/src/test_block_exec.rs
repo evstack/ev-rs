@@ -1,8 +1,9 @@
 use crate::{account_codes, do_genesis, Block, TestAppStf, Tx, ALICE, BOB};
-use evolve_core::{AccountId, InvokeRequest};
+use evolve_core::{AccountId, Environment, InvokeRequest, SdkResult};
 use evolve_fungible_asset::TransferMsg;
 use evolve_gas::account::ERR_OUT_OF_GAS;
 use evolve_ns::account::ResolveNameMsg;
+use evolve_poa::account::Poa;
 use evolve_server_core::WritableKV;
 use evolve_stf::gas::GasCounter;
 use std::collections::HashMap;
@@ -22,6 +23,20 @@ fn test_block_exec() {
         evolve_ns::GLOBAL_NAME_SERVICE_REF.0,
         &ResolveNameMsg {
             name: "atom".to_string(),
+        },
+        GasCounter::infinite(),
+    )
+    .unwrap()
+    .get::<Option<AccountId>>()
+    .unwrap()
+    .unwrap();
+
+    let poa_id = TestAppStf::query(
+        &storage,
+        &mut codes,
+        evolve_ns::GLOBAL_NAME_SERVICE_REF.0,
+        &ResolveNameMsg {
+            name: "poa".to_string(),
         },
         GasCounter::infinite(),
     )
@@ -73,4 +88,17 @@ fn test_block_exec() {
         out_of_gas_result.response.expect_err("expected an error"),
         ERR_OUT_OF_GAS
     );
+
+    // test run as
+    TestAppStf::run_as(
+        &storage,
+        &mut codes,
+        poa_id,
+        |x: &Poa, env: &dyn Environment| -> SdkResult<()> {
+            let validators = x.get_validator_set(env)?;
+            assert_eq!(validators.len(), 0); // TODO: add validators
+            Ok(())
+        },
+    )
+    .unwrap();
 }
