@@ -1,0 +1,13 @@
+[package]
+edition = "2021"
+name = "evolve_actor"
+version = "0.0.1"
+
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true
