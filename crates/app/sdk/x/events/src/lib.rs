@@ -11,10 +11,11 @@ impl EventsEmitter {
     }
     pub fn emit_event<T: Encodable>(
         &self,
-        name: String,
+        name: impl Into<String>,
         event: T,
         env: &mut dyn Environment,
     ) -> SdkResult<()> {
+        let name = name.into();
         env.do_exec(
             EVENT_HANDLER_ACCOUNT_ID,
             &InvokeRequest::new(&EmitEventRequest {
