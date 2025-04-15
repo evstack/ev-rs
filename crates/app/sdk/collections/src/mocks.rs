@@ -16,6 +16,12 @@ pub struct MockEnvironment {
 }
 
 impl MockEnvironment {
+    pub(crate) fn storage_remove(&mut self, key: &[u8]) {
+        self.storage.remove(key);
+    }
+}
+
+impl MockEnvironment {
     pub fn new(account_id: u128, sender_id: u128) -> Self {
         Self {
             account_id: AccountId::new(account_id),
