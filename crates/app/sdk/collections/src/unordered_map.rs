@@ -139,6 +139,18 @@ where
         Ok(Some(old_value))
     }
 
+    pub fn update(
+        &self,
+        key: &K,
+        update_fn: impl FnOnce(Option<V>) -> SdkResult<V>,
+        backend: &mut dyn Environment,
+    ) -> SdkResult<V> {
+        let old_value = self.may_get(key, backend)?;
+        let new_value = update_fn(old_value)?;
+        self.insert(key, &new_value, backend)?;
+        Ok(new_value)
+    }
+
     /// Returns an iterator over `(K, V)` for all entries in this map, in an **arbitrary** order.
     ///
     /// **Note**: Each `next()` call does a storage read under the hood for the key and value.
@@ -422,5 +434,60 @@ mod tests {
         let result = map.insert(&123, &TestData { x: 999 }, &mut env);
         let err = result.expect_err("should fail");
         assert_eq!(err.code(), 99);
+    }
+
+    #[test]
+    fn test_update() -> SdkResult<()> {
+        let map = UnorderedMap::<u64, TestData>::new(110, 111, 112, 113);
+        let mut env = MockEnvironment::new(1, 2);
+
+        // 1) Update on a non-existent key:
+        //    The closure sees old_value = None, returns a brand-new value.
+        let new_val = map.update(
+            &42,
+            |old_value| {
+                assert!(old_value.is_none(), "Key should not exist yet");
+                // Return a new value
+                Ok(TestData { x: 999 })
+            },
+            &mut env,
+        )?;
+        assert_eq!(new_val, TestData { x: 999 });
+        // Now the map must contain this new value
+        let stored_val = map.get(&42, &env)?;
+        assert_eq!(stored_val, TestData { x: 999 });
+
+        // 2) Update on an existing key:
+        //    The closure sees the old value, mutates it, and returns the new one.
+        let updated_val = map.update(
+            &42,
+            |old_value| {
+                let old = old_value.expect("Key should exist now");
+                assert_eq!(old, TestData { x: 999 });
+                // Example: increment x by 1
+                Ok(TestData { x: old.x + 1 })
+            },
+            &mut env,
+        )?;
+        assert_eq!(updated_val, TestData { x: 1000 });
+        // Verify stored value
+        let stored_val = map.get(&42, &env)?;
+        assert_eq!(stored_val, TestData { x: 1000 });
+
+        // 3) (Optional) You can also test returning an error from your closure
+        //    to ensure it bubbles up correctly:
+        let err_result = map.update(
+            &42,
+            |_old_value| Err(ErrorCode::new(123, "Simulated failure")),
+            &mut env,
+        );
+        assert!(err_result.is_err());
+        let err = err_result.err().unwrap();
+        assert_eq!(err.code(), 123);
+        // The map state should remain unchanged due to the error
+        let stored_val = map.get(&42, &env)?;
+        assert_eq!(stored_val, TestData { x: 1000 });
+
+        Ok(())
     }
 }
