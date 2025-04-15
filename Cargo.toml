@@ -11,7 +11,7 @@ members = [
   "crates/app/sdk/standards/*",
   "crates/app/sdk/x/*",
   "crates/storage",
-  "crates/app/testapp",
+  "crates/app/testapp", "crates/app/sdk/testing",
 ]
 resolver = "2"
 

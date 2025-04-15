@@ -50,7 +50,7 @@ impl AccountId {
     }
 }
 
-#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize, Eq, PartialEq)]
 pub struct FungibleAsset {
     pub asset_id: AccountId,
     pub amount: u128,

@@ -31,8 +31,8 @@ use borsh::{BorshSerialize, BorshDeserialize};
 // Define a struct to store in the map
 #[derive(BorshSerialize, BorshDeserialize)]
 struct UserProfile {
-    username: String,
-    reputation: u32,
+   username: String,
+   reputation: u32,
 }
 
 // Create a map to store user profiles by account ID
@@ -41,42 +41,42 @@ let user_profiles: Map<AccountId, UserProfile> = Map::new(0);
 
 // Store a user profile
 fn store_profile(
-    account_id: &AccountId, 
-    profile: &UserProfile, 
-    env: &mut dyn Environment
+   account_id: &AccountId,
+   profile: &UserProfile,
+   env: &mut dyn Environment
 ) -> SdkResult<()> {
-    user_profiles.set(account_id, profile, env)
+   user_profiles.set(account_id, profile, env)
 }
 
 // Retrieve a user profile
 fn get_profile(
-    account_id: &AccountId, 
-    env: &dyn Environment
+   account_id: &AccountId,
+   env: &dyn Environment
 ) -> SdkResult<Option<UserProfile>> {
-    user_profiles.get(account_id, env)
+   user_profiles.get(account_id, env)
 }
 
 // Update a user's reputation
 fn update_reputation(
-    account_id: &AccountId, 
-    new_reputation: u32, 
-    env: &mut dyn Environment
+   account_id: &AccountId,
+   new_reputation: u32,
+   env: &mut dyn Environment
 ) -> SdkResult<UserProfile> {
-    user_profiles.update(account_id, |profile| {
-        match profile {
-            Some(mut existing_profile) => {
-                existing_profile.reputation = new_reputation;
-                Ok(existing_profile)
-            },
-            None => {
-                // Create a new profile if it doesn't exist
-                Ok(UserProfile {
-                    username: "new_user".to_string(),
-                    reputation: new_reputation,
-                })
-            }
-        }
-    }, env)
+   user_profiles.update(account_id, |profile| {
+      match profile {
+         Some(mut existing_profile) => {
+            existing_profile.reputation = new_reputation;
+            Ok(existing_profile)
+         }
+         None => {
+            // Create a new profile if it doesn't exist
+            Ok(UserProfile {
+               username: "new_user".to_string(),
+               reputation: new_reputation,
+            })
+         }
+      }
+   }, env)
 }
 ```
 
@@ -99,9 +99,9 @@ use borsh::{BorshSerialize, BorshDeserialize};
 // Define a struct to store as a configuration
 #[derive(BorshSerialize, BorshDeserialize)]
 struct ContractConfig {
-    admin: AccountId,
-    paused: bool,
-    fee_percentage: u8,
+   admin: AccountId,
+   paused: bool,
+   fee_percentage: u8,
 }
 
 // Create an item to store the contract configuration
@@ -110,42 +110,42 @@ let config: Item<ContractConfig> = Item::new(1);
 
 // Initialize the configuration
 fn initialize_config(
-    admin: AccountId, 
-    env: &mut dyn Environment
+   admin: AccountId,
+   env: &mut dyn Environment
 ) -> SdkResult<()> {
-    let initial_config = ContractConfig {
-        admin,
-        paused: false,
-        fee_percentage: 5,
-    };
-    
-    config.set(&initial_config, env)
+   let initial_config = ContractConfig {
+      admin,
+      paused: false,
+      fee_percentage: 5,
+   };
+
+   config.set(&initial_config, env)
 }
 
 // Get the current configuration
 fn get_config(env: &dyn Environment) -> SdkResult<Option<ContractConfig>> {
-    config.get(env)
+   config.get(env)
 }
 
 // Update the configuration
 fn update_config(
-    paused: bool, 
-    fee_percentage: u8, 
-    env: &mut dyn Environment
+   paused: bool,
+   fee_percentage: u8,
+   env: &mut dyn Environment
 ) -> SdkResult<ContractConfig> {
-    config.update(|existing_config| {
-        match existing_config {
-            Some(mut cfg) => {
-                cfg.paused = paused;
-                cfg.fee_percentage = fee_percentage;
-                Ok(cfg)
-            },
-            None => {
-                // Return an error if the config doesn't exist
-                Err(1) // Use appropriate error code
-            }
-        }
-    }, env)
+   config.update(|existing_config| {
+      match existing_config {
+         Some(mut cfg) => {
+            cfg.paused = paused;
+            cfg.fee_percentage = fee_percentage;
+            Ok(cfg)
+         }
+         None => {
+            // Return an error if the config doesn't exist
+            Err(1) // Use appropriate error code
+         }
+      }
+   }, env)
 }
 ```
 
