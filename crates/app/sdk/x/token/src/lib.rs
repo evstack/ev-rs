@@ -3,7 +3,7 @@ use evolve_macros::account_impl;
 #[account_impl(Token)]
 pub mod account {
     use evolve_collections::{item::Item, map::Map};
-    use evolve_core::{AccountId, Environment, ErrorCode, SdkResult};
+    use evolve_core::{AccountId, Environment, ErrorCode, SdkResult, ERR_UNAUTHORIZED};
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
 
@@ -12,6 +12,8 @@ pub mod account {
     pub struct Token {
         pub metadata: Item<FungibleAssetMetadata>,
         pub balances: Map<AccountId, u128>,
+        pub total_supply: Item<u128>,
+        pub supply_manager: Item<Option<AccountId>>,
     }
 
     impl Default for Token {
@@ -25,6 +27,8 @@ pub mod account {
             Self {
                 metadata: Item::new(0),
                 balances: Map::new(1),
+                total_supply: Item::new(2),
+                supply_manager: Item::new(3),
             }
         }
         #[init]
@@ -32,12 +36,60 @@ pub mod account {
             &self,
             metadata: FungibleAssetMetadata,
             balances: Vec<(AccountId, u128)>,
+            supply_manager: Option<AccountId>,
             env: &mut dyn Environment,
         ) -> SdkResult<()> {
             self.metadata.set(&metadata, env)?;
+            let mut total_supply = 0;
             for (account, balance) in balances {
-                self.balances.set(&account, &balance, env)?
+                self.balances.set(&account, &balance, env)?;
+                total_supply += balance;
             }
+            self.supply_manager.set(&supply_manager, env)?;
+            self.total_supply.set(&total_supply, env)?;
+
+            Ok(())
+        }
+
+        #[exec]
+        pub fn mint(
+            &self,
+            recipient: AccountId,
+            amount: u128,
+            env: &mut dyn Environment,
+        ) -> SdkResult<()> {
+            if self.supply_manager.get(env)? != Some(env.sender()) {
+                return Err(ERR_UNAUTHORIZED);
+            }
+            self.balances.update(
+                &recipient,
+                |balance| Ok(balance.unwrap_or_default() + amount),
+                env,
+            )?;
+            self.total_supply
+                .update(|supply| Ok(supply.unwrap_or_default() + amount), env)?;
+
+            Ok(())
+        }
+
+        #[exec]
+        pub fn burn(
+            &self,
+            from_account: AccountId,
+            amount: u128,
+            env: &mut dyn Environment,
+        ) -> SdkResult<()> {
+            if self.supply_manager.get(env)? != Some(env.sender()) {
+                return Err(ERR_UNAUTHORIZED);
+            }
+            self.balances.update(
+                &from_account,
+                |balance| Ok(balance.unwrap_or_default() - amount),
+                env,
+            )?;
+            self.total_supply
+                .update(|supply| Ok(supply.unwrap_or_default() - amount), env)?;
+
             Ok(())
         }
     }

@@ -122,6 +122,7 @@ pub fn do_genesis<S: WritableKV, A: AccountsCodeStorage>(
                 description: "The atom coin".to_string(),
             },
             vec![(ALICE, 1000), (BOB, 2000)],
+            None,
             env,
         )?
         .0;

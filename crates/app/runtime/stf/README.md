@@ -2,13 +2,16 @@
 
 ## Overview
 
-The Application Actor system is a component of the CoTend/Evolve runtime that handles the execution of transactions, state management, and the actor model implementation. This document explains the architecture, components, and flow of the system.
+The Application Actor system is a component of the CoTend/Evolve runtime that handles the execution of transactions,
+state management, and the actor model implementation. This document explains the architecture, components, and flow of
+the system.
 
 ## Core Components
 
 ### State Transition Function (STF)
 
-The STF is the central component that orchestrates the execution of transactions and manages the state of the blockchain. It provides functions for:
+The STF is the central component that orchestrates the execution of transactions and manages the state of the
+blockchain. It provides functions for:
 
 - Applying blocks (`apply_block`)
 - Executing transactions (`apply_tx`)
@@ -197,30 +200,29 @@ sequenceDiagram
     participant ExecutionState as Execution State
     participant Account as Account Code
     participant GasCounter as Gas Counter
-    
-    Stf->>Invoker: apply_tx(tx)
-    Invoker->>Invoker: handle_transfers()
-    Invoker->>ExecutionState: checkpoint()
-    
+    Stf ->> Invoker: apply_tx(tx)
+    Invoker ->> Invoker: handle_transfers()
+    Invoker ->> ExecutionState: checkpoint()
+
     alt System Account
-        Invoker->>Invoker: handle_system_exec()
+        Invoker ->> Invoker: handle_system_exec()
     else Storage Account
-        Invoker->>Invoker: handle_storage_exec()
+        Invoker ->> Invoker: handle_storage_exec()
     else Event Handler
-        Invoker->>Invoker: handle_event_handler_exec()
+        Invoker ->> Invoker: handle_event_handler_exec()
     else Regular Account
-        Invoker->>Invoker: branch_exec()
-        Invoker->>Account: execute()
-        Account->>Invoker: do_query/do_exec
+        Invoker ->> Invoker: branch_exec()
+        Invoker ->> Account: execute()
+        Account ->> Invoker: do_query/do_exec
     end
-    
+
     alt Execution Error
-        Invoker->>ExecutionState: restore(checkpoint)
+        Invoker ->> ExecutionState: restore(checkpoint)
     end
-    
-    Invoker->>GasCounter: gas_used()
-    Invoker->>ExecutionState: pop_events()
-    Invoker-->>Stf: TxResult
+
+    Invoker ->> GasCounter: gas_used()
+    Invoker ->> ExecutionState: pop_events()
+    Invoker -->> Stf: TxResult
 ```
 
 ## Storage and State Management
@@ -260,7 +262,6 @@ graph TD
     B --> D[Storage Account]
     B --> E[Event Handler]
     B --> F[Regular Actor]
-    
     C --> G[handle_system_exec]
     C --> H[handle_system_query]
     D --> I[handle_storage_exec]
@@ -330,4 +331,6 @@ classDiagram
 
 ## Conclusion
 
-The Application Actor system provides a robust framework for executing transactions, managing state, and enforcing resource limits in the CoTend/Evolve blockchain. Its modular design with the STF, Invoker, ExecutionState, and GasCounter components enables secure and efficient execution of smart contracts in an actor-based model.
+The Application Actor system provides a robust framework for executing transactions, managing state, and enforcing
+resource limits in the CoTend/Evolve blockchain. Its modular design with the STF, Invoker, ExecutionState, and
+GasCounter components enables secure and efficient execution of smart contracts in an actor-based model.
