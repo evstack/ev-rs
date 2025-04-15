@@ -38,6 +38,8 @@ evolve_token = {path = "crates/app/sdk/x/token"}
 
 evolve_stf = {path = "crates/app/runtime/stf"}
 
+evolve_testing = {path = "crates/app/sdk/testing"}
+
 # outside deps
 borsh = {features = ["derive"], version = "1.5.5"}
 

@@ -14,5 +14,8 @@ evolve_collections.workspace = true
 
 borsh.workspace = true
 
+[dev-dependencies]
+evolve_testing.workspace = true
+
 [lints]
 workspace = true
