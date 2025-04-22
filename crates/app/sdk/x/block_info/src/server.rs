@@ -15,7 +15,7 @@ impl<B, Tx> BeginBlocker<B> for SetTimeBeginBlocker<Tx>
 where
     B: Block<Tx> + BlockTimeProvider,
 {
-    fn begin_block(block: &B, env: &mut dyn Environment) {
+    fn begin_block(&self, block: &B, env: &mut dyn Environment) {
         resolve_as_ref::<BlockInfoRef>("block_info".to_string(), env)
             .unwrap()
             .unwrap()

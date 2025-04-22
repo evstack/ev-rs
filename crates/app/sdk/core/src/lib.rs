@@ -7,7 +7,6 @@ pub mod error;
 pub mod events_api;
 pub mod low_level;
 pub mod message;
-pub mod mocks; // TODO: make test
 pub mod runtime_api;
 pub mod storage_api;
 
@@ -70,7 +69,7 @@ pub trait Environment {
 }
 
 /// Defines some arbitrary code that can handle account execution logic.
-pub trait AccountCode {
+pub trait AccountCode: Send + Sync {
     fn identifier(&self) -> String;
     fn init(&self, env: &mut dyn Environment, request: &InvokeRequest)
         -> SdkResult<InvokeResponse>;

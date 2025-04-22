@@ -20,5 +20,10 @@ evolve_token.workspace = true
 evolve_gas.workspace = true
 evolve_poa.workspace = true
 
+borsh.workspace = true
+
+[dev-dependencies]
+evolve_testing.workspace = true
+
 [lints]
 workspace = true

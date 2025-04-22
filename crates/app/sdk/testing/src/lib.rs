@@ -1,3 +1,5 @@
+pub mod server_mocks;
+
 use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageRemoveResponse,

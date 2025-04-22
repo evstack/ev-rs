@@ -69,6 +69,7 @@ pub struct Checkpoint {
 ///  - `Some(value)` => key is set to `value`
 ///  - `None` => key is explicitly removed / tombstone
 ///  - no entry => fallback to the underlying store
+#[derive(Debug)]
 pub struct ExecutionState<'a, S> {
     /// The underlying store to fall back to.
     base_storage: &'a S,
@@ -110,7 +111,7 @@ impl<'a, S> ExecutionState<'a, S> {
             .map(|(key, maybe_value)| match maybe_value {
                 Some(value) => {
                     let value = value.into_bytes()?;
-                    SdkResult::Ok(CoreStateChange::Set { key, value })
+                    Ok(CoreStateChange::Set { key, value })
                 }
                 None => Ok(CoreStateChange::Remove { key }),
             })
@@ -182,6 +183,12 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
 
         // truncate events to the given checkpoint
         self.events.truncate(checkpoint.events_index);
+    }
+}
+
+impl<S: ReadonlyKV> ReadonlyKV for ExecutionState<'_, S> {
+    fn get(&self, key: &[u8]) -> SdkResult<Option<Vec<u8>>> {
+        self.get(key)?.map(|b| b.into_bytes()).transpose()
     }
 }
 

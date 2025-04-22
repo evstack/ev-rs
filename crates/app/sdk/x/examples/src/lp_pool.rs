@@ -46,7 +46,6 @@ pub mod pool {
         // marking method with init means this is the method used to initialize the account
         // adding the payable attribute means this can receive funds.
         // there can only be one init method.
-
         #[init(payable)]
         pub fn initialize(
             self: &Account,

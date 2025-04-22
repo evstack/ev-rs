@@ -6,6 +6,9 @@ pub mod account {
     use evolve_collections::item::Item;
     use evolve_collections::unordered_map::UnorderedMap;
     use evolve_collections::vector::Vector;
+    use evolve_cometbft_account_trait::consensus_account::{
+        AbciValsetManagerAccount, ValidatorUpdate,
+    };
     use evolve_core::{AccountId, Environment, ErrorCode, SdkResult, ERR_UNAUTHORIZED};
     use evolve_events::EventsEmitter;
     use evolve_macros::{exec, init, query};
@@ -159,6 +162,14 @@ pub mod account {
                     return Ok(());
                 }
             }
+        }
+    }
+
+    impl AbciValsetManagerAccount for Poa {
+        #[query]
+        fn valset_changes(&self, _env: &dyn Environment) -> SdkResult<Vec<ValidatorUpdate>> {
+            // TODO: impl me
+            Ok(vec![])
         }
     }
 }

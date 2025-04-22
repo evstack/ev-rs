@@ -1,10 +1,13 @@
+mod cometbft;
 #[cfg(test)]
 mod test_block_exec;
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use evolve_block_info::account::BlockInfo;
 use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
 use evolve_core::{
-    AccountId, Environment, FungibleAsset, InvokeRequest, InvokeResponse, SdkResult,
+    AccountId, Environment, FungibleAsset, InvokeRequest, InvokeResponse, ReadonlyKV, SdkResult,
+    ERR_ENCODING,
 };
 use evolve_fungible_asset::FungibleAssetMetadata;
 use evolve_gas::account::{GasService, GasServiceRef, StorageGasConfig};
@@ -12,16 +15,18 @@ use evolve_ns::account::{NameService, NameServiceRef};
 use evolve_poa::account::{Poa, PoaRef};
 use evolve_scheduler::scheduler_account::{Scheduler, SchedulerRef};
 use evolve_scheduler::server::{SchedulerBeginBlocker, SchedulerEndBlocker};
-use evolve_server_core::mocks::MockedAccountsCodeStorage;
 use evolve_server_core::{
-    AccountsCodeStorage, Block as BlockTrait, PostTxExecution, Transaction, TxValidator, WritableKV,
+    AccountsCodeStorage, Block as BlockTrait, PostTxExecution, Transaction, TxDecoder, TxValidator,
+    WritableAccountsCodeStorage,
 };
+use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::Stf;
 use evolve_token::account::{Token, TokenRef};
 
 pub const ALICE: AccountId = AccountId::new(100_000);
 pub const BOB: AccountId = AccountId::new(100_001);
 
+#[derive(BorshSerialize, BorshDeserialize)]
 pub struct Tx {
     pub sender: AccountId,
     pub recipient: AccountId,
@@ -70,7 +75,7 @@ impl BlockTrait<Tx> for Block {
 pub struct TxValidatorHandler;
 
 impl TxValidator<Tx> for TxValidatorHandler {
-    fn validate_tx(_tx: &Tx, _env: &mut dyn Environment) -> SdkResult<()> {
+    fn validate_tx(&self, _tx: &Tx, _env: &mut dyn Environment) -> SdkResult<()> {
         Ok(())
     }
 }
@@ -88,28 +93,59 @@ impl PostTxExecution<Tx> for NoOpPostTx {
     }
 }
 
-pub type TestAppStf =
+pub type TestAppStf = TestAppStfWithCustomBlock<Block>;
+
+pub type TestAppStfWithCustomBlock<Block> =
     Stf<Tx, Block, SchedulerBeginBlocker, TxValidatorHandler, SchedulerEndBlocker, NoOpPostTx>;
 
-/// List of accounts installed.
-pub fn account_codes() -> impl AccountsCodeStorage {
-    let mut codes = MockedAccountsCodeStorage::new();
+pub const STF: Stf<
+    Tx,
+    Block,
+    SchedulerBeginBlocker,
+    TxValidatorHandler,
+    SchedulerEndBlocker,
+    NoOpPostTx,
+> = Stf::new(
+    SchedulerBeginBlocker,
+    SchedulerEndBlocker,
+    TxValidatorHandler,
+    NoOpPostTx,
+);
 
+pub const fn new_stf_with_custom_block<T: evolve_server_core::Block<Tx>>(
+) -> TestAppStfWithCustomBlock<T> {
+    TestAppStfWithCustomBlock::new(
+        SchedulerBeginBlocker,
+        SchedulerEndBlocker,
+        TxValidatorHandler,
+        NoOpPostTx,
+    )
+}
+#[derive(Clone)]
+pub struct TxDecoderImpl;
+
+impl TxDecoder<Tx> for TxDecoderImpl {
+    fn decode(&self, bytes: &mut &[u8]) -> SdkResult<Tx> {
+        Tx::deserialize(bytes).map_err(|_| ERR_ENCODING)
+    }
+}
+
+/// List of accounts installed.
+pub fn install_account_codes(codes: &mut impl WritableAccountsCodeStorage) {
     codes.add_code(Token::new()).unwrap();
     codes.add_code(NameService::new()).unwrap();
     codes.add_code(Scheduler::new()).unwrap();
     codes.add_code(GasService::new()).unwrap();
     codes.add_code(BlockInfo::new()).unwrap();
     codes.add_code(Poa::new()).unwrap();
-
-    codes
 }
 
-pub fn do_genesis<S: WritableKV, A: AccountsCodeStorage>(
-    storage: &mut S,
-    codes: &mut A,
-) -> SdkResult<()> {
-    let (_, changes) = TestAppStf::sudo(storage, codes, |env| {
+pub fn do_genesis<'a, S: ReadonlyKV, A: AccountsCodeStorage, B: BlockTrait<Tx>>(
+    stf: &TestAppStfWithCustomBlock<B>,
+    storage: &'a S,
+    codes: &'a A,
+) -> SdkResult<ExecutionState<'a, S>> {
+    let (_, state) = stf.sudo(storage, codes, |env| {
         // Create name service account: this must be done first
         let ns_acc = NameServiceRef::initialize(vec![], env)?.0;
         // Create atom token
@@ -157,7 +193,5 @@ pub fn do_genesis<S: WritableKV, A: AccountsCodeStorage>(
         Ok(())
     })?;
 
-    storage.apply_changes(changes)?;
-
-    Ok(())
+    Ok(state)
 }

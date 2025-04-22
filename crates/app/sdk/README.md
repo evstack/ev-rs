@@ -263,7 +263,9 @@ pub mod pool {
 
 ```rust
 #[account_impl(Account)]
-pub mod pool { ... }
+pub mod pool {
+    ...
+}
 ```
 
 - This annotation informs Evolve to generate an **`AccountRef`** (client interface) for the `Account` struct inside the

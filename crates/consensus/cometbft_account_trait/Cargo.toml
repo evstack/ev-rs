@@ -1,18 +1,14 @@
 [package]
-name = "evolve_poa"
+name = "evolve_cometbft_account_trait"
 version = "0.1.0"
 edition = "2021"
-repository.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-evolve_collections.workspace = true
 evolve_core.workspace = true
-evolve_scheduler.workspace = true
 evolve_macros.workspace = true
-evolve_events.workspace = true
-evolve_cometbft_account_trait.workspace = true
 
 borsh.workspace = true
 

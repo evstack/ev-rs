@@ -1,17 +1,17 @@
 [workspace]
 members = [
-  "crates/app/actor",
-  "crates/types",
-  "crates/rpc",
-  "crates/app/runtime/stf",
-  "crates/app/sdk/collections",
-  "crates/app/sdk/core",
-  "crates/app/sdk/macros",
-  "crates/app/sdk/server_core",
-  "crates/app/sdk/standards/*",
-  "crates/app/sdk/x/*",
-  "crates/storage",
-  "crates/app/testapp", "crates/app/sdk/testing",
+    "crates/app/actor",
+    "crates/types",
+    "crates/rpc",
+    "crates/app/runtime/stf",
+    "crates/app/sdk/collections",
+    "crates/app/sdk/core",
+    "crates/app/sdk/macros",
+    "crates/app/sdk/server_core",
+    "crates/app/sdk/standards/*",
+    "crates/app/sdk/x/*",
+    "crates/storage",
+    "crates/app/testapp", "crates/app/sdk/testing", "crates/consensus/cometbft", "crates/consensus/cometbft_account_trait",
 ]
 resolver = "2"
 
@@ -21,27 +21,29 @@ repository = "https://github.com/01builders/evolve"
 rust-version = "1.81.0"
 
 [workspace.dependencies]
-evolve_collections = {path = "crates/app/sdk/collections"}
-evolve_core = {path = "crates/app/sdk/core"}
-evolve_macros = {path = "crates/app/sdk/macros"}
-evolve_server_core = {path = "crates/app/sdk/server_core"}
+evolve_collections = { path = "crates/app/sdk/collections" }
+evolve_core = { path = "crates/app/sdk/core" }
+evolve_macros = { path = "crates/app/sdk/macros" }
+evolve_server_core = { path = "crates/app/sdk/server_core" }
 
-evolve_fungible_asset = {path = "crates/app/sdk/standards/evolve_fungible_asset"}
+evolve_fungible_asset = { path = "crates/app/sdk/standards/evolve_fungible_asset" }
 
-evolve_block_info = {path = "crates/app/sdk/x/block_info"}
-evolve_events = {path = "crates/app/sdk/x/events"}
-evolve_gas = {path = "crates/app/sdk/x/gas"}
-evolve_ns = {path = "crates/app/sdk/x/ns"}
-evolve_poa = {path = "crates/app/sdk/x/poa"}
-evolve_scheduler = {path = "crates/app/sdk/x/scheduler"}
-evolve_token = {path = "crates/app/sdk/x/token"}
+evolve_block_info = { path = "crates/app/sdk/x/block_info" }
+evolve_events = { path = "crates/app/sdk/x/events" }
+evolve_gas = { path = "crates/app/sdk/x/gas" }
+evolve_ns = { path = "crates/app/sdk/x/ns" }
+evolve_poa = { path = "crates/app/sdk/x/poa" }
+evolve_scheduler = { path = "crates/app/sdk/x/scheduler" }
+evolve_token = { path = "crates/app/sdk/x/token" }
+evolve_cometbft_account_trait = { path = "crates/consensus/cometbft_account_trait" }
 
-evolve_stf = {path = "crates/app/runtime/stf"}
+evolve_stf = { path = "crates/app/runtime/stf" }
 
-evolve_testing = {path = "crates/app/sdk/testing"}
+evolve_testing = { path = "crates/app/sdk/testing" }
+evolve_testapp = { path = "crates/app/testapp" }
 
 # outside deps
-borsh = {features = ["derive"], version = "1.5.5"}
+borsh = { features = ["derive"], version = "1.5.5" }
 
 [workspace.lints.rust]
 # missing_docs = "deny"

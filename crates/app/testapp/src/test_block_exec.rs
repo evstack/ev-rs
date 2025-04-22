@@ -1,4 +1,4 @@
-use crate::{account_codes, do_genesis, Block, TestAppStf, Tx, ALICE, BOB};
+use crate::{do_genesis, install_account_codes, Block, TestAppStf, Tx, ALICE, BOB, STF};
 use evolve_core::{AccountId, Environment, InvokeRequest, SdkResult};
 use evolve_fungible_asset::TransferMsg;
 use evolve_gas::account::ERR_OUT_OF_GAS;
@@ -6,15 +6,19 @@ use evolve_ns::account::ResolveNameMsg;
 use evolve_poa::account::Poa;
 use evolve_server_core::WritableKV;
 use evolve_stf::gas::GasCounter;
-use std::collections::HashMap;
+use evolve_testing::server_mocks::{AccountStorageMock, StorageMock};
 
 #[test]
 fn test_block_exec() {
-    let mut codes = account_codes();
-    let mut storage: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+    let mut codes = AccountStorageMock::new();
+    let mut storage = StorageMock::new();
+
+    install_account_codes(&mut codes);
 
     // do genesis
-    do_genesis(&mut storage, &mut codes).unwrap();
+    let state = do_genesis(&STF, &mut storage, &mut codes).unwrap();
+    let state_changes = state.into_changes().unwrap();
+    storage.apply_changes(state_changes).unwrap();
 
     // query atom
     let atom_id = TestAppStf::query(
@@ -77,8 +81,7 @@ fn test_block_exec() {
         txs: vec![ok_tx, out_of_gas_tx],
     };
 
-    let mut block_results = TestAppStf::apply_block(&storage, &mut codes, &block);
-    storage.apply_changes(block_results.state_changes).unwrap();
+    let (mut block_results, new_state) = STF.apply_block(&storage, &codes, &block);
 
     let out_of_gas_result = block_results.tx_results.pop().unwrap();
     let ok_result = block_results.tx_results.pop().unwrap();
@@ -90,9 +93,9 @@ fn test_block_exec() {
     );
 
     // test run as
-    TestAppStf::run_as(
-        &storage,
-        &mut codes,
+    STF.run_with_code(
+        &new_state,
+        &codes,
         poa_id,
         |x: &Poa, env: &dyn Environment| -> SdkResult<()> {
             let validators = x.get_validator_set(env)?;

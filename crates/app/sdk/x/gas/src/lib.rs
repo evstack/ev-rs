@@ -10,7 +10,7 @@ pub mod account {
 
     pub const ERR_OUT_OF_GAS: ErrorCode = ErrorCode::new(0, "out of gas");
 
-    #[derive(BorshSerialize, BorshDeserialize, Clone)]
+    #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
     pub struct StorageGasConfig {
         pub storage_get_charge: u64,
         pub storage_set_charge: u64,

@@ -29,7 +29,7 @@ classDiagram
         +apply_tx()
         +query()
     }
-    
+
     class Invoker {
         -whoami: AccountId
         -sender: AccountId
@@ -43,7 +43,7 @@ classDiagram
         +handle_storage_exec()
         +handle_event_handler_exec()
     }
-    
+
     class ExecutionState {
         -base_storage: &S
         -overlay: HashMap
@@ -58,7 +58,7 @@ classDiagram
         +pop_events()
         +into_changes()
     }
-    
+
     class GasCounter {
         +infinite()
         +finite()
@@ -68,7 +68,7 @@ classDiagram
         +consume_remove_gas()
         +gas_used()
     }
-    
+
     Stf --> Invoker: uses
     Invoker --> ExecutionState: manages
     Invoker --> GasCounter: tracks
@@ -98,18 +98,18 @@ classDiagram
         +emit_event()
         +into_changes()
     }
-    
+
     class StateChange {
         +Set(key, previous_value)
         +Remove(key, previous_value)
         +revert()
     }
-    
+
     class Checkpoint {
         +undo_log_index: usize
         +events_index: usize
     }
-    
+
     ExecutionState --> StateChange: records
     ExecutionState --> Checkpoint: creates
 ```
@@ -126,7 +126,7 @@ The GasCounter tracks and enforces resource usage limits during execution:
 classDiagram
     class GasCounter {
         +Infinite
-        +Finite(gas_limit,gas_used,storage_gas_config)
+        +Finite(gas_limit, gas_used, storage_gas_config)
         +infinite()
         +finite()
         +consume_gas()
@@ -135,13 +135,13 @@ classDiagram
         +consume_remove_gas()
         +gas_used()
     }
-    
+
     class StorageGasConfig {
         +storage_get_charge: u64
         +storage_set_charge: u64
         +storage_remove_charge: u64
     }
-    
+
     GasCounter --> StorageGasConfig: uses
 ```
 
@@ -165,30 +165,29 @@ sequenceDiagram
     participant Invoker as Invoker
     participant ExecutionState as Execution State
     participant GasCounter as Gas Counter
-    
-    External->>Stf: apply_block(block)
-    Stf->>Invoker: new_block_state()
-    Stf->>Stf: do_begin_block()
-    Stf->>ExecutionState: pop_events()
-    
+    External ->> Stf: apply_block(block)
+    Stf ->> Invoker: new_block_state()
+    Stf ->> Stf: do_begin_block()
+    Stf ->> ExecutionState: pop_events()
+
     loop For each transaction
-        Stf->>Stf: apply_tx(tx)
-        Stf->>Invoker: clone_with_gas()
-        Stf->>Invoker: validate_tx()
+        Stf ->> Stf: apply_tx(tx)
+        Stf ->> Invoker: clone_with_gas()
+        Stf ->> Invoker: validate_tx()
         alt Validation Success
-            Stf->>Invoker: branch_for_new_exec()
-            Stf->>Invoker: do_exec()
-            Invoker->>ExecutionState: get/set/remove
-            Invoker->>GasCounter: consume_gas
+            Stf ->> Invoker: branch_for_new_exec()
+            Stf ->> Invoker: do_exec()
+            Invoker ->> ExecutionState: get/set/remove
+            Invoker ->> GasCounter: consume_gas
         else Validation Error
-            Stf->>ExecutionState: pop_events()
+            Stf ->> ExecutionState: pop_events()
         end
     end
-    
-    Stf->>Stf: do_end_block()
-    Stf->>ExecutionState: pop_events()
-    Stf->>ExecutionState: into_state_changes()
-    Stf-->>External: BlockResult
+
+    Stf ->> Stf: do_end_block()
+    Stf ->> ExecutionState: pop_events()
+    Stf ->> ExecutionState: into_state_changes()
+    Stf -->> External: BlockResult
 ```
 
 ### Transaction Execution Flow
@@ -241,9 +240,8 @@ graph TD
     D --> E[ExecutionState]
     E --> F[Overlay]
     E --> G[Base Storage]
-    
-    F -- "Checkpoint/Restore" --> H[Undo Log]
-    F -- "Commit" --> I[State Changes]
+    F -- " Checkpoint/Restore " --> H[Undo Log]
+    F -- " Commit " --> I[State Changes]
     I --> J[Persistent State]
 ```
 
@@ -279,14 +277,11 @@ flowchart TD
     A[Transaction] --> B{Finite or Infinite?}
     B -- Finite --> C[Gas Limit]
     B -- Infinite --> D[No Limit]
-    
     C --> E[Track Gas Usage]
     E --> F{Exceeds Limit?}
     F -- Yes --> G[Error: Out of Gas]
     F -- No --> H[Continue Execution]
-    
     D --> H
-    
     H --> I[Storage Operation]
     I --> J[Compute Operation]
     I --> K[consume_get_gas]
@@ -307,23 +302,23 @@ classDiagram
         +tx_results: Vec<TxResult>
         +end_block_events: Vec<Event>
     }
-    
+
     class TxResult {
         +events: Vec<Event>
         +gas_used: u64
         +response: SdkResult<InvokeResponse>
     }
-    
+
     class Event {
         +type: String
         +attributes: Vec<KeyValue>
     }
-    
+
     class StateChange {
-        +Set (key, value)
-        +Remove (key)
+        +Set(key, value)
+        +Remove(key)
     }
-    
+
     BlockResult --> TxResult: contains
     BlockResult --> StateChange: contains
     TxResult --> Event: contains

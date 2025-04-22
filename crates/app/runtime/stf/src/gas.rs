@@ -22,7 +22,7 @@ use evolve_gas::account::{StorageGasConfig, ERR_OUT_OF_GAS};
 /// };
 ///
 /// // Create a finite gas counter.
-/// let mut gc = GasCounter::finite(1000, &config);
+/// let mut gc = GasCounter::finite(1000, config);
 ///
 /// // Consume some gas.
 /// gc.consume_gas(200).unwrap(); // OK
@@ -38,7 +38,7 @@ use evolve_gas::account::{StorageGasConfig, ERR_OUT_OF_GAS};
 /// assert_eq!(gc_infinite.gas_used(), 0);
 /// ```
 #[allow(dead_code)]
-pub enum GasCounter<'a> {
+pub enum GasCounter {
     /// Infinite gas mode, no tracking or limit.
     Infinite,
     /// Finite gas mode, tracking gas usage against a `gas_limit`.
@@ -49,11 +49,11 @@ pub enum GasCounter<'a> {
     Finite {
         gas_limit: u64,
         gas_used: u64,
-        storage_gas_config: &'a StorageGasConfig,
+        storage_gas_config: StorageGasConfig,
     },
 }
 
-impl GasCounter<'_> {
+impl GasCounter {
     /// Creates a new [`GasCounter`] in infinite gas mode.
     ///
     /// In this mode, any gas-consuming operations will succeed
@@ -76,7 +76,7 @@ impl GasCounter<'_> {
     /// # Returns
     ///
     /// A [`GasCounter`] instance in finite mode.
-    pub fn finite(gas_limit: u64, config: &'_ StorageGasConfig) -> GasCounter<'_> {
+    pub fn finite(gas_limit: u64, config: StorageGasConfig) -> GasCounter {
         GasCounter::Finite {
             gas_limit,
             gas_used: 0,
@@ -194,7 +194,7 @@ impl GasCounter<'_> {
     /// # use evolve_gas::account::StorageGasConfig;
     /// # use evolve_stf::gas::GasCounter;
     /// # let config = StorageGasConfig { storage_get_charge: 5, storage_set_charge: 10,storage_remove_charge: 10};
-    /// # let mut gc = GasCounter::finite(100, &config);
+    /// # let mut gc = GasCounter::finite(100, config);
     /// gc.consume_gas(10).unwrap();
     /// assert_eq!(gc.gas_used(), 10);
     /// ```
@@ -238,7 +238,7 @@ mod tests {
             storage_set_charge: 10,
             storage_remove_charge: 10,
         };
-        let mut gc = GasCounter::finite(100, &config);
+        let mut gc = GasCounter::finite(100, config);
 
         // Initial usage should be 0
         assert_eq!(gc.gas_used(), 0);
@@ -264,7 +264,7 @@ mod tests {
             storage_set_charge: 0,
             storage_remove_charge: 0,
         };
-        let mut gc = GasCounter::finite(200, &config);
+        let mut gc = GasCounter::finite(200, config);
 
         // key len = 3, value len = 3 => total length considered = (3+1) + (3+1) = 8
         // gas = 10 * 8 = 80
@@ -286,7 +286,7 @@ mod tests {
             storage_set_charge: 5,
             storage_remove_charge: 0,
         };
-        let mut gc = GasCounter::finite(50, &config);
+        let mut gc = GasCounter::finite(50, config);
 
         // key len = 3, value len = 5 => total length considered = (3+1) + (5+1) = 10
         // gas = 5 * 10 = 50
@@ -307,7 +307,7 @@ mod tests {
             storage_set_charge: 10,
             storage_remove_charge: 10,
         };
-        let mut gc = GasCounter::finite(30, &config);
+        let mut gc = GasCounter::finite(30, config);
 
         // key len = 3 => total length considered = (3+1) = 4
         // gas = 10 * 4 = 40 which exceeds the limit

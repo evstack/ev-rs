@@ -3,17 +3,19 @@ use evolve_core::Environment;
 use evolve_ns::resolve_name;
 use evolve_server_core::{BeginBlocker, EndBlocker};
 
+#[derive(Clone)]
 pub struct SchedulerBeginBlocker;
 impl<B> BeginBlocker<B> for SchedulerBeginBlocker {
-    fn begin_block(_block: &B, env: &mut dyn Environment) {
+    fn begin_block(&self, _block: &B, env: &mut dyn Environment) {
         must_get_scheduler(env).schedule_begin_block(env).unwrap()
     }
 }
 
+#[derive(Clone)]
 pub struct SchedulerEndBlocker;
 
 impl EndBlocker for SchedulerEndBlocker {
-    fn end_block(env: &mut dyn Environment) {
+    fn end_block(&self, env: &mut dyn Environment) {
         must_get_scheduler(env).schedule_end_block(env).unwrap()
     }
 }

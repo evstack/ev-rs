@@ -1,5 +1,3 @@
-pub mod mocks; // TODO: make test
-
 use evolve_core::{
     AccountCode, AccountId, Environment, ErrorCode, FungibleAsset, InvokeRequest, InvokeResponse,
     ReadonlyKV, SdkResult,
@@ -13,13 +11,17 @@ pub trait Transaction {
     fn funds(&self) -> &[FungibleAsset];
 }
 
+pub trait TxDecoder<T> {
+    fn decode(&self, bytes: &mut &[u8]) -> SdkResult<T>;
+}
+
 pub trait Block<Tx> {
     fn height(&self) -> u64;
     fn txs(&self) -> &[Tx];
 }
 
 pub trait TxValidator<Tx> {
-    fn validate_tx(tx: &Tx, env: &mut dyn Environment) -> SdkResult<()>;
+    fn validate_tx(&self, tx: &Tx, env: &mut dyn Environment) -> SdkResult<()>;
 }
 
 pub trait PostTxExecution<Tx> {
@@ -32,11 +34,11 @@ pub trait PostTxExecution<Tx> {
 }
 
 pub trait BeginBlocker<B> {
-    fn begin_block(block: &B, env: &mut dyn Environment);
+    fn begin_block(&self, block: &B, env: &mut dyn Environment);
 }
 
 pub trait EndBlocker {
-    fn end_block(env: &mut dyn Environment);
+    fn end_block(&self, env: &mut dyn Environment);
 }
 
 /// Stores account code.
@@ -45,6 +47,11 @@ pub trait AccountsCodeStorage {
     fn with_code<F, R>(&self, identifier: &str, f: F) -> Result<R, ErrorCode>
     where
         F: FnOnce(Option<&dyn AccountCode>) -> R;
+}
+
+/// Extension to also add more codes.
+pub trait WritableAccountsCodeStorage: AccountsCodeStorage {
+    fn add_code(&mut self, code: impl AccountCode + 'static) -> Result<(), ErrorCode>;
 }
 
 #[derive(Debug)]

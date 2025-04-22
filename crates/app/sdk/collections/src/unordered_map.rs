@@ -1,6 +1,5 @@
 use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::{Environment, ErrorCode, SdkResult};
-use std::marker::PhantomData;
 
 use crate::map::Map;
 use crate::vector::Vector;
@@ -27,10 +26,6 @@ pub struct UnorderedMap<K, V> {
 
     /// Maps key -> value.
     values_map: Map<K, V>,
-
-    /// If you need multiple `UnorderedMap`s in the same contract storage,
-    /// you can give each a unique set of prefixes below.
-    _phantom: PhantomData<(K, V)>,
 }
 
 impl<K, V> UnorderedMap<K, V>
@@ -54,7 +49,6 @@ where
             index_map: Map::new(index_map_prefix),
             keys_vec: Vector::new(keys_vec_index_prefix, keys_vec_elems_prefix),
             values_map: Map::new(values_map_prefix),
-            _phantom: PhantomData,
         }
     }
 
