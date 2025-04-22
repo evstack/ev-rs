@@ -35,6 +35,8 @@ evolve_ns = { path = "crates/app/sdk/x/ns" }
 evolve_poa = { path = "crates/app/sdk/x/poa" }
 evolve_scheduler = { path = "crates/app/sdk/x/scheduler" }
 evolve_token = { path = "crates/app/sdk/x/token" }
+
+evolve_cometbft = { path = "crates/consensus/cometbft" }
 evolve_cometbft_account_trait = { path = "crates/consensus/cometbft_account_trait" }
 
 evolve_stf = { path = "crates/app/runtime/stf" }
@@ -44,6 +46,11 @@ evolve_testapp = { path = "crates/app/testapp" }
 
 # outside deps
 borsh = { features = ["derive"], version = "1.5.5" }
+log = { version = "0.4.27" }
+tokio = { version = "1.44.2", features = ["full"] }
+bytes = "1.10.1"
+futures = "0.3.31"
+base64 = "0.22.1"
 
 [workspace.lints.rust]
 # missing_docs = "deny"

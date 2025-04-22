@@ -1,4 +1,5 @@
-use crate::{do_genesis, install_account_codes, Block, TestAppStf, Tx, ALICE, BOB, STF};
+use crate::{do_genesis, install_account_codes, Tx, ALICE, BOB, STF};
+use evolve_cometbft::types::TendermintBlock;
 use evolve_core::{AccountId, Environment, InvokeRequest, SdkResult};
 use evolve_fungible_asset::TransferMsg;
 use evolve_gas::account::ERR_OUT_OF_GAS;
@@ -21,33 +22,35 @@ fn test_block_exec() {
     storage.apply_changes(state_changes).unwrap();
 
     // query atom
-    let atom_id = TestAppStf::query(
-        &storage,
-        &mut codes,
-        evolve_ns::GLOBAL_NAME_SERVICE_REF.0,
-        &ResolveNameMsg {
-            name: "atom".to_string(),
-        },
-        GasCounter::infinite(),
-    )
-    .unwrap()
-    .get::<Option<AccountId>>()
-    .unwrap()
-    .unwrap();
+    let atom_id = STF
+        .query(
+            &storage,
+            &mut codes,
+            evolve_ns::GLOBAL_NAME_SERVICE_REF.0,
+            &ResolveNameMsg {
+                name: "atom".to_string(),
+            },
+            GasCounter::infinite(),
+        )
+        .unwrap()
+        .get::<Option<AccountId>>()
+        .unwrap()
+        .unwrap();
 
-    let poa_id = TestAppStf::query(
-        &storage,
-        &mut codes,
-        evolve_ns::GLOBAL_NAME_SERVICE_REF.0,
-        &ResolveNameMsg {
-            name: "poa".to_string(),
-        },
-        GasCounter::infinite(),
-    )
-    .unwrap()
-    .get::<Option<AccountId>>()
-    .unwrap()
-    .unwrap();
+    let poa_id = STF
+        .query(
+            &storage,
+            &mut codes,
+            evolve_ns::GLOBAL_NAME_SERVICE_REF.0,
+            &ResolveNameMsg {
+                name: "poa".to_string(),
+            },
+            GasCounter::infinite(),
+        )
+        .unwrap()
+        .get::<Option<AccountId>>()
+        .unwrap()
+        .unwrap();
 
     // create tx of alice sending money to bob
     let ok_tx = Tx {
@@ -76,10 +79,7 @@ fn test_block_exec() {
     };
 
     // execute first block
-    let block = Block {
-        height: 0,
-        txs: vec![ok_tx, out_of_gas_tx],
-    };
+    let block = TendermintBlock::make_for_testing(vec![ok_tx, out_of_gas_tx]);
 
     let (mut block_results, new_state) = STF.apply_block(&storage, &codes, &block);
 

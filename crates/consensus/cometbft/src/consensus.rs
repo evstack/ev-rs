@@ -2,7 +2,7 @@ use crate::types::{extract_begin_end_block_events, TendermintBlock};
 use evolve_cometbft_account_trait::consensus_account::{
     AbciValsetManagerAccountRef, Pubkey, ValidatorUpdate,
 };
-use evolve_core::{AccountId, SdkResult};
+use evolve_core::{ReadonlyKV, SdkResult};
 use evolve_server_core::{
     AccountsCodeStorage, BeginBlocker, EndBlocker, PostTxExecution, Transaction, TxDecoder,
     TxValidator, WritableAccountsCodeStorage, WritableKV,
@@ -16,6 +16,11 @@ use tendermint::AppHash;
 pub type InitChainer<Stf, Storage, AccountCodes> =
     for<'a> fn(&'a Stf, &'a Storage, &'a AccountCodes) -> SdkResult<ExecutionState<'a, Storage>>;
 
+pub trait Storage: WritableKV + ReadonlyKV {
+    /// Returning zero means we did not do genesis yet.
+    fn get_latest_block(&self) -> u64;
+}
+
 pub struct Consensus<A, T, D, Bb, Eb, TxVal, Pt, S> {
     height: Height,
     decoder: D,
@@ -23,10 +28,13 @@ pub struct Consensus<A, T, D, Bb, Eb, TxVal, Pt, S> {
     account_codes: A,
     stf: Stf<T, TendermintBlock<T>, Bb, TxVal, Eb, Pt>,
     init_chainer: InitChainer<Stf<T, TendermintBlock<T>, Bb, TxVal, Eb, Pt>, S, A>,
+    valset_manager_account_name: &'static str,
 }
 
 impl<A: WritableAccountsCodeStorage, T, D, Bb, Eb, TxVal, Pt, S>
     Consensus<A, T, D, Bb, Eb, TxVal, Pt, S>
+where
+    S: Storage,
 {
     pub fn new(
         decoder: D,
@@ -34,14 +42,18 @@ impl<A: WritableAccountsCodeStorage, T, D, Bb, Eb, TxVal, Pt, S>
         account_codes: A,
         stf: Stf<T, TendermintBlock<T>, Bb, TxVal, Eb, Pt>,
         init_chainer: InitChainer<Stf<T, TendermintBlock<T>, Bb, TxVal, Eb, Pt>, S, A>,
+        valset_manager_account_name: &'static str,
     ) -> Self {
+        // get height
+        let latest_block = storage.get_latest_block();
         Self {
-            height: Height::try_from(0u64).unwrap(),
+            height: Height::try_from(latest_block).unwrap(),
             decoder,
             storage,
             account_codes,
             stf,
             init_chainer,
+            valset_manager_account_name,
         }
     }
 }
@@ -64,6 +76,7 @@ where
             storage: self.storage.clone(),
             stf: self.stf.clone(),
             init_chainer: self.init_chainer,
+            valset_manager_account_name: self.valset_manager_account_name,
         }
     }
 }
@@ -91,12 +104,14 @@ where
                 .apply_block(&self.storage, &self.account_codes, &block);
 
         // extract valset changes
+
+        // extract valset changes
         let valset_changes = self
             .stf
-            .run_with_ref(
+            .resolve_and_run_as_ref(
                 &new_state,
                 &self.account_codes,
-                AccountId::new(65539), // TODO fix me
+                self.valset_manager_account_name.to_string(),
                 |valset_manager_account: AbciValsetManagerAccountRef, env| {
                     valset_manager_account.valset_changes(env)
                 },

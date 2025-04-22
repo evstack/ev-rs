@@ -1,3 +1,4 @@
+use base64::Engine;
 use evolve_core::events_api::Event;
 use evolve_core::ErrorCode;
 use evolve_server_core::{Block, TxDecoder};
@@ -60,10 +61,7 @@ impl<T> TendermintBlock<T> {
         }
     }
 
-    pub fn extract_tx_results(
-        self: &mut TendermintBlock<T>,
-        mut stf_block_results: BlockResult,
-    ) -> Vec<ExecTxResult> {
+    pub fn extract_tx_results(&mut self, mut stf_block_results: BlockResult) -> Vec<ExecTxResult> {
         let decode_history = core::mem::take(&mut self.decode_history);
         let mut txs_results = Vec::with_capacity(decode_history.len());
         let mut stf_tx_results = core::mem::take(&mut stf_block_results.tx_results)
@@ -83,10 +81,11 @@ impl<T> TendermintBlock<T> {
                         gas_used: stf_tx_result.gas_used.try_into().unwrap(),
                         events: core::mem::take(&mut stf_tx_result.events)
                             .into_iter()
-                            .map(evolve_event_into_comet_event)
+                            // We can now unify event conversion using our new helper function
+                            .map(|evt| evolve_event_into_comet_event(evt, "tx"))
                             .collect(),
                         codespace: "".to_string(),
-                    })
+                    });
                 }
                 Decoded::Err(e) => txs_results.push(ExecTxResult {
                     code: tendermint::abci::Code::Err(NonZeroU32::new(1).unwrap()),
@@ -105,58 +104,6 @@ impl<T> TendermintBlock<T> {
     }
 }
 
-pub(crate) fn extract_begin_end_block_events(result: &mut BlockResult) -> Vec<AbciEvent> {
-    // Pre-allocate only once based on the total number of events
-    let capacity = result.begin_block_events.len() + result.end_block_events.len();
-    let mut all_events = Vec::with_capacity(capacity);
-
-    // Extract begin_block events
-    let begin_block_events = core::mem::take(&mut result.begin_block_events);
-    all_events.extend(events_into_abci(begin_block_events, "begin_block"));
-
-    // Extract end_block events
-    let end_block_events = core::mem::take(&mut result.end_block_events);
-    all_events.extend(events_into_abci(end_block_events, "end_block"));
-
-    all_events
-}
-
-fn events_into_abci<I>(events: I, scope: &str) -> Vec<AbciEvent>
-where
-    I: IntoIterator<Item = Event>,
-{
-    events
-        .into_iter()
-        .map(|evt| AbciEvent {
-            kind: evt.name,
-            attributes: vec![
-                make_attribute("scope", scope),
-                make_attribute(
-                    "contents",
-                    evt.contents
-                        .into_bytes()
-                        .expect("unable to convert event to bytes"),
-                ),
-            ],
-        })
-        .collect()
-}
-
-fn make_attribute<K, V>(key: K, value: V) -> EventAttribute
-where
-    K: Into<String>,
-    V: AsRef<[u8]>,
-{
-    // Base64-encode the value, ensuring it's a valid UTF-8 string
-    let encoded_value = base64::encode(value.as_ref());
-
-    EventAttribute::V037(tendermint::abci::v0_37::EventAttribute {
-        key: key.into(),
-        value: encoded_value,
-        index: false,
-    })
-}
-
 impl<T> Block<T> for TendermintBlock<T> {
     fn height(&self) -> u64 {
         self.height
@@ -168,10 +115,83 @@ impl<T> Block<T> for TendermintBlock<T> {
     }
 }
 
-fn evolve_event_into_comet_event(
-    _event: evolve_core::events_api::Event,
-) -> tendermint::abci::Event {
-    todo!("impl")
+/// Extract the events from BlockResult's `begin_block_events` and `end_block_events`
+/// by converting them to CometBFT/Tendermint events using a unified helper.
+pub(crate) fn extract_begin_end_block_events(result: &mut BlockResult) -> Vec<AbciEvent> {
+    // Pre-allocate based on total number of events
+    let capacity = result.begin_block_events.len() + result.end_block_events.len();
+    let mut all_events = Vec::with_capacity(capacity);
+
+    // Extract begin_block events, marking scope as "begin_block"
+    let begin_block_events = core::mem::take(&mut result.begin_block_events);
+    all_events.extend(events_into_abci(begin_block_events, "begin_block"));
+
+    // Extract end_block events, marking scope as "end_block"
+    let end_block_events = core::mem::take(&mut result.end_block_events);
+    all_events.extend(events_into_abci(end_block_events, "end_block"));
+
+    all_events
+}
+
+/// Converts an `Event` into an ABCI (`CometBFT`) event, injecting a `scope` attribute.
+fn evolve_event_into_comet_event(evt: Event, scope: &str) -> AbciEvent {
+    AbciEvent {
+        kind: evt.name,
+        attributes: vec![
+            make_attribute("scope", scope),
+            make_attribute(
+                "contents",
+                evt.contents
+                    .into_bytes()
+                    .expect("unable to convert event to bytes"),
+            ),
+        ],
+    }
+}
+
+/// Helper: convert an entire iterator of `Event` into a vector of `AbciEvent` using a scope.
+fn events_into_abci<I>(events: I, scope: &str) -> Vec<AbciEvent>
+where
+    I: IntoIterator<Item = Event>,
+{
+    events
+        .into_iter()
+        .map(|evt| evolve_event_into_comet_event(evt, scope))
+        .collect()
+}
+
+/// Helper: build a single attribute with base64-encoded value
+fn make_attribute<K, V>(key: K, value: V) -> EventAttribute
+where
+    K: Into<String>,
+    V: AsRef<[u8]>,
+{
+    let encoded_value = base64::engine::general_purpose::STANDARD.encode(value.as_ref());
+    EventAttribute::V037(tendermint::abci::v0_37::EventAttribute {
+        key: key.into(),
+        value: encoded_value,
+        index: false,
+    })
+}
+
+impl<T> TendermintBlock<T> {
+    #[cfg(feature = "testing")]
+    pub fn make_for_testing(txs: Vec<T>) -> Self {
+        Self {
+            txs_ok: txs,
+            decode_history: vec![],
+            decided_last_commit: CommitInfo {
+                round: Default::default(),
+                votes: vec![],
+            },
+            misbehaviour: vec![],
+            hash: vec![],
+            time_unix_ms: 0,
+            next_validators_hash: vec![],
+            proposer_address: vec![],
+            height: 0,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -208,9 +228,7 @@ mod test {
             hash: Default::default(),
             time: Time::from_unix_timestamp(1, 1).unwrap(),
             next_validators_hash: Default::default(),
-            proposer_address: tendermint::account::Id::new([
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            ]),
+            proposer_address: tendermint::account::Id::new([0u8; 20]),
             height: Height::try_from(10u64).unwrap(),
         };
 

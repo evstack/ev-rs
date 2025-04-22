@@ -203,6 +203,7 @@ where
     }
 
     pub fn query<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a, R: InvokableMessage>(
+        &self,
         storage: &'a S,
         account_storage: &'a mut A,
         to: AccountId,
@@ -254,6 +255,20 @@ where
         let invoker = Invoker::new_for_query(exec_state, account_storage, GasCounter::infinite());
         let account_id_invoker = invoker.branch_query(account_id);
         handle(&account_id_invoker)
+    }
+
+    pub fn resolve_and_run_as_ref<T: From<AccountId>, R, S: ReadonlyKV, A: AccountsCodeStorage>(
+        &self,
+        storage: &S,
+        account_storage: &A,
+        account_name: String,
+        handle: impl FnOnce(T, &dyn Environment) -> SdkResult<R>,
+    ) -> SdkResult<R> {
+        let exec_state = ExecutionState::new(storage);
+        let invoker = Invoker::new_for_query(exec_state, account_storage, GasCounter::infinite());
+        let account_id = resolve_name(account_name, &invoker)?.ok_or(ERR_ACCOUNT_DOES_NOT_EXIST)?;
+        let account_id_invoker = invoker.branch_query(account_id);
+        handle(T::from(account_id), &account_id_invoker)
     }
 }
 

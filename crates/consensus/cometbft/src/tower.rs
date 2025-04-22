@@ -15,8 +15,7 @@ use evolve_server_core::{
     AccountsCodeStorage, BeginBlocker, EndBlocker, PostTxExecution, Transaction, TxDecoder,
     TxValidator, WritableKV,
 };
-use evolve_testapp::install_account_codes;
-use evolve_testing::server_mocks::AccountStorageMock;
+
 use tendermint::v0_38::abci::{response, Request, Response};
 use tower_abci::v038::{split, Server};
 
@@ -84,9 +83,6 @@ pub async fn start_server<A, T, D, Bb, Eb, TxVal, Pt, S>(
     Pt: PostTxExecution<T> + Send + 'static,
     S: WritableKV + Send + 'static,
 {
-    let mut codes = AccountStorageMock::new();
-    install_account_codes(&mut codes);
-
     // Split it into components.
     let (consensus, mempool, snapshot, info) = split::service(cns_impl, 1);
 

@@ -1,14 +1,14 @@
-mod cometbft;
+pub mod storage;
 #[cfg(test)]
 mod test_block_exec;
+pub mod types;
 
-use borsh::{BorshDeserialize, BorshSerialize};
+use crate::types::Tx;
+use borsh::{BorshDeserialize};
 use evolve_block_info::account::BlockInfo;
+use evolve_cometbft::types::TendermintBlock;
 use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
-use evolve_core::{
-    AccountId, Environment, FungibleAsset, InvokeRequest, InvokeResponse, ReadonlyKV, SdkResult,
-    ERR_ENCODING,
-};
+use evolve_core::{AccountId, Environment, InvokeResponse, ReadonlyKV, SdkResult, ERR_ENCODING};
 use evolve_fungible_asset::FungibleAssetMetadata;
 use evolve_gas::account::{GasService, GasServiceRef, StorageGasConfig};
 use evolve_ns::account::{NameService, NameServiceRef};
@@ -16,8 +16,7 @@ use evolve_poa::account::{Poa, PoaRef};
 use evolve_scheduler::scheduler_account::{Scheduler, SchedulerRef};
 use evolve_scheduler::server::{SchedulerBeginBlocker, SchedulerEndBlocker};
 use evolve_server_core::{
-    AccountsCodeStorage, Block as BlockTrait, PostTxExecution, Transaction, TxDecoder, TxValidator,
-    WritableAccountsCodeStorage,
+    AccountsCodeStorage, PostTxExecution, TxDecoder, TxValidator, WritableAccountsCodeStorage,
 };
 use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::Stf;
@@ -25,52 +24,6 @@ use evolve_token::account::{Token, TokenRef};
 
 pub const ALICE: AccountId = AccountId::new(100_000);
 pub const BOB: AccountId = AccountId::new(100_001);
-
-#[derive(BorshSerialize, BorshDeserialize)]
-pub struct Tx {
-    pub sender: AccountId,
-    pub recipient: AccountId,
-    pub request: InvokeRequest,
-    pub gas_limit: u64,
-    pub funds: Vec<FungibleAsset>,
-}
-
-impl Transaction for Tx {
-    fn sender(&self) -> AccountId {
-        self.sender
-    }
-
-    fn recipient(&self) -> AccountId {
-        self.recipient
-    }
-
-    fn request(&self) -> &InvokeRequest {
-        &self.request
-    }
-
-    fn gas_limit(&self) -> u64 {
-        self.gas_limit
-    }
-
-    fn funds(&self) -> &[FungibleAsset] {
-        self.funds.as_slice()
-    }
-}
-
-pub struct Block {
-    pub height: u64,
-    pub txs: Vec<Tx>,
-}
-
-impl BlockTrait<Tx> for Block {
-    fn height(&self) -> u64 {
-        self.height
-    }
-
-    fn txs(&self) -> &[Tx] {
-        self.txs.as_slice()
-    }
-}
 
 pub struct TxValidatorHandler;
 
@@ -93,34 +46,22 @@ impl PostTxExecution<Tx> for NoOpPostTx {
     }
 }
 
-pub type TestAppStf = TestAppStfWithCustomBlock<Block>;
-
-pub type TestAppStfWithCustomBlock<Block> =
-    Stf<Tx, Block, SchedulerBeginBlocker, TxValidatorHandler, SchedulerEndBlocker, NoOpPostTx>;
-
-pub const STF: Stf<
+pub type CustomStf = Stf<
     Tx,
-    Block,
+    TendermintBlock<Tx>,
     SchedulerBeginBlocker,
     TxValidatorHandler,
     SchedulerEndBlocker,
     NoOpPostTx,
-> = Stf::new(
+>;
+
+pub const STF: CustomStf = CustomStf::new(
     SchedulerBeginBlocker,
     SchedulerEndBlocker,
     TxValidatorHandler,
     NoOpPostTx,
 );
 
-pub const fn new_stf_with_custom_block<T: evolve_server_core::Block<Tx>>(
-) -> TestAppStfWithCustomBlock<T> {
-    TestAppStfWithCustomBlock::new(
-        SchedulerBeginBlocker,
-        SchedulerEndBlocker,
-        TxValidatorHandler,
-        NoOpPostTx,
-    )
-}
 #[derive(Clone)]
 pub struct TxDecoderImpl;
 
@@ -140,8 +81,8 @@ pub fn install_account_codes(codes: &mut impl WritableAccountsCodeStorage) {
     codes.add_code(Poa::new()).unwrap();
 }
 
-pub fn do_genesis<'a, S: ReadonlyKV, A: AccountsCodeStorage, B: BlockTrait<Tx>>(
-    stf: &TestAppStfWithCustomBlock<B>,
+pub fn do_genesis<'a, S: ReadonlyKV, A: AccountsCodeStorage>(
+    stf: &CustomStf,
     storage: &'a S,
     codes: &'a A,
 ) -> SdkResult<ExecutionState<'a, S>> {

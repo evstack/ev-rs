@@ -8,6 +8,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+evolve_stf.workspace = true
 
 [lints]
 workspace = true

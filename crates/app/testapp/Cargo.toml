@@ -20,10 +20,20 @@ evolve_token.workspace = true
 evolve_gas.workspace = true
 evolve_poa.workspace = true
 
+evolve_cometbft = { workspace = true, features = ["testing"] }
+
 borsh.workspace = true
+log.workspace = true
+tokio.workspace = true
+
+# TODO eventually move to dev deps as soon as we have a working storage engine
+evolve_testing.workspace = true
+
+
+
+simple_logger = { version = "5.0.0" }
 
 [dev-dependencies]
-evolve_testing.workspace = true
 
 [lints]
 workspace = true
