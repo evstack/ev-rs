@@ -1,4 +1,3 @@
-use crate::{do_genesis, install_account_codes, Tx, ALICE, BOB, STF};
 use evolve_cometbft::types::TendermintBlock;
 use evolve_core::{AccountId, Environment, InvokeRequest, SdkResult};
 use evolve_fungible_asset::TransferMsg;
@@ -7,6 +6,7 @@ use evolve_ns::account::ResolveNameMsg;
 use evolve_poa::account::Poa;
 use evolve_server_core::WritableKV;
 use evolve_stf::gas::GasCounter;
+use evolve_testapp::{do_genesis, install_account_codes, Tx, ALICE, BOB, STF};
 use evolve_testing::server_mocks::{AccountStorageMock, StorageMock};
 
 #[test]
@@ -17,7 +17,7 @@ fn test_block_exec() {
     install_account_codes(&mut codes);
 
     // do genesis
-    let state = do_genesis(&STF, &mut storage, &mut codes).unwrap();
+    let state = do_genesis(&STF, &codes, &storage).unwrap();
     let state_changes = state.into_changes().unwrap();
     storage.apply_changes(state_changes).unwrap();
 

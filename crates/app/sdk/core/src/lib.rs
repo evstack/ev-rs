@@ -9,6 +9,7 @@ pub mod low_level;
 pub mod message;
 pub mod runtime_api;
 pub mod storage_api;
+pub mod unique_api;
 
 pub use error::ErrorCode;
 
@@ -88,6 +89,42 @@ pub trait ReadonlyKV {
 pub trait InvokableMessage: Encodable + Clone {
     const FUNCTION_IDENTIFIER: u64;
     const FUNCTION_IDENTIFIER_NAME: &'static str;
+}
+
+/// A macro that ensures a condition holds true. If not, returns an error.
+///
+/// # Usage
+///
+/// ```rust
+/// # use std::error::Error;
+/// #
+/// # // Suppose we have an enum for our errors:
+/// #[derive(Debug, )]
+/// enum MyError {
+///     SomeError,
+///     AnotherError,
+/// }
+///
+/// // Return type must be Result<T, Something>
+/// fn example_function(value: i32) -> Result<(), MyError> {
+///     use evolve_core::ensure;
+///
+///     ensure!(value > 10, MyError::SomeError);
+///     // Proceed if the condition is satisfied
+///     Ok(())
+/// }
+/// #
+/// # fn main() {
+/// #     example_function(11).unwrap();
+/// # }
+/// ```
+#[macro_export]
+macro_rules! ensure {
+    ($cond:expr, $err:expr) => {
+        if !$cond {
+            return Err($err.into());
+        }
+    };
 }
 
 #[cfg(test)]

@@ -9,6 +9,7 @@ pub trait Transaction {
     fn request(&self) -> &InvokeRequest;
     fn gas_limit(&self) -> u64;
     fn funds(&self) -> &[FungibleAsset];
+    fn compute_identifier(&self) -> [u8; 32];
 }
 
 pub trait TxDecoder<T> {
@@ -17,6 +18,7 @@ pub trait TxDecoder<T> {
 
 pub trait Block<Tx> {
     fn height(&self) -> u64;
+    // TODO: make mut
     fn txs(&self) -> &[Tx];
 }
 

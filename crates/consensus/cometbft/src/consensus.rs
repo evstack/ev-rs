@@ -14,7 +14,7 @@ use tendermint::block::Height;
 use tendermint::AppHash;
 
 pub type InitChainer<Stf, Storage, AccountCodes> =
-    for<'a> fn(&'a Stf, &'a Storage, &'a AccountCodes) -> SdkResult<ExecutionState<'a, Storage>>;
+    for<'a> fn(&'a Stf, &'a AccountCodes, &'a Storage) -> SdkResult<ExecutionState<'a, Storage>>;
 
 pub trait Storage: WritableKV + ReadonlyKV {
     /// Returning zero means we did not do genesis yet.
@@ -27,6 +27,7 @@ pub struct Consensus<A, T, D, Bb, Eb, TxVal, Pt, S> {
     storage: S,
     account_codes: A,
     stf: Stf<T, TendermintBlock<T>, Bb, TxVal, Eb, Pt>,
+    #[allow(clippy::type_complexity)]
     init_chainer: InitChainer<Stf<T, TendermintBlock<T>, Bb, TxVal, Eb, Pt>, S, A>,
     valset_manager_account_name: &'static str,
 }
@@ -36,6 +37,7 @@ impl<A: WritableAccountsCodeStorage, T, D, Bb, Eb, TxVal, Pt, S>
 where
     S: Storage,
 {
+    #[allow(clippy::type_complexity)]
     pub fn new(
         decoder: D,
         storage: S,
@@ -169,7 +171,7 @@ where
         log::debug!("processing init chain: {:?}", genesis);
 
         let genesis_result: SdkResult<ExecutionState<_>> =
-            (self.init_chainer)(&self.stf, &self.storage, &self.account_codes);
+            (self.init_chainer)(&self.stf, &self.account_codes, &self.storage);
         let state_changes = genesis_result
             .expect("init chain failed")
             .into_changes()

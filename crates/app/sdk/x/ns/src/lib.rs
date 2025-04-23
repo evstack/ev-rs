@@ -7,16 +7,19 @@ pub const GLOBAL_NAME_SERVICE_REF: NameServiceRef = NameServiceRef::new(AccountI
 
 /// This is kind of magic right now, but NameService is a global account sitting at a very well known
 /// address, contrary to others.
-pub fn resolve_name(name: String, env: &dyn Environment) -> SdkResult<Option<AccountId>> {
-    GLOBAL_NAME_SERVICE_REF.resolve_name(name, env)
+pub fn resolve_name(
+    name: impl Into<String>,
+    env: &dyn Environment,
+) -> SdkResult<Option<AccountId>> {
+    GLOBAL_NAME_SERVICE_REF.resolve_name(name.into(), env)
 }
 
 /// Resolves the given name as an account ref.
 pub fn resolve_as_ref<T: From<AccountId>>(
-    name: String,
+    name: impl Into<String>,
     env: &dyn Environment,
 ) -> SdkResult<Option<T>> {
-    resolve_name(name.clone(), env).map(|option| option.map(From::from))
+    resolve_name(name, env).map(|option| option.map(From::from))
 }
 
 #[account_impl(NameService)]

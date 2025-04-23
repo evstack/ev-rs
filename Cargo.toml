@@ -18,7 +18,7 @@ resolver = "2"
 [workspace.package]
 license = "Apache-2.0"
 repository = "https://github.com/01builders/evolve"
-rust-version = "1.81.0"
+rust-version = "1.86.0"
 
 [workspace.dependencies]
 evolve_collections = { path = "crates/app/sdk/collections" }
@@ -30,11 +30,13 @@ evolve_fungible_asset = { path = "crates/app/sdk/standards/evolve_fungible_asset
 
 evolve_block_info = { path = "crates/app/sdk/x/block_info" }
 evolve_events = { path = "crates/app/sdk/x/events" }
+evolve_escrow = { path = "crates/app/sdk/x/escrow" }
 evolve_gas = { path = "crates/app/sdk/x/gas" }
 evolve_ns = { path = "crates/app/sdk/x/ns" }
 evolve_poa = { path = "crates/app/sdk/x/poa" }
 evolve_scheduler = { path = "crates/app/sdk/x/scheduler" }
 evolve_token = { path = "crates/app/sdk/x/token" }
+evolve_unique = { path = "crates/app/sdk/x/unique" }
 
 evolve_cometbft = { path = "crates/consensus/cometbft" }
 evolve_cometbft_account_trait = { path = "crates/consensus/cometbft_account_trait" }
@@ -48,9 +50,9 @@ evolve_testapp = { path = "crates/app/testapp" }
 borsh = { features = ["derive"], version = "1.5.5" }
 log = { version = "0.4.27" }
 tokio = { version = "1.44.2", features = ["full"] }
-bytes = "1.10.1"
 futures = "0.3.31"
 base64 = "0.22.1"
+sha2 = { version = "0.10.8" }
 
 [workspace.lints.rust]
 # missing_docs = "deny"

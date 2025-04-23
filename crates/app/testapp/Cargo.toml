@@ -14,6 +14,7 @@ evolve_server_core.workspace = true
 evolve_stf.workspace = true
 
 evolve_block_info.workspace = true
+evolve_escrow.workspace = true
 evolve_ns.workspace = true
 evolve_scheduler.workspace = true
 evolve_token.workspace = true
@@ -29,6 +30,7 @@ tokio.workspace = true
 # TODO eventually move to dev deps as soon as we have a working storage engine
 evolve_testing.workspace = true
 
+sha2.workspace = true
 
 
 simple_logger = { version = "5.0.0" }

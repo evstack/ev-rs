@@ -2,18 +2,10 @@ use evolve_core::{ErrorCode, ReadonlyKV};
 use evolve_server_core::{StateChange, WritableKV};
 use evolve_testing::server_mocks::StorageMock;
 
+#[derive(Default)]
 pub struct Storage {
     inner: StorageMock,
     height: u64,
-}
-
-impl Default for Storage {
-    fn default() -> Self {
-        Self {
-            inner: Default::default(),
-            height: 0,
-        }
-    }
 }
 
 impl WritableKV for Storage {

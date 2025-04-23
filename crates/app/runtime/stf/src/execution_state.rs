@@ -62,6 +62,7 @@ impl StateChange {
 pub struct Checkpoint {
     undo_log_index: usize,
     events_index: usize,
+    unique_objects_created: u64,
 }
 
 /// The checkpoint overlay for a read-only store `S`.
@@ -79,6 +80,8 @@ pub struct ExecutionState<'a, S> {
     undo_log: Vec<StateChange>,
     /// Events emitted.
     events: Vec<Event>,
+    /// Number of unique objects created.
+    unique_objects: u64,
 }
 
 impl<'a, S> ExecutionState<'a, S> {
@@ -88,6 +91,7 @@ impl<'a, S> ExecutionState<'a, S> {
             overlay: HashMap::new(),
             undo_log: Vec::new(),
             events: Vec::new(),
+            unique_objects: 0,
         }
     }
 
@@ -99,6 +103,17 @@ impl<'a, S> ExecutionState<'a, S> {
     /// Pops the events
     pub fn pop_events(&mut self) -> Vec<Event> {
         std::mem::take(&mut self.events)
+    }
+
+    /// Creates a new unique object id.
+    pub fn next_unique_object_id(&mut self) -> u64 {
+        self.unique_objects += 1;
+        self.unique_objects
+    }
+
+    /// Reports the number of objects created during this execution.
+    pub fn created_unique_objects(&self) -> u64 {
+        self.unique_objects
     }
 
     pub fn into_changes(self) -> SdkResult<Vec<CoreStateChange>> {
@@ -171,6 +186,7 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
         Checkpoint {
             undo_log_index: self.undo_log.len(),
             events_index: self.events.len(),
+            unique_objects_created: self.unique_objects,
         }
     }
 
@@ -183,6 +199,9 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
 
         // truncate events to the given checkpoint
         self.events.truncate(checkpoint.events_index);
+
+        // restore to previous unique object.
+        self.unique_objects = checkpoint.unique_objects_created;
     }
 }
 

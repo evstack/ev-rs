@@ -1,20 +1,22 @@
 [package]
-name = "evolve_block_info"
+name = "evolve_escrow"
 version = "0.1.0"
 edition = "2021"
-repository.workspace = true
 license.workspace = true
+repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
 evolve_core.workspace = true
 evolve_collections.workspace = true
 evolve_macros.workspace = true
-evolve_ns.workspace = true
-evolve_testing.workspace = true
 
-evolve_server_core.workspace = true
+evolve_events.workspace = true
+evolve_block_info.workspace = true
+evolve_unique.workspace = true
+evolve_fungible_asset.workspace = true
 
 borsh.workspace = true
+
 [lints]
 workspace = true
