@@ -22,5 +22,7 @@ mod fa_interface {
         #[query]
         fn get_balance(&self, account: AccountId, env: &dyn Environment)
             -> SdkResult<Option<u128>>;
+        #[query]
+        fn total_supply(&self, env: &dyn Environment) -> SdkResult<u128>;
     }
 }

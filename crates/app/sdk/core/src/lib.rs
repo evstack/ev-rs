@@ -1,10 +1,12 @@
 use crate::encoding::Encodable;
+pub use crate::fungible_asset::FungibleAsset;
 pub use crate::message::{InvokeRequest, InvokeResponse, Message};
 use borsh::{BorshDeserialize, BorshSerialize};
 
 pub mod encoding;
 pub mod error;
 pub mod events_api;
+pub mod fungible_asset;
 pub mod low_level;
 pub mod message;
 pub mod runtime_api;
@@ -18,6 +20,7 @@ pub const ERR_UNKNOWN_FUNCTION: ErrorCode = ErrorCode::new(1, "unknown function"
 pub const ERR_ACCOUNT_NOT_INITIALIZED: ErrorCode = ErrorCode::new(2, "account not initialized");
 pub const ERR_UNAUTHORIZED: ErrorCode = ErrorCode::new(3, "unauthorized");
 pub const ERR_NOT_PAYABLE: ErrorCode = ErrorCode::new(4, "not payable");
+pub const ERR_ONE_COIN: ErrorCode = ErrorCode::new(5, "one coin");
 
 pub type SdkResult<T> = Result<T, ErrorCode>;
 
@@ -49,13 +52,6 @@ impl AccountId {
         self.0.to_be_bytes().into()
     }
 }
-
-#[derive(Clone, Debug, BorshSerialize, BorshDeserialize, Eq, PartialEq)]
-pub struct FungibleAsset {
-    pub asset_id: AccountId,
-    pub amount: u128,
-}
-
 pub trait Environment {
     fn whoami(&self) -> AccountId;
     fn sender(&self) -> AccountId;
@@ -125,6 +121,15 @@ macro_rules! ensure {
             return Err($err.into());
         }
     };
+}
+
+pub fn one_coin(env: &dyn Environment) -> SdkResult<FungibleAsset> {
+    let funds = env.funds();
+    ensure!(funds.len() == 1, ERR_ONE_COIN);
+    Ok(FungibleAsset {
+        asset_id: funds[0].asset_id,
+        amount: funds[0].amount,
+    })
 }
 
 #[cfg(test)]

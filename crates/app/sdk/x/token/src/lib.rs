@@ -51,6 +51,23 @@ pub mod account {
             Ok(())
         }
 
+        pub fn mint_unchecked(
+            &self,
+            recipient: AccountId,
+            amount: u128,
+            env: &mut dyn Environment,
+        ) -> SdkResult<()> {
+            self.balances.update(
+                &recipient,
+                |balance| Ok(balance.unwrap_or_default() + amount),
+                env,
+            )?;
+            self.total_supply
+                .update(|supply| Ok(supply.unwrap_or_default() + amount), env)?;
+
+            Ok(())
+        }
+
         #[exec]
         pub fn mint(
             &self,
@@ -61,13 +78,22 @@ pub mod account {
             if self.supply_manager.get(env)? != Some(env.sender()) {
                 return Err(ERR_UNAUTHORIZED);
             }
+            self.mint_unchecked(recipient, amount, env)
+        }
+
+        pub fn burn_unchecked(
+            &self,
+            from_account: AccountId,
+            amount: u128,
+            env: &mut dyn Environment,
+        ) -> SdkResult<()> {
             self.balances.update(
-                &recipient,
-                |balance| Ok(balance.unwrap_or_default() + amount),
+                &from_account,
+                |balance| Ok(balance.unwrap_or_default() - amount),
                 env,
             )?;
             self.total_supply
-                .update(|supply| Ok(supply.unwrap_or_default() + amount), env)?;
+                .update(|supply| Ok(supply.unwrap_or_default() - amount), env)?;
 
             Ok(())
         }
@@ -82,15 +108,7 @@ pub mod account {
             if self.supply_manager.get(env)? != Some(env.sender()) {
                 return Err(ERR_UNAUTHORIZED);
             }
-            self.balances.update(
-                &from_account,
-                |balance| Ok(balance.unwrap_or_default() - amount),
-                env,
-            )?;
-            self.total_supply
-                .update(|supply| Ok(supply.unwrap_or_default() - amount), env)?;
-
-            Ok(())
+            self.burn_unchecked(from_account, amount, env)
         }
     }
 
@@ -131,6 +149,11 @@ pub mod account {
             env: &dyn Environment,
         ) -> SdkResult<Option<u128>> {
             self.balances.may_get(&account, env)
+        }
+
+        #[query]
+        fn total_supply(&self, env: &dyn Environment) -> SdkResult<u128> {
+            self.total_supply.get(env)
         }
     }
 }

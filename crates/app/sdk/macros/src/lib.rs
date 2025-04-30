@@ -682,7 +682,7 @@ fn generate_wrapper_struct(
     quote! {
         /// A generated "wrapper" struct that holds the account-id pointer
         /// and provides convenience methods for init/exec/query calls.
-        #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize, ::core::clone::Clone)]
+        #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize, ::core::clone::Clone, ::core::cmp::PartialEq, ::core::cmp::Eq, ::core::cmp::Ord, ::core::cmp::PartialOrd, ::core::marker::Copy)]
         pub struct #wrapper_ident(pub ::evolve_core::AccountId);
 
         impl #wrapper_ident {

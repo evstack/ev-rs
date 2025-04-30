@@ -62,6 +62,10 @@ where
         }
     }
 
+    pub fn exists(&self, key: &K, backend: &dyn Environment) -> SdkResult<bool> {
+        self.may_get(key, backend).map(|v| v.is_some())
+    }
+
     pub fn remove(&self, key: &K, backend: &mut dyn Environment) -> SdkResult<()> {
         backend.do_exec(
             STORAGE_ACCOUNT_ID,
