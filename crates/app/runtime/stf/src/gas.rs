@@ -101,10 +101,10 @@ impl GasCounter {
                 gas_used,
                 ..
             } => {
-                *gas_used += gas;
-                if *gas_used > *gas_limit {
+                if *gas_used + gas > *gas_limit {
                     return Err(ERR_OUT_OF_GAS);
                 }
+                *gas_used += gas;
                 Ok(())
             }
         }
