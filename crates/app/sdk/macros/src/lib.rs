@@ -9,139 +9,197 @@ use syn::{
     ItemMod, ItemTrait, Pat, ReturnType, Signature, TraitItem, Type, TypePath,
 };
 
-/// This attribute macro generates:
-/// 1) Message types (e.g. `InitializeMsg`, `TransferMsg`, etc.).
-/// 2) An `impl AccountCode` for the target struct/impl (if found).
-/// 3) A "wrapper account" struct (e.g. `AssetAccount`) that has convenience methods.
+/// This attribute macro generates code for smart contracts in the Evolve SDK, including:
+/// 1) Message types (e.g. `InitializeMsg`, `TransferMsg`, etc.) that define contract interfaces
+/// 2) An `impl AccountCode` for the target struct/impl (if found)
+/// 3) A "wrapper account" struct (e.g. `AssetAccount`) that has convenience methods
 ///
-/// **Now** it also recognizes `(payable)` on `#[init(...)]` or `#[exec(...)]`:
-/// - For **non-payable** `init/exec`, auto-injects `if !env.funds().is_empty() { ... }`.
-/// - For **payable** `init/exec`, no check is injected.
-/// - For **wrapper** code, if payable then an extra `funds: Vec<FungibleAsset>` argument is required.
-/// - **Queries** can never be `payable`; if someone writes `#[query(payable)]`, we error out.
+/// It handles payable and non-payable functions:
+/// - For **non-payable** `init/exec`, auto-injects a funds check
+/// - For **payable** `init/exec`, no check is injected
+/// - For **wrapper** code with payable functions, adds an extra `funds: Vec<FungibleAsset>` argument
+/// - **Queries** can never be `payable`
 #[proc_macro_attribute]
 pub fn account_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
+    // Parse inputs
     let account_ident = parse_macro_input!(attr as Ident);
     let mut module = parse_macro_input!(item as ItemMod);
 
-    // Extract the "inline" contents of the module
+    // Extract module content
     let content = match get_module_content(&mut module) {
         Ok(content) => content,
         Err(err) => return err.to_compile_error().into(),
     };
 
-    // Collect the annotated functions
-    let (maybe_impl_info, trait_info) = match collect_annotated_items(&account_ident, content) {
-        Ok(val) => val,
-        Err(err) => return err.to_compile_error().into(),
-    };
+    // Process the module and generate code
+    match process_account_impl(&account_ident, content) {
+        Ok(()) => TokenStream::from(quote! { #module }),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
 
-    // Merge sets of init/exec/query
+/// Main processing function for account_impl that orchestrates:
+/// 1. Collecting annotated functions from implementation and trait
+/// 2. Merging these functions across sources
+/// 3. Generating code components
+/// 4. Extending the module with generated code
+fn process_account_impl(account_ident: &Ident, content: &mut Vec<Item>) -> Result<(), syn::Error> {
+    // Collect the annotated functions
+    let (maybe_impl_info, trait_info) = collect_annotated_items(account_ident, content)?;
+
+    // Merge sets of init/exec/query functions
     let init_fn = merge_init(
         &maybe_impl_info.as_ref().and_then(|f| f.init_fn.clone()),
         &trait_info.init_fn,
-    );
-    if let Err(e) = init_fn {
-        return e.to_compile_error().into();
-    }
-    let init_fn = init_fn.unwrap();
+    )?;
 
-    let exec_fns = match merge_functions(
+    let exec_fns = merge_functions(
         maybe_impl_info
             .as_ref()
             .map(|f| &f.exec_fns[..])
             .unwrap_or(&[]),
         &trait_info.exec_fns,
-    ) {
-        Ok(e) => e,
-        Err(e) => return e.to_compile_error().into(),
-    };
-    let query_fns = match merge_functions(
+    )?;
+
+    let query_fns = merge_functions(
         maybe_impl_info
             .as_ref()
             .map(|f| &f.query_fns[..])
             .unwrap_or(&[]),
         &trait_info.query_fns,
-    ) {
-        Ok(q) => q,
-        Err(e) => return e.to_compile_error().into(),
-    };
+    )?;
 
-    // 1) Generate message structs for all discovered functions
+    // Generate code
+    let generated_items = generate_code_components(
+        account_ident,
+        &init_fn,
+        &exec_fns,
+        &query_fns,
+        maybe_impl_info.is_some(),
+    )?;
+
+    // Add generated items to the module
+    content.extend(generated_items);
+
+    Ok(())
+}
+
+/// Generates all necessary code components and returns them as a vector of Items
+/// that can be added to the module.
+fn generate_code_components(
+    account_ident: &Ident,
+    init_fn: &Option<FunctionInfo>,
+    exec_fns: &[FunctionInfo],
+    query_fns: &[FunctionInfo],
+    has_impl: bool,
+) -> Result<Vec<Item>, syn::Error> {
+    // Generate all code
+    let code = generate_all_code(account_ident, init_fn, exec_fns, query_fns, has_impl)?;
+
+    // Parse into items
+    let file: syn::File = syn::parse2(code)?;
+    Ok(file.items)
+}
+
+/// Generates all code components as a TokenStream, including:
+/// 1. Message structs for init/exec/query functions
+/// 2. AccountCode implementation (if applicable)
+/// 3. Wrapper struct with convenience methods
+fn generate_all_code(
+    account_ident: &Ident,
+    init_fn: &Option<FunctionInfo>,
+    exec_fns: &[FunctionInfo],
+    query_fns: &[FunctionInfo],
+    has_impl: bool,
+) -> Result<proc_macro2::TokenStream, syn::Error> {
+    // 1) Generate message structs
     let mut generated_msgs = Vec::new();
     if let Some(ref info) = init_fn {
         generated_msgs.push(generate_msg_struct(info));
     }
-    for info in &exec_fns {
+    for info in exec_fns {
         generated_msgs.push(generate_msg_struct(info));
     }
-    for info in &query_fns {
+    for info in query_fns {
         generated_msgs.push(generate_msg_struct(info));
     }
 
-    // 2) Generate the `impl AccountCode` if we have an impl for that type
-    let accountcode_impl = if let Some(ref impl_info) = maybe_impl_info {
-        generate_accountcode_impl(
-            &account_ident,
-            &impl_info.init_fn,
-            &impl_info.exec_fns,
-            &impl_info.query_fns,
-        )
+    // 2) Generate AccountCode implementation if needed
+    let accountcode_impl = if has_impl {
+        generate_accountcode_impl(account_ident, init_fn, exec_fns, query_fns)
     } else {
         quote! {}
     };
 
-    // 3) Generate the "wrapper account" struct + impl
-    let wrapper_struct = generate_wrapper_struct(&account_ident, &init_fn, &exec_fns, &query_fns);
+    // 3) Generate wrapper struct and implementation
+    let wrapper_struct = generate_wrapper_struct(account_ident, init_fn, exec_fns, query_fns);
 
-    // Combine it all
-    let file: syn::File = match syn::parse2(quote! {
+    // Combine all components
+    Ok(quote! {
         #(#generated_msgs)*
         #accountcode_impl
         #wrapper_struct
-    }) {
-        Ok(file) => file,
-        Err(e) => return e.to_compile_error().into(),
-    };
-
-    // Append
-    content.extend(file.items);
-    TokenStream::from(quote! { #module })
+    })
 }
 
-// -----------------------------------------
-//  Data Structures
-// -----------------------------------------
-
-/// Which kind of annotated function we found, with a payable flag for init/exec.
+/// Represents the kind of function (init, exec, query) and whether it can receive funds.
 #[derive(Clone, PartialEq)]
 enum FunctionKind {
+    /// Initialization function that may or may not be payable
     Init { payable: bool },
+    /// Execution function that may or may not be payable
     Exec { payable: bool },
+    /// Query function (never payable)
     Query,
 }
 
-/// Stores details about each annotated function.
+/// Stores detailed information about an annotated function discovered in the code.
 #[derive(Clone)]
 struct FunctionInfo {
+    /// The original function name from the code
     fn_name: Ident,
+    /// The generated message struct name (e.g., InitializeMsg)
     msg_name: Ident,
+    /// What kind of function this is (init/exec/query + payable status)
     kind: FunctionKind,
+    /// Parameters extracted from the function signature (for message fields)
     params: Vec<(Ident, Type)>,
-    return_type: Type, // the T in `-> SdkResult<T>`
+    /// Return type (the T in `-> SdkResult<T>`)
+    return_type: Type,
 }
 
-/// Holds the aggregated info (init/exec/query) from a particular impl or trait.
+/// Holds the collected annotated functions from an impl block or trait definition.
 struct CollectedInfo {
+    /// The single initialization function (if any)
     init_fn: Option<FunctionInfo>,
+    /// All execution functions
     exec_fns: Vec<FunctionInfo>,
+    /// All query functions
     query_fns: Vec<FunctionInfo>,
 }
 
+/// Extracts the contents of a module, ensuring it's an inline module with braces.
+fn get_module_content(module: &mut ItemMod) -> Result<&mut Vec<Item>, syn::Error> {
+    if let Some((_, ref mut items)) = module.content {
+        Ok(items)
+    } else {
+        Err(syn::Error::new(
+            module.span(),
+            "account_impl requires an inline module (with braces).",
+        ))
+    }
+}
+
 // -----------------------------------------
-//  Top-level gather
+//  Collecting Annotated Functions
 // -----------------------------------------
 
+/// Collects all annotated functions from both implementations and trait definitions
+/// within the module that match the target account identifier.
+///
+/// Returns a tuple of:
+/// - Option<CollectedInfo> from impl blocks (if any)
+/// - CollectedInfo from trait definitions
 fn collect_annotated_items(
     account_ident: &Ident,
     items: &mut Vec<Item>,
@@ -178,7 +236,8 @@ fn collect_annotated_items(
     Ok((impl_info, trait_info))
 }
 
-/// Collect annotated methods from `impl SomeType`.
+/// Collects annotated methods from an implementation block, categorizing them
+/// into init, exec, and query functions based on their attributes.
 fn collect_from_impl(impl_block: &ItemImpl) -> Result<CollectedInfo, syn::Error> {
     let mut collected = CollectedInfo {
         init_fn: None,
@@ -198,7 +257,8 @@ fn collect_from_impl(impl_block: &ItemImpl) -> Result<CollectedInfo, syn::Error>
     Ok(collected)
 }
 
-/// Collect annotated methods from a `trait SomeIdent`.
+/// Collects annotated methods from a trait definition, categorizing them
+/// into init, exec, and query functions.
 fn collect_from_trait(trait_def: &ItemTrait) -> Result<CollectedInfo, syn::Error> {
     let mut collected = CollectedInfo {
         init_fn: None,
@@ -215,7 +275,8 @@ fn collect_from_trait(trait_def: &ItemTrait) -> Result<CollectedInfo, syn::Error
     Ok(collected)
 }
 
-/// Insert a newly found annotated function into the right place.
+/// Inserts a function info into the appropriate collection based on its kind.
+/// Ensures there is only one init function.
 fn insert_function_info(collected: &mut CollectedInfo, fi: FunctionInfo) -> Result<(), syn::Error> {
     match fi.kind {
         FunctionKind::Init { .. } => {
@@ -237,7 +298,8 @@ fn insert_function_info(collected: &mut CollectedInfo, fi: FunctionInfo) -> Resu
     Ok(())
 }
 
-/// Merges all (init/exec/query) from `source` into `target`.
+/// Merges function collections from different sources, handling potential conflicts.
+/// For init functions, ensures there is only one.
 fn merge_collected_info(
     target: &mut CollectedInfo,
     source: CollectedInfo,
@@ -263,7 +325,10 @@ fn merge_collected_info(
 //  Attribute Parsing
 // -----------------------------------------
 
-/// Extract a `FunctionInfo` if the signature has `#[init(...)]`, `#[exec(...)]`, or `#[query(...)]`.
+/// Extracts function information from a method signature if it has one of the
+/// recognized attributes (#[init], #[exec], or #[query]).
+///
+/// Validates parameter structure and extracts relevant details for code generation.
 fn extract_function_info(
     sig: &Signature,
     attrs: &[Attribute],
@@ -327,7 +392,8 @@ fn extract_function_info(
     }))
 }
 
-/// Parse `-> SdkResult<T>` to extract `T`.
+/// Parses the return type of a function, expecting `-> SdkResult<T>`
+/// and extracting the inner type T.
 fn parse_return_type(sig: &Signature) -> Result<Type, syn::Error> {
     match &sig.output {
         ReturnType::Default => Ok(syn::parse_quote! { () }),
@@ -353,8 +419,8 @@ fn parse_return_type(sig: &Signature) -> Result<Type, syn::Error> {
     }
 }
 
-/// Returns `Some(FunctionKind)` if we see `#[init]`, `#[init(payable)]`, etc.
-/// Otherwise `None`.
+/// Determines the function kind by examining attributes, looking for #[init],
+/// #[exec], or #[query], and detects if init/exec are marked as payable.
 fn parse_function_kind(attrs: &[Attribute]) -> Result<Option<FunctionKind>, syn::Error> {
     for attr in attrs {
         let Some(ident) = attr.path().get_ident() else {
@@ -393,10 +459,10 @@ fn parse_function_kind(attrs: &[Attribute]) -> Result<Option<FunctionKind>, syn:
     Ok(None)
 }
 
-/// If there's no parentheses => returns false (non-payable).
-/// If parentheses exist, parse them and return true only if they're exactly `payable`.
+/// Determines if a function is marked as payable by examining its attribute format.
+/// Returns true only if the attribute contains the explicit `payable` parameter.
 fn parse_is_payable(attr: &Attribute) -> Result<bool, syn::Error> {
-    let meta = &attr.meta; // parse into a Meta
+    let meta = &attr.meta;
 
     match meta {
         // e.g. #[exec] with no parentheses
@@ -431,6 +497,7 @@ fn parse_is_payable(attr: &Attribute) -> Result<bool, syn::Error> {
 //  Checking if `impl` is for the right type
 // -----------------------------------------
 
+/// Checks if an implementation block is for the account type we're targeting.
 fn is_impl_for_account(account_ident: &Ident, impl_block: &ItemImpl) -> bool {
     if let Type::Path(tp) = &*impl_block.self_ty {
         if let Some(seg) = tp.path.segments.last() {
@@ -440,21 +507,11 @@ fn is_impl_for_account(account_ident: &Ident, impl_block: &ItemImpl) -> bool {
     false
 }
 
-fn get_module_content(module: &mut ItemMod) -> Result<&mut Vec<Item>, syn::Error> {
-    if let Some((_, ref mut items)) = module.content {
-        Ok(items)
-    } else {
-        Err(syn::Error::new(
-            module.span(),
-            "account_impl requires an inline module (with braces).",
-        ))
-    }
-}
-
 // -----------------------------------------
 //  Merging logic
 // -----------------------------------------
 
+/// Merges two optional init functions, ensuring there is only one.
 fn merge_init(
     lhs: &Option<FunctionInfo>,
     rhs: &Option<FunctionInfo>,
@@ -467,6 +524,7 @@ fn merge_init(
     }
 }
 
+/// Merges two vectors of exec or query functions.
 fn merge_functions(
     lhs: &[FunctionInfo],
     rhs: &[FunctionInfo],
@@ -480,6 +538,8 @@ fn merge_functions(
 // 1) Generate each message struct
 // -----------------------------------------
 
+/// Generates a message struct for a function along with any necessary trait implementations.
+/// The generated struct will have fields corresponding to the function parameters.
 fn generate_msg_struct(info: &FunctionInfo) -> proc_macro2::TokenStream {
     let msg_name = &info.msg_name;
     let fn_name_str = info.fn_name.to_string();
@@ -488,12 +548,7 @@ fn generate_msg_struct(info: &FunctionInfo) -> proc_macro2::TokenStream {
     });
 
     // Generate an 8-byte ID from the function name
-    let mut hasher = Sha256::new();
-    hasher.update(fn_name_str.as_bytes());
-    let hash = hasher.finalize();
-    let mut arr = [0u8; 8];
-    arr.copy_from_slice(&hash[..8]);
-    let fn_id = u64::from_le_bytes(arr);
+    let fn_id = compute_function_id(&fn_name_str);
 
     match info.kind {
         FunctionKind::Init { .. } => quote! {
@@ -518,10 +573,23 @@ fn generate_msg_struct(info: &FunctionInfo) -> proc_macro2::TokenStream {
     }
 }
 
+/// Computes a deterministic function ID based on SHA-256 hash of the function name.
+/// Used for message dispatch in the runtime.
+fn compute_function_id(fn_name: &str) -> u64 {
+    let mut hasher = Sha256::new();
+    hasher.update(fn_name.as_bytes());
+    let hash = hasher.finalize();
+    let mut arr = [0u8; 8];
+    arr.copy_from_slice(&hash[..8]);
+    u64::from_le_bytes(arr)
+}
+
 // -----------------------------------------
 // 2) Generate `impl AccountCode for {account_ident}`
 // -----------------------------------------
 
+/// Generates the implementation of AccountCode trait for the target struct.
+/// This includes the init, execute, and query dispatch functions.
 fn generate_accountcode_impl(
     account_ident: &Ident,
     init_fn: &Option<FunctionInfo>,
@@ -597,7 +665,7 @@ fn generate_accountcode_impl(
     }
 }
 
-/// Generate the `fn init(...) { ... }` body with or without a payable check.
+/// Generates the init implementation method with funds check if non-payable.
 fn generate_init_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
     let msg_name = &info.msg_name;
     let fn_name = &info.fn_name;
@@ -627,7 +695,7 @@ fn generate_init_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
     }
 }
 
-/// Generate one `match` arm for an `exec` function, including any funds check if non-payable.
+/// Generates a match arm for an exec function, including funds check if non-payable.
 fn generate_exec_match_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
     let fn_id = format_ident!("FUNCTION_IDENTIFIER");
     let msg_name = &info.msg_name;
@@ -660,6 +728,8 @@ fn generate_exec_match_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
 // 3) Generate the "wrapper" struct + impl
 // -----------------------------------------
 
+/// Generates a wrapper struct with convenience methods for interacting with the account.
+/// This includes methods that mirror the init, exec, and query functions of the account.
 fn generate_wrapper_struct(
     account_ident: &Ident,
     init_fn: &Option<FunctionInfo>,
@@ -705,7 +775,7 @@ fn generate_wrapper_struct(
     }
 }
 
-/// Generate the wrapper for a single `#[init]` function.
+/// Generates a wrapper method for an init function, handling the creation of new accounts.
 fn generate_init_wrapper(account_ident: &Ident, info: &FunctionInfo) -> proc_macro2::TokenStream {
     let fn_name = &info.fn_name;
     let msg_name = &info.msg_name;
@@ -740,7 +810,7 @@ fn generate_init_wrapper(account_ident: &Ident, info: &FunctionInfo) -> proc_mac
     }
 }
 
-/// Generate the wrapper for a single `#[exec]` function.
+/// Generates a wrapper method for an exec function, handling the execution of account methods.
 fn generate_exec_wrapper(info: &FunctionInfo) -> proc_macro2::TokenStream {
     let fn_name = &info.fn_name;
     let msg_name = &info.msg_name;
@@ -775,8 +845,7 @@ fn generate_exec_wrapper(info: &FunctionInfo) -> proc_macro2::TokenStream {
     }
 }
 
-/// Generate the wrapper for a single `#[query]` function.
-/// (Queries are never payable, so no funds param.)
+/// Generates a wrapper method for a query function, handling read-only queries to accounts.
 fn generate_query_wrapper(info: &FunctionInfo) -> proc_macro2::TokenStream {
     let fn_name = &info.fn_name;
     let msg_name = &info.msg_name;
@@ -801,19 +870,112 @@ fn generate_query_wrapper(info: &FunctionInfo) -> proc_macro2::TokenStream {
 }
 
 // -----------------------------------------
-// Marker attributes )
+// Marker attributes
 // -----------------------------------------
+
+/// Marks a function as the initialization entry point for the account.
+/// Can be made payable with #[init(payable)]
 #[proc_macro_attribute]
 pub fn init(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+/// Marks a function as an execution entry point for the account.
+/// Can be made payable with #[exec(payable)]
 #[proc_macro_attribute]
 pub fn exec(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+/// Marks a function as a query entry point for the account.
+/// Cannot be payable.
 #[proc_macro_attribute]
 pub fn query(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use syn::parse_quote;
+
+    #[test]
+    fn test_compute_function_id() {
+        // Test that function IDs are deterministic
+        let id1 = compute_function_id("transfer");
+        let id2 = compute_function_id("transfer");
+        assert_eq!(id1, id2, "Same function name should produce the same ID");
+
+        // Test that different function names produce different IDs
+        let id1 = compute_function_id("transfer");
+        let id2 = compute_function_id("mint");
+        assert_ne!(
+            id1, id2,
+            "Different function names should produce different IDs"
+        );
+    }
+
+    #[test]
+    fn test_parse_is_payable() {
+        // Test non-payable function (no parentheses)
+        let attr: syn::Attribute = parse_quote!(#[exec]);
+        assert!(
+            !parse_is_payable(&attr).unwrap(),
+            "Function without payable should be non-payable"
+        );
+
+        // Test payable function
+        let attr: syn::Attribute = parse_quote!(#[exec(payable)]);
+        assert!(
+            parse_is_payable(&attr).unwrap(),
+            "Function with payable should be payable"
+        );
+    }
+
+    #[test]
+    fn test_parse_function_kind() {
+        // Test init function
+        let attrs: Vec<syn::Attribute> = vec![parse_quote!(#[init])];
+        let kind = parse_function_kind(&attrs).unwrap().unwrap();
+        assert!(matches!(kind, FunctionKind::Init { payable: false }));
+
+        // Test payable init function
+        let attrs: Vec<syn::Attribute> = vec![parse_quote!(#[init(payable)])];
+        let kind = parse_function_kind(&attrs).unwrap().unwrap();
+        assert!(matches!(kind, FunctionKind::Init { payable: true }));
+
+        // Test exec function
+        let attrs: Vec<syn::Attribute> = vec![parse_quote!(#[exec])];
+        let kind = parse_function_kind(&attrs).unwrap().unwrap();
+        assert!(matches!(kind, FunctionKind::Exec { payable: false }));
+
+        // Test query function
+        let attrs: Vec<syn::Attribute> = vec![parse_quote!(#[query])];
+        let kind = parse_function_kind(&attrs).unwrap().unwrap();
+        assert!(matches!(kind, FunctionKind::Query));
+
+        // Test no relevant attribute
+        let attrs: Vec<syn::Attribute> = vec![parse_quote!(#[other_attr])];
+        assert!(parse_function_kind(&attrs).unwrap().is_none());
+    }
+
+    #[test]
+    fn test_is_impl_for_account() {
+        // Create an impl block for the right type
+        let impl_block: syn::ItemImpl = parse_quote! {
+            impl TestAccount {
+                fn test(&self) {}
+            }
+        };
+        let account_ident = syn::Ident::new("TestAccount", proc_macro2::Span::call_site());
+        assert!(is_impl_for_account(&account_ident, &impl_block));
+
+        // Create an impl block for a different type
+        let impl_block: syn::ItemImpl = parse_quote! {
+            impl OtherAccount {
+                fn test(&self) {}
+            }
+        };
+        assert!(!is_impl_for_account(&account_ident, &impl_block));
+    }
 }

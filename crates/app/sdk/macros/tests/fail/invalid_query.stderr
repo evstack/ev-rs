@@ -1,0 +1,13 @@
+error: `#[query(...)]` cannot have arguments; queries cannot be payable
+   --> tests/fail/invalid_query.rs:101:9
+    |
+101 |         #[query(payable)]
+    |         ^
+
+warning: unused import: `query`
+  --> tests/fail/invalid_query.rs:84:35
+   |
+84 | use evolve_macros::{account_impl, query};
+   |                                   ^^^^^
+   |
+   = note: `#[warn(unused_imports)]` on by default
