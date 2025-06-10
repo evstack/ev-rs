@@ -11,7 +11,7 @@ members = [
     "crates/app/sdk/standards/*",
     "crates/app/sdk/x/*",
     "crates/storage",
-    "crates/app/testapp", "crates/app/sdk/testing", "crates/consensus/cometbft", "crates/consensus/cometbft_account_trait",
+    "crates/app/testapp", "crates/app/sdk/testing", "crates/consensus/cometbft", "crates/consensus/cometbft_account_trait", "crates/app/sdk/math",
 ]
 resolver = "2"
 
@@ -25,6 +25,7 @@ evolve_collections = { path = "crates/app/sdk/collections" }
 evolve_core = { path = "crates/app/sdk/core" }
 evolve_macros = { path = "crates/app/sdk/macros" }
 evolve_server_core = { path = "crates/app/sdk/server_core" }
+evolve_math = { path = "crates/app/sdk/math" }
 
 evolve_fungible_asset = { path = "crates/app/sdk/standards/evolve_fungible_asset" }
 
@@ -48,6 +49,7 @@ evolve_testapp = { path = "crates/app/testapp" }
 
 # outside deps
 borsh = { features = ["derive"], version = "1.5.5" }
+fixed = { version = "1.29", features = ["borsh", "serde"] }
 log = { version = "0.4.27" }
 tokio = { version = "1.44.2", features = ["full"] }
 futures = "0.3.31"

@@ -1,0 +1,15 @@
+[package]
+name = "evolve_math"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+evolve_core.workspace = true
+
+fixed = { workspace = true }
+
+[lints]
+workspace = true
