@@ -101,10 +101,12 @@ impl GasCounter {
                 gas_used,
                 ..
             } => {
-                if *gas_used + gas > *gas_limit {
+                // Use saturating_add to prevent overflow
+                let new_gas_used = gas_used.saturating_add(gas);
+                if new_gas_used > *gas_limit {
                     return Err(ERR_OUT_OF_GAS);
                 }
-                *gas_used += gas;
+                *gas_used = new_gas_used;
                 Ok(())
             }
         }
@@ -127,12 +129,19 @@ impl GasCounter {
             GasCounter::Finite {
                 storage_gas_config, ..
             } => {
+                // Calculate total size with overflow protection
+                let key_len = key.len() as u64;
                 let value_len = match value {
-                    None => 1,
-                    Some(value) => 1 + value.len() as u64,
+                    None => 1u64,
+                    Some(value) => (value.len() as u64).saturating_add(1),
                 };
-                let gas =
-                    storage_gas_config.storage_get_charge * ((key.len() + 1) as u64 + value_len);
+
+                // Use saturating operations to prevent overflow
+                let total_size = key_len.saturating_add(1).saturating_add(value_len);
+                let gas = storage_gas_config
+                    .storage_get_charge
+                    .saturating_mul(total_size);
+
                 self.consume_gas(gas)
             }
         }
@@ -154,8 +163,15 @@ impl GasCounter {
             GasCounter::Finite {
                 storage_gas_config, ..
             } => {
-                let gas = storage_gas_config.storage_get_charge
-                    * (key.len() + 1 + value.len() + 1) as u64;
+                // Calculate total size with overflow protection
+                let total_size = (key.len() as u64)
+                    .saturating_add(1)
+                    .saturating_add(value.len() as u64)
+                    .saturating_add(1);
+                let gas = storage_gas_config
+                    .storage_get_charge
+                    .saturating_mul(total_size);
+
                 self.consume_gas(gas)
             }
         }
@@ -177,7 +193,12 @@ impl GasCounter {
             GasCounter::Finite {
                 storage_gas_config, ..
             } => {
-                let gas = storage_gas_config.storage_get_charge * (key.len() + 1) as u64;
+                // Calculate total size with overflow protection
+                let total_size = (key.len() as u64).saturating_add(1);
+                let gas = storage_gas_config
+                    .storage_get_charge
+                    .saturating_mul(total_size);
+
                 self.consume_gas(gas)
             }
         }
@@ -316,5 +337,89 @@ mod tests {
         assert_eq!(result.unwrap_err(), ERR_OUT_OF_GAS);
 
         // If we shorten the key or increase the limit, it would pass.
+    }
+
+    #[test]
+    fn test_saturating_add_prevents_overflow() {
+        let config = StorageGasConfig {
+            storage_get_charge: 1,
+            storage_set_charge: 1,
+            storage_remove_charge: 1,
+        };
+        // Set limit lower than MAX to properly test
+        let mut gc = GasCounter::finite(1000, config);
+
+        // Consume most of the gas
+        gc.consume_gas(990).unwrap();
+        assert_eq!(gc.gas_used(), 990);
+
+        // This would overflow with regular addition if we tried to add u64::MAX
+        // With saturating add, it should just hit the limit
+        let result = gc.consume_gas(u64::MAX);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), ERR_OUT_OF_GAS);
+
+        // Gas used should still be at 990 since the operation failed
+        assert_eq!(gc.gas_used(), 990);
+    }
+
+    #[test]
+    fn test_saturating_mul_prevents_overflow() {
+        let config = StorageGasConfig {
+            storage_get_charge: u64::MAX / 2,
+            storage_set_charge: u64::MAX / 2,
+            storage_remove_charge: u64::MAX / 2,
+        };
+        // Use a reasonable limit to test overflow behavior
+        let mut gc = GasCounter::finite(1000, config);
+
+        // Create a key that would cause overflow with regular multiplication
+        // With charge = u64::MAX/2 and key length = 10, multiplication would overflow
+        let key = vec![0u8; 10];
+        let value = Message::from_bytes(vec![0u8; 10]);
+
+        // These operations would panic with regular arithmetic due to overflow
+        // With saturating arithmetic, they should fail gracefully due to gas limit
+        let result = gc.consume_get_gas(&key, &Some(value.clone()));
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), ERR_OUT_OF_GAS);
+
+        let result = gc.consume_set_gas(&key, &value);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), ERR_OUT_OF_GAS);
+
+        let result = gc.consume_remove_gas(&key);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), ERR_OUT_OF_GAS);
+
+        // Verify no gas was consumed since all operations failed
+        assert_eq!(gc.gas_used(), 0);
+    }
+
+    #[test]
+    fn test_gas_calculation_accuracy() {
+        let config = StorageGasConfig {
+            storage_get_charge: 2,
+            storage_set_charge: 3,
+            storage_remove_charge: 1,
+        };
+        let mut gc = GasCounter::finite(1000, config);
+
+        // Test get gas calculation
+        // key=3 bytes, value=5 bytes: (3+1) + (5+1) = 10 * 2 = 20
+        gc.consume_get_gas(b"abc", &Some(Message::from_bytes(b"hello".to_vec())))
+            .unwrap();
+        assert_eq!(gc.gas_used(), 20);
+
+        // Test set gas calculation (using storage_get_charge as per implementation)
+        // key=4 bytes, value=6 bytes: (4+1) + (6+1) = 12 * 2 = 24
+        gc.consume_set_gas(b"test", &Message::from_bytes(b"world!".to_vec()))
+            .unwrap();
+        assert_eq!(gc.gas_used(), 44); // 20 + 24
+
+        // Test remove gas calculation
+        // key=2 bytes: (2+1) = 3 * 2 = 6
+        gc.consume_remove_gas(b"hi").unwrap();
+        assert_eq!(gc.gas_used(), 50); // 44 + 6
     }
 }
