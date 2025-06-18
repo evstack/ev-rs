@@ -17,5 +17,8 @@ evolve_unique.workspace = true
 
 [dev-dependencies]
 
+[features]
+testing = []
+
 [lints]
 workspace = true

@@ -3,6 +3,17 @@ use evolve_core::{ErrorCode, Message, ReadonlyKV, SdkResult};
 use evolve_server_core::StateChange as CoreStateChange;
 use std::collections::HashMap;
 
+// Security limits to prevent memory exhaustion attacks
+const MAX_OVERLAY_ENTRIES: usize = 100_000; // Maximum number of keys in overlay
+const MAX_EVENTS_PER_EXECUTION: usize = 10_000; // Maximum events that can be emitted
+const MAX_KEY_SIZE: usize = 256; // Maximum size of a storage key in bytes
+const MAX_VALUE_SIZE: usize = 1024 * 1024; // Maximum size of a storage value (1MB)
+
+pub const ERR_OVERLAY_SIZE_EXCEEDED: ErrorCode = ErrorCode::new(429, "overlay size limit exceeded");
+pub const ERR_TOO_MANY_EVENTS: ErrorCode = ErrorCode::new(429, "too many events emitted");
+pub const ERR_KEY_TOO_LARGE: ErrorCode = ErrorCode::new(413, "storage key too large");
+pub const ERR_VALUE_TOO_LARGE: ErrorCode = ErrorCode::new(413, "storage value too large");
+
 /// Represents one change to the overlay so it can be undone.
 #[derive(Debug)]
 enum StateChange {
@@ -73,7 +84,7 @@ pub struct Checkpoint {
 #[derive(Debug)]
 pub struct ExecutionState<'a, S> {
     /// The underlying store to fall back to.
-    base_storage: &'a S,
+    pub(crate) base_storage: &'a S,
     /// The in-memory overlay that records changes.
     overlay: HashMap<Vec<u8>, Option<Message>>,
     /// The log of state changes (undo log) used for checkpoint restore.
@@ -96,8 +107,12 @@ impl<'a, S> ExecutionState<'a, S> {
     }
 
     /// Adds an event to the list of the current execution events.
-    pub fn emit_event(&mut self, event: Event) {
+    pub fn emit_event(&mut self, event: Event) -> Result<(), ErrorCode> {
+        if self.events.len() >= MAX_EVENTS_PER_EXECUTION {
+            return Err(ERR_TOO_MANY_EVENTS);
+        }
         self.events.push(event);
+        Ok(())
     }
 
     /// Pops the events
@@ -152,6 +167,21 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
 
     /// Sets `key` to `value`, recording the old logical value for undo.
     pub fn set(&mut self, key: &[u8], value: Message) -> Result<(), ErrorCode> {
+        // Validate key size
+        if key.len() > MAX_KEY_SIZE {
+            return Err(ERR_KEY_TOO_LARGE);
+        }
+
+        // Validate value size
+        if value.len() > MAX_VALUE_SIZE {
+            return Err(ERR_VALUE_TOO_LARGE);
+        }
+
+        // Check overlay size limit only if this is a new key
+        if !self.overlay.contains_key(key) && self.overlay.len() >= MAX_OVERLAY_ENTRIES {
+            return Err(ERR_OVERLAY_SIZE_EXCEEDED);
+        }
+
         // Get old logical value (including store fallback).
         let old_value = self.get(key)?;
 
@@ -168,6 +198,16 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
 
     /// Removes `key` from the "logical" store, recording old value for undo.
     pub fn remove(&mut self, key: &[u8]) -> Result<(), ErrorCode> {
+        // Validate key size
+        if key.len() > MAX_KEY_SIZE {
+            return Err(ERR_KEY_TOO_LARGE);
+        }
+
+        // Check overlay size limit only if this is a new key
+        if !self.overlay.contains_key(key) && self.overlay.len() >= MAX_OVERLAY_ENTRIES {
+            return Err(ERR_OVERLAY_SIZE_EXCEEDED);
+        }
+
         // Get old logical value.
         let old_value = self.get(key)?;
 

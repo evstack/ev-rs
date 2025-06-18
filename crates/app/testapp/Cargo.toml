@@ -11,7 +11,7 @@ documentation = "A test application for the evolve stack."
 evolve_core.workspace = true
 evolve_fungible_asset.workspace = true
 evolve_server_core.workspace = true
-evolve_stf.workspace = true
+evolve_stf = { workspace = true, features = ["testing"] }
 
 evolve_block_info.workspace = true
 evolve_escrow.workspace = true

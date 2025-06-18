@@ -37,7 +37,7 @@ use evolve_gas::account::{StorageGasConfig, ERR_OUT_OF_GAS};
 /// gc_infinite.consume_gas(9999999).unwrap();
 /// assert_eq!(gc_infinite.gas_used(), 0);
 /// ```
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum GasCounter {
     /// Infinite gas mode, no tracking or limit.
     Infinite,

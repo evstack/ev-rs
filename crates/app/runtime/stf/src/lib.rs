@@ -41,6 +41,14 @@ pub const ERR_ACCOUNT_DOES_NOT_EXIST: ErrorCode = ErrorCode::new(404, "account d
 pub const ERR_CODE_NOT_FOUND: ErrorCode = ErrorCode::new(401, "account code not found");
 pub const ERR_EXEC_IN_QUERY: ErrorCode =
     ErrorCode::new(1, "exec functionality not available during queries");
+pub const ERR_INVALID_CODE_ID: ErrorCode = ErrorCode::new(400, "invalid code identifier");
+pub const ERR_EVENT_NAME_TOO_LONG: ErrorCode = ErrorCode::new(413, "event name too long");
+pub const ERR_EVENT_CONTENT_TOO_LARGE: ErrorCode = ErrorCode::new(413, "event content too large");
+
+// Security limits
+const MAX_CODE_ID_LENGTH: usize = 256;
+const MAX_EVENT_NAME_LENGTH: usize = 128;
+const MAX_EVENT_CONTENT_SIZE: usize = 64 * 1024; // 64KB
 
 pub struct Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx> {
     begin_blocker: BeginBlocker,
@@ -91,7 +99,8 @@ where
         Ok((resp, ctx.into_execution_results().0))
     }
     /// Allows the given closure to execute as the provided account ID
-    /// TODO: test only
+    /// This method is only available in test builds or with the testing feature for security reasons
+    #[cfg(any(test, feature = "testing"))]
     pub fn sudo_as<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a, R>(
         &self,
         storage: &'a S,
@@ -355,8 +364,6 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
 
         let checkpoint = self.storage.borrow().checkpoint();
 
-        // TODO: ensure that the user cannot send funds to storage or event handler of course :)
-
         let resp = match to {
             // check if system
             RUNTIME_ACCOUNT_ID => self.handle_system_exec(data, funds),
@@ -564,12 +571,23 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         match request.function() {
             EmitEventRequest::FUNCTION_IDENTIFIER => {
                 let req: EmitEventRequest = request.get()?;
+
+                // Validate event name length
+                if req.name.len() > MAX_EVENT_NAME_LENGTH {
+                    return Err(ERR_EVENT_NAME_TOO_LONG);
+                }
+
+                // Validate event content size
+                if req.contents.len() > MAX_EVENT_CONTENT_SIZE {
+                    return Err(ERR_EVENT_CONTENT_TOO_LARGE);
+                }
+
                 let event = Event {
                     source: self.whoami,
                     name: req.name,
                     contents: req.contents,
                 };
-                self.storage.borrow_mut().emit_event(event);
+                self.storage.borrow_mut().emit_event(event)?;
                 Ok(InvokeResponse::new(&EmitEventResponse {})?)
             }
             _ => Err(ERR_UNKNOWN_FUNCTION),
@@ -617,6 +635,20 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
     }
 
     fn handle_transfers(&mut self, to: AccountId, funds: &[FungibleAsset]) -> SdkResult<()> {
+        // Early return if no funds to transfer
+        if funds.is_empty() {
+            return Ok(());
+        }
+
+        // Validate recipient is not a system account that shouldn't receive funds
+        if to == STORAGE_ACCOUNT_ID
+            || to == EVENT_HANDLER_ACCOUNT_ID
+            || to == UNIQUE_HANDLER_ACCOUNT_ID
+        {
+            return Err(ErrorCode::new(400, "cannot send funds to system accounts"));
+        }
+
+        // Execute all transfers atomically - if any fail, all fail
         for asset in funds {
             // create transfer message
             let msg = evolve_fungible_asset::TransferMsg {
@@ -624,7 +656,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
                 amount: asset.amount,
             };
 
-            // execute transfer
+            // execute transfer - this will fail with ERR_NOT_ENOUGH_BALANCE if insufficient funds
             self.do_exec(asset.asset_id, &InvokeRequest::new(&msg)?, vec![])?;
         }
         Ok(())
@@ -636,6 +668,19 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         msg: Message,
         funds: Vec<FungibleAsset>,
     ) -> SdkResult<(AccountId, Message)> {
+        // Validate code_id
+        if code_id.is_empty() || code_id.len() > MAX_CODE_ID_LENGTH {
+            return Err(ERR_INVALID_CODE_ID);
+        }
+
+        // Validate code_id contains only valid characters (alphanumeric, dash, underscore, slash)
+        if !code_id
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '/')
+        {
+            return Err(ERR_INVALID_CODE_ID);
+        }
+
         // get new account and associate it with new code ID
         let new_account_id = runtime_api_impl::next_account_number(&mut self.storage.borrow_mut())?;
         runtime_api_impl::set_account_code_identifier_for_account(
@@ -685,21 +730,40 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
 
     fn into_execution_results(self) -> (ExecutionState<'a, S>, u64, Vec<Event>) {
         // Move out the GasCounter from self.gas_counter
-        //   This will fail at runtime if there's more than one Rc clone
-        let gas_counter = Rc::try_unwrap(self.gas_counter)
-            .unwrap_or_else(|_| {
-                panic!("Rc::try_unwrap(gas_counter) failed - there must be only one reference")
-            })
-            .into_inner();
+        // If there are multiple references, we clone the inner value instead of panicking
+        let gas_counter = match Rc::try_unwrap(self.gas_counter) {
+            Ok(refcell) => refcell.into_inner(),
+            Err(rc) => {
+                // Multiple references exist, so we need to clone the inner value
+                // This is safe because GasCounter is cheap to clone
+                (*rc.borrow()).clone()
+            }
+        };
         let gas_used = gas_counter.gas_used();
 
         // Move out the ExecutionState
-        let mut state = Rc::try_unwrap(self.storage)
-            .unwrap_or_else(|_| {
-                panic!("Rc::try_unwrap(storage) failed - there must be only one reference")
-            })
-            .into_inner();
-        let events = state.pop_events();
+        // Since ExecutionState contains data that's expensive to clone, we still need to ensure
+        // there's only one reference, but we'll handle it more gracefully
+        let (state, events) = match Rc::try_unwrap(self.storage) {
+            Ok(refcell) => {
+                let mut state = refcell.into_inner();
+                let events = state.pop_events();
+                (state, events)
+            }
+            Err(storage_rc) => {
+                // This should not happen in normal operation as Invoker manages references carefully
+                // Log an error and continue with the borrowed state
+                // In production, this would warrant investigation
+                eprintln!(
+                    "Warning: Multiple references to ExecutionState detected during finalization"
+                );
+                // Get events from the borrowed state
+                let _events = storage_rc.borrow_mut().pop_events();
+                // We can't move the state out, so we have to panic here as the invariant is broken
+                // This is still better than the original panic as we've logged the issue
+                panic!("Cannot extract ExecutionState - multiple references exist. This is a bug.");
+            }
+        };
 
         (state, gas_used, events)
     }
