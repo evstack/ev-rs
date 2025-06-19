@@ -44,6 +44,7 @@ pub const ERR_EXEC_IN_QUERY: ErrorCode =
 pub const ERR_INVALID_CODE_ID: ErrorCode = ErrorCode::new(400, "invalid code identifier");
 pub const ERR_EVENT_NAME_TOO_LONG: ErrorCode = ErrorCode::new(413, "event name too long");
 pub const ERR_EVENT_CONTENT_TOO_LARGE: ErrorCode = ErrorCode::new(413, "event content too large");
+pub const ERR_SAME_CODE_MIGRATION: ErrorCode = ErrorCode::new(400, "cannot migrate to same code");
 
 // Security limits
 const MAX_CODE_ID_LENGTH: usize = 256;
@@ -162,8 +163,10 @@ where
 
         self.begin_blocker.begin_block(block, &mut ctx);
 
-        // find gas service account: TODO maybe better way to do it
-        let gas_service_account = resolve_name("gas".to_string(), &ctx).unwrap().unwrap();
+        // find gas service account
+        let gas_service_account = resolve_name("gas".to_string(), &ctx)
+            .expect("CRITICAL: Failed to resolve gas service name - system configuration error")
+            .expect("CRITICAL: Gas service account must exist during begin_block - blockchain cannot operate without gas metering");
 
         // get system gas config
         let gas_config = ctx
@@ -173,8 +176,8 @@ where
                     account.storage_gas_config.may_get(env)
                 },
             )
-            .unwrap()
-            .unwrap();
+            .expect("CRITICAL: Failed to run as gas service account - system configuration error")
+            .expect("CRITICAL: Gas service must have storage gas config - blockchain cannot operate without gas configuration");
 
         let (state, _, events) = ctx.into_execution_results();
 
@@ -201,6 +204,13 @@ where
         tx: &Tx,
         gas_config: StorageGasConfig,
     ) -> (TxResult, ExecutionState<'a, S>) {
+        // NOTE: Transaction validation and execution are atomic - they share the same
+        // ExecutionState throughout the process. The state cannot change between
+        // validation and execution because:
+        // 1. The same ExecutionState instance is used for both phases
+        // 2. into_new_exec() preserves the storage, maintaining consistency
+        // 3. Transactions are processed sequentially, not concurrently
+
         // create validation context
         let mut ctx = Invoker::new_for_validate_tx(state, codes, gas_config, tx);
         // do tx validation; we do not swap invoker
@@ -219,15 +229,15 @@ where
             }
         }
 
-        // exec tx
+        // exec tx - transforms validation context to execution context
+        // while preserving the same underlying state
         let mut ctx = ctx.into_new_exec(tx.sender());
 
         let response = ctx.do_exec(tx.recipient(), tx.request(), tx.funds().to_vec());
 
-        // TODO do post tx validation
-
-        // collect info
         let (state, gas_used, events) = ctx.into_execution_results();
+
+        // TODO do post tx validation
 
         (
             TxResult {
@@ -360,9 +370,23 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
         data: &InvokeRequest,
         funds: Vec<FungibleAsset>,
     ) -> SdkResult<InvokeResponse> {
-        self.handle_transfers(to, funds.as_ref())?;
-
+        // Take checkpoint before ANY state changes
         let checkpoint = self.storage.borrow().checkpoint();
+
+        // Helper closure to restore checkpoint on error
+        let restore_checkpoint = |storage: &RefCell<ExecutionState<'_, S>>| {
+            if let Err(restore_err) = storage.borrow_mut().restore(checkpoint) {
+                // Log the error and panic as we cannot recover
+                eprintln!("CRITICAL: Failed to restore checkpoint: {:?}", restore_err);
+                panic!("CRITICAL: Failed to restore checkpoint after error - blockchain state is corrupted and cannot continue safely");
+            }
+        };
+
+        // Handle transfers - restore checkpoint if this fails
+        if let Err(transfer_err) = self.handle_transfers(to, funds.as_ref()) {
+            restore_checkpoint(&self.storage);
+            return Err(transfer_err);
+        }
 
         let resp = match to {
             // check if system
@@ -380,7 +404,7 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
 
         // restore checkpoint in case of failure and yield back.
         if resp.is_err() {
-            self.storage.borrow_mut().restore(checkpoint);
+            restore_checkpoint(&self.storage);
         }
         resp
     }
@@ -520,6 +544,28 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
                 // TODO: enhance with more migration delegation rights
                 if req.account_id != invoker.sender {
                     return Err(ERR_UNAUTHORIZED);
+                }
+
+                // Validate that the account exists before migration
+                let current_code_id = runtime_api_impl::get_account_code_identifier_for_account(
+                    &self.storage.borrow(),
+                    req.account_id,
+                )?
+                .ok_or(ERR_ACCOUNT_DOES_NOT_EXIST)?;
+
+                // Validate that the new code exists
+                let code_exists = self
+                    .account_codes
+                    .borrow()
+                    .with_code(&req.new_code_id, |code| code.is_some())?;
+                if !code_exists {
+                    return Err(ERR_CODE_NOT_FOUND);
+                }
+
+                // TODO: Add code compatibility validation here
+                // For now, we just check that the codes are different
+                if current_code_id == req.new_code_id {
+                    return Err(ERR_SAME_CODE_MIGRATION);
                 }
 
                 // set new account id
@@ -755,13 +801,13 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
                 // Log an error and continue with the borrowed state
                 // In production, this would warrant investigation
                 eprintln!(
-                    "Warning: Multiple references to ExecutionState detected during finalization"
+                    "CRITICAL: Multiple references to ExecutionState detected during finalization - this indicates a bug in reference management"
                 );
                 // Get events from the borrowed state
                 let _events = storage_rc.borrow_mut().pop_events();
                 // We can't move the state out, so we have to panic here as the invariant is broken
                 // This is still better than the original panic as we've logged the issue
-                panic!("Cannot extract ExecutionState - multiple references exist. This is a bug.");
+                panic!("CRITICAL: Cannot extract ExecutionState - multiple references exist. This is a bug in the STF reference management.");
             }
         };
 

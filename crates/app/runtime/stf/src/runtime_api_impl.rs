@@ -2,6 +2,9 @@ use crate::execution_state::ExecutionState;
 use evolve_core::runtime_api::{ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_IDENTIFIER_SINGLETON_PREFIX};
 use evolve_core::{AccountId, Message, ReadonlyKV, SdkResult};
 
+/// Initial account ID value - starts from u16::MAX to distinguish from default 0
+const INITIAL_ACCOUNT_ID: u64 = u16::MAX as u64;
+
 pub(crate) fn get_account_code_identifier_for_account<S: ReadonlyKV>(
     storage: &ExecutionState<S>,
     account: AccountId,
@@ -38,7 +41,7 @@ pub(crate) fn next_account_number<S: ReadonlyKV>(
     let last = storage
         .get(&key)?
         .map(|msg| msg.get())
-        .unwrap_or(Ok(AccountId::new(u16::MAX.into())))?;
+        .unwrap_or(Ok(AccountId::new(INITIAL_ACCOUNT_ID.into())))?;
 
     // set next
     storage.set(&key, Message::new(&last.increase())?)?;

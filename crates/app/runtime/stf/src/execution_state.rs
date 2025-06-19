@@ -13,6 +13,8 @@ pub const ERR_OVERLAY_SIZE_EXCEEDED: ErrorCode = ErrorCode::new(429, "overlay si
 pub const ERR_TOO_MANY_EVENTS: ErrorCode = ErrorCode::new(429, "too many events emitted");
 pub const ERR_KEY_TOO_LARGE: ErrorCode = ErrorCode::new(413, "storage key too large");
 pub const ERR_VALUE_TOO_LARGE: ErrorCode = ErrorCode::new(413, "storage value too large");
+pub const ERR_INVALID_CHECKPOINT: ErrorCode =
+    ErrorCode::new(400, "checkpoint does not belong to this execution state");
 /// Represents one change to the overlay so it can be undone.
 /// Optimized to store deltas instead of full previous values.
 #[derive(Debug)]
@@ -78,6 +80,7 @@ impl StateChange {
 
 /// Defines a checkpoint at a certain point in time of the execution state
 /// which can be used to roll back `ExecutionState`.
+#[derive(Debug, Clone, Copy)]
 pub struct Checkpoint {
     undo_log_index: usize,
     events_index: usize,
@@ -218,7 +221,7 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
         // Record undo information efficiently (delta-based)
         let had_overlay_entry = !is_new_key;
         let previous_overlay_value = if had_overlay_entry {
-            Some(self.overlay.get(key).unwrap().clone())
+            self.overlay.get(key).cloned()
         } else {
             None
         };
@@ -250,7 +253,7 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
         // Record undo information efficiently (delta-based)
         let had_overlay_entry = self.overlay.contains_key(key);
         let previous_overlay_value = if had_overlay_entry {
-            Some(self.overlay.get(key).unwrap().clone())
+            self.overlay.get(key).cloned()
         } else {
             None
         };
@@ -276,9 +279,16 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
     }
 
     /// Restores the overlay to the given checkpoint by popping changes.
-    pub fn restore(&mut self, checkpoint: Checkpoint) {
+    pub fn restore(&mut self, checkpoint: Checkpoint) -> Result<(), ErrorCode> {
+        // Validate checkpoint indices are within bounds
+        if checkpoint.undo_log_index > self.undo_log.len()
+            || checkpoint.events_index > self.events.len()
+        {
+            return Err(ERR_INVALID_CHECKPOINT);
+        }
+
         while self.undo_log.len() > checkpoint.undo_log_index {
-            let change = self.undo_log.pop().unwrap();
+            let change = self.undo_log.pop().expect("undo log has elements");
             change.revert(&mut self.overlay);
         }
 
@@ -287,6 +297,8 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
 
         // restore to previous unique object.
         self.unique_objects = checkpoint.unique_objects_created;
+
+        Ok(())
     }
 
     /// Applies a batch of operations efficiently.
@@ -328,7 +340,7 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
                     // Record undo information efficiently (delta-based)
                     let had_overlay_entry = self.overlay.contains_key(&op.key);
                     let previous_overlay_value = if had_overlay_entry {
-                        Some(self.overlay.get(&op.key).unwrap().clone())
+                        self.overlay.get(&op.key).cloned()
                     } else {
                         None
                     };
@@ -347,7 +359,7 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
                     // Record undo information efficiently (delta-based)
                     let had_overlay_entry = self.overlay.contains_key(&op.key);
                     let previous_overlay_value = if had_overlay_entry {
-                        Some(self.overlay.get(&op.key).unwrap().clone())
+                        self.overlay.get(&op.key).cloned()
                     } else {
                         None
                     };
@@ -484,7 +496,7 @@ mod tests {
         assert_eq!(val2.unwrap().as_bytes().unwrap(), b"ZZ");
 
         // Restore back to c1.
-        cp.restore(c1);
+        cp.restore(c1).unwrap();
 
         // After restoring:
         //   key1 => "A"
@@ -525,13 +537,13 @@ mod tests {
         assert_eq!(val.unwrap().as_bytes().unwrap(), b"eins");
 
         // Restore to checkpoint #2 => "uno".
-        cp.restore(c2);
+        cp.restore(c2).unwrap();
         let val = cp.get(b"key1").unwrap();
         assert!(val.is_some());
         assert_eq!(val.unwrap().as_bytes().unwrap(), b"uno");
 
         // Restore to checkpoint #1 => "one".
-        cp.restore(c1);
+        cp.restore(c1).unwrap();
         let val = cp.get(b"key1").unwrap();
         assert!(val.is_some());
         assert_eq!(val.unwrap().as_bytes().unwrap(), b"one");
@@ -552,7 +564,7 @@ mod tests {
         assert!(cp.get(b"key").unwrap().is_none());
 
         // Restore to c1.
-        cp.restore(c1);
+        cp.restore(c1).unwrap();
 
         // Key should come back from the backing store.
         let val = cp.get(b"key").unwrap();
@@ -574,7 +586,7 @@ mod tests {
         assert!(cp.get(b"nonexistent").unwrap().is_none());
 
         // Restore.
-        cp.restore(c1);
+        cp.restore(c1).unwrap();
 
         // Still None.
         assert!(cp.get(b"nonexistent").unwrap().is_none());
@@ -604,13 +616,13 @@ mod tests {
         assert_eq!(val.unwrap().as_bytes().unwrap(), b"v3");
 
         // Restore to c2 => k => "v2".
-        cp.restore(c2);
+        cp.restore(c2).unwrap();
         let val = cp.get(b"k").unwrap();
         assert!(val.is_some());
         assert_eq!(val.unwrap().as_bytes().unwrap(), b"v2");
 
         // Restore to c1 => k => "v1".
-        cp.restore(c1);
+        cp.restore(c1).unwrap();
         let val = cp.get(b"k").unwrap();
         assert!(val.is_some());
         assert_eq!(val.unwrap().as_bytes().unwrap(), b"v1");
@@ -756,7 +768,7 @@ mod tests {
         assert!(cp.get(b"initial").unwrap().is_none());
 
         // Restore checkpoint
-        cp.restore(checkpoint);
+        cp.restore(checkpoint).unwrap();
 
         // Verify restored state
         assert!(cp.get(b"key1").unwrap().is_none());
@@ -850,13 +862,13 @@ mod tests {
         assert_eq!(cp.undo_log.len(), 2);
 
         // Test restore works correctly with delta-based undo
-        cp.restore(checkpoint2);
+        cp.restore(checkpoint2).unwrap();
         assert_eq!(
             cp.get(b"new_key").unwrap().unwrap().as_bytes().unwrap(),
             b"new_value"
         );
 
-        cp.restore(checkpoint1);
+        cp.restore(checkpoint1).unwrap();
         assert!(cp.get(b"new_key").unwrap().is_none());
 
         // Base storage should still work
@@ -885,7 +897,7 @@ mod tests {
         assert!(cp.get(b"overlay_key").unwrap().is_none());
 
         // Restore should bring back the overlay key
-        cp.restore(checkpoint);
+        cp.restore(checkpoint).unwrap();
         assert_eq!(
             cp.get(b"overlay_key").unwrap().unwrap().as_bytes().unwrap(),
             b"overlay_value"
@@ -897,7 +909,7 @@ mod tests {
         assert!(cp.get(b"base_key").unwrap().is_none());
 
         // Restore should remove the tombstone, base storage should be accessible again
-        cp.restore(checkpoint2);
+        cp.restore(checkpoint2).unwrap();
         assert_eq!(
             cp.get(b"base_key").unwrap().unwrap().as_bytes().unwrap(),
             b"base_value"
@@ -927,7 +939,7 @@ mod tests {
         );
 
         // Restore should remove the key completely (same as if we stored None)
-        cp.restore(checkpoint1);
+        cp.restore(checkpoint1).unwrap();
         assert!(cp.get(b"new_key").unwrap().is_none());
 
         // === Scenario 2: Set key that exists in base storage but not overlay ===
@@ -949,7 +961,7 @@ mod tests {
         );
 
         // Restore should revert to base storage value
-        cp.restore(checkpoint2);
+        cp.restore(checkpoint2).unwrap();
         assert_eq!(
             cp.get(b"existing_key")
                 .unwrap()
@@ -983,7 +995,7 @@ mod tests {
         );
 
         // Restore should revert to previous overlay value
-        cp.restore(checkpoint3);
+        cp.restore(checkpoint3).unwrap();
         assert_eq!(
             cp.get(b"existing_key")
                 .unwrap()
@@ -1006,7 +1018,7 @@ mod tests {
         assert!(cp.get(b"overlay_only").unwrap().is_none());
 
         // Restore should bring back the overlay value
-        cp.restore(checkpoint4);
+        cp.restore(checkpoint4).unwrap();
         assert_eq!(
             cp.get(b"overlay_only")
                 .unwrap()
@@ -1024,7 +1036,7 @@ mod tests {
         assert!(cp.get(b"another_key").unwrap().is_none());
 
         // Restore should remove tombstone, making base storage accessible
-        cp.restore(checkpoint5);
+        cp.restore(checkpoint5).unwrap();
         assert_eq!(
             cp.get(b"another_key").unwrap().unwrap().as_bytes().unwrap(),
             b"another_value"
@@ -1043,7 +1055,7 @@ mod tests {
         assert!(cp.get(b"another_key").unwrap().is_none());
 
         // Restore should bring back the overlay value
-        cp.restore(checkpoint6);
+        cp.restore(checkpoint6).unwrap();
         assert_eq!(
             cp.get(b"another_key").unwrap().unwrap().as_bytes().unwrap(),
             b"overlay_another"
@@ -1077,7 +1089,7 @@ mod tests {
         );
 
         // Restore to checkpoint8
-        cp.restore(checkpoint8);
+        cp.restore(checkpoint8).unwrap();
         assert_eq!(
             cp.get(b"key_a").unwrap().unwrap().as_bytes().unwrap(),
             b"value_a1"
@@ -1089,7 +1101,7 @@ mod tests {
         assert!(cp.get(b"key_c").unwrap().is_none());
 
         // Restore to checkpoint7
-        cp.restore(checkpoint7);
+        cp.restore(checkpoint7).unwrap();
         assert!(cp.get(b"key_a").unwrap().is_none());
         assert!(cp.get(b"key_b").unwrap().is_none());
         assert!(cp.get(b"key_c").unwrap().is_none());
@@ -1103,6 +1115,26 @@ mod tests {
 
     /// Test that ensures batch operations with delta undo log work identically
     /// to individual operations with full-value undo log
+    /// Test checkpoint validation for out-of-bounds indices
+    #[test]
+    fn test_checkpoint_bounds_validation() {
+        let storage = MockReadonlyKV::new();
+        let mut cp = ExecutionState::new(&storage);
+
+        // Create a checkpoint with invalid indices
+        let invalid_checkpoint = Checkpoint {
+            undo_log_index: 100, // Out of bounds
+            events_index: 50,    // Out of bounds
+            unique_objects_created: 0,
+        };
+
+        // Should fail with invalid checkpoint error
+        assert_eq!(
+            cp.restore(invalid_checkpoint).unwrap_err(),
+            ERR_INVALID_CHECKPOINT
+        );
+    }
+
     #[test]
     fn test_batch_delta_undo_identical_functionality() {
         let storage = MockReadonlyKV::new_with_data(&[
@@ -1172,7 +1204,7 @@ mod tests {
         );
 
         // Restore should revert ALL batch operations atomically
-        cp.restore(checkpoint);
+        cp.restore(checkpoint).unwrap();
 
         // Verify restoration to exact previous state
         assert_eq!(

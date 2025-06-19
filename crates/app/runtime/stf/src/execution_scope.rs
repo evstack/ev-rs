@@ -3,6 +3,22 @@ use evolve_core::{ErrorCode, SdkResult};
 
 pub const ERR_TOO_MANY_OBJECTS: ErrorCode = ErrorCode::new(20, "too many objects");
 
+/// Maximum number of objects that can be created in a single transaction
+const MAX_OBJECTS_PER_TRANSACTION: u64 = u16::MAX as u64;
+
+/// Start index for block height in unique ID
+const BLOCK_HEIGHT_START: usize = 0;
+/// End index for block height in unique ID
+const BLOCK_HEIGHT_END: usize = 8;
+/// Start index for object ID in block scope unique ID  
+const BLOCK_OBJECT_ID_START: usize = 8;
+/// End index for object ID in block scope unique ID
+const BLOCK_OBJECT_ID_END: usize = 16;
+/// Start index for object ID in transaction ID (last 2 bytes)
+const TX_OBJECT_ID_START: usize = 30;
+/// End index for object ID in transaction ID
+const TX_OBJECT_ID_END: usize = 32;
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum ExecutionScope {
     BeginBlock(u64),
@@ -27,21 +43,23 @@ impl ExecutionScope {
             // [ block_height (8 bytes), object_id (8 bytes), 16 zeros ]
             ExecutionScope::BeginBlock(height) | ExecutionScope::EndBlock(height) => {
                 let mut result = [0u8; 32];
-                result[0..8].copy_from_slice(&height.to_be_bytes());
-                result[8..16].copy_from_slice(&object_id.to_be_bytes());
+                result[BLOCK_HEIGHT_START..BLOCK_HEIGHT_END].copy_from_slice(&height.to_be_bytes());
+                result[BLOCK_OBJECT_ID_START..BLOCK_OBJECT_ID_END]
+                    .copy_from_slice(&object_id.to_be_bytes());
                 // The last 16 bytes remain zero
                 Ok(result)
             }
 
             // Transaction scope: overwrite last 2 bytes with object_id as u16
             ExecutionScope::Transaction(tx_id) => {
-                if object_id > u64::from(u16::MAX) {
+                if object_id > MAX_OBJECTS_PER_TRANSACTION {
                     return Err(ERR_TOO_MANY_OBJECTS);
                 }
                 let object_id_u16 = object_id as u16;
                 let mut result = *tx_id;
-                // Overwrite the final 2 bytes [30..32] with object_id
-                result[30..32].copy_from_slice(&object_id_u16.to_be_bytes());
+                // Overwrite the final 2 bytes with object_id
+                result[TX_OBJECT_ID_START..TX_OBJECT_ID_END]
+                    .copy_from_slice(&object_id_u16.to_be_bytes());
                 Ok(result)
             }
 
