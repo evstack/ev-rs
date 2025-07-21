@@ -168,7 +168,7 @@ where
     }
 
     pub(crate) fn init_chain(&mut self, genesis: request::InitChain) -> response::InitChain {
-        log::debug!("processing init chain: {:?}", genesis);
+        log::debug!("processing init chain: {genesis:?}");
 
         let genesis_result: SdkResult<ExecutionState<_>> =
             (self.init_chainer)(&self.stf, &self.account_codes, &self.storage);

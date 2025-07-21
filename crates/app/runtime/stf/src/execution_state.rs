@@ -722,7 +722,7 @@ mod tests {
         let mut operations = Vec::new();
         for i in 0..=test_limit {
             operations.push(BatchOperation {
-                key: format!("key{}", i).into_bytes(),
+                key: format!("key{i}").into_bytes(),
                 operation: BatchOp::Set(Message::from_bytes(b"value".to_vec())),
             });
         }
@@ -818,8 +818,8 @@ mod tests {
         let mut operations = Vec::new();
         for i in 0..batch_size {
             operations.push(BatchOperation {
-                key: format!("key{:04}", i).into_bytes(),
-                operation: BatchOp::Set(Message::from_bytes(format!("value{}", i).into_bytes())),
+                key: format!("key{i:04}").into_bytes(),
+                operation: BatchOp::Set(Message::from_bytes(format!("value{i}").into_bytes())),
             });
         }
 

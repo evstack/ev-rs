@@ -39,7 +39,7 @@ where
     }
 
     fn call(&mut self, req: Request) -> Self::Future {
-        log::debug!("got call: {:?}", req);
+        log::debug!("got call: {req:?}");
         let rsp = match req {
             Request::Echo(req) => Response::Echo(response::Echo {
                 message: req.message,
@@ -65,7 +65,7 @@ where
             Request::LoadSnapshotChunk(_) => Response::LoadSnapshotChunk(Default::default()),
             Request::ApplySnapshotChunk(_) => Response::ApplySnapshotChunk(Default::default()),
         };
-        log::debug!("response: {:?}", rsp);
+        log::debug!("response: {rsp:?}");
         async move { Ok(rsp) }.boxed()
     }
 }
