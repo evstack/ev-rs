@@ -27,7 +27,8 @@ borsh.workspace = true
 log.workspace = true
 tokio.workspace = true
 
-# TODO eventually move to dev deps as soon as we have a working storage engine
+# TODO: Move evolve_testing to dev-dependencies once storage engine is fully implemented
+# This dependency is currently required in main dependencies for testing infrastructure
 evolve_testing.workspace = true
 
 sha2.workspace = true

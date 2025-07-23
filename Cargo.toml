@@ -1,9 +1,8 @@
 [workspace]
 members = [
-    "crates/app/actor",
     "crates/types",
     "crates/rpc",
-    "crates/app/runtime/stf",
+    "crates/app/stf",
     "crates/app/sdk/collections",
     "crates/app/sdk/core",
     "crates/app/sdk/macros",
@@ -11,7 +10,11 @@ members = [
     "crates/app/sdk/standards/*",
     "crates/app/sdk/x/*",
     "crates/storage",
-    "crates/app/testapp", "crates/app/sdk/testing", "crates/consensus/cometbft", "crates/consensus/cometbft_account_trait", "crates/app/sdk/math",
+    "crates/app/testapp",
+    "crates/app/sdk/testing",
+    "crates/consensus/cometbft",
+    "crates/consensus/cometbft_account_trait",
+    "crates/app/sdk/math",
 ]
 resolver = "2"
 
@@ -42,7 +45,7 @@ evolve_unique = { path = "crates/app/sdk/x/unique" }
 evolve_cometbft = { path = "crates/consensus/cometbft" }
 evolve_cometbft_account_trait = { path = "crates/consensus/cometbft_account_trait" }
 
-evolve_stf = { path = "crates/app/runtime/stf" }
+evolve_stf = { path = "crates/app/stf" }
 
 evolve_testing = { path = "crates/app/sdk/testing" }
 evolve_testapp = { path = "crates/app/testapp" }
