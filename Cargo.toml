@@ -31,6 +31,7 @@ evolve_server_core = { path = "crates/app/sdk/server_core" }
 evolve_math = { path = "crates/app/sdk/math" }
 
 evolve_fungible_asset = { path = "crates/app/sdk/standards/evolve_fungible_asset" }
+evolve_authentication = { path = "crates/app/sdk/standards/evolve_authentication" }
 
 evolve_block_info = { path = "crates/app/sdk/x/block_info" }
 evolve_events = { path = "crates/app/sdk/x/events" }

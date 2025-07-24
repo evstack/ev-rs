@@ -6,7 +6,10 @@ Accepted
 
 ## Context
 
-Evolve is an account-based blockchain runtime where all functionality is implemented as accounts. Currently, account code is statically linked at compile time, but the architecture is designed to support dynamic loading of account code in the future (e.g., as WASM modules or other formats). This forward-looking design requires a flexible genesis mechanism that can:
+Evolve is an account-based blockchain runtime where all functionality is implemented as accounts. Currently, account
+code is statically linked at compile time, but the architecture is designed to support dynamic loading of account code
+in the future (e.g., as WASM modules or other formats). This forward-looking design requires a flexible genesis
+mechanism that can:
 
 1. Initialize accounts with custom logic and state
 2. Handle dependencies between accounts during genesis
@@ -16,9 +19,12 @@ Evolve is an account-based blockchain runtime where all functionality is impleme
 
 ## What We Want to Achieve
 
-- **Flexible Account Initialization**: Each account type can define its own initialization logic through custom `#[init]` methods
-- **Dependency Management**: Support initialization flows where accounts depend on each other (e.g., a scheduler needs to know about block info service)
-- **Runtime-Agnostic Genesis**: The runtime doesn't assume any specific genesis encoding - applications define their own genesis flow
+- **Flexible Account Initialization**: Each account type can define its own initialization logic through custom
+  `#[init]` methods
+- **Dependency Management**: Support initialization flows where accounts depend on each other (e.g., a scheduler needs
+  to know about block info service)
+- **Runtime-Agnostic Genesis**: The runtime doesn't assume any specific genesis encoding - applications define their own
+  genesis flow
 - **Developer-Friendly API**: Simple, type-safe initialization through generated wrapper methods
 - **Composable Genesis**: Ability to chain account initializations and use responses from previous initializations
 
@@ -26,7 +32,8 @@ Evolve is an account-based blockchain runtime where all functionality is impleme
 
 ### 1. Account Initialization via `#[init]` Attribute
 
-Accounts define their initialization logic using the `#[init]` attribute on a method. The `evolve_macros::account_impl` macro processes this to generate the necessary boilerplate.
+Accounts define their initialization logic using the `#[init]` attribute on a method. The `evolve_macros::account_impl`
+macro processes this to generate the necessary boilerplate.
 
 **Example from Escrow account:**
 
@@ -97,9 +104,12 @@ The STF (State Transition Function) processes this by:
 3. Looking up the account code implementation (currently from statically linked registry)
 4. Calling the account's `init` method with the provided parameters
 
-**Current Implementation**: Account codes are registered at compile time through the `install_account_codes` function and stored in an `AccountsCodeStorage` that maps string identifiers to statically linked `AccountCode` implementations.
+**Current Implementation**: Account codes are registered at compile time through the `install_account_codes` function
+and stored in an `AccountsCodeStorage` that maps string identifiers to statically linked `AccountCode` implementations.
 
-**Future Vision**: The same `code_id` mechanism will support dynamic loading, where the runtime can load account implementations from WASM modules, shared libraries, or other formats without changing the genesis flow or account creation API.
+**Future Vision**: The same `code_id` mechanism will support dynamic loading, where the runtime can load account
+implementations from WASM modules, shared libraries, or other formats without changing the genesis flow or account
+creation API.
 
 ### 4. Application Genesis Implementation
 
@@ -193,7 +203,7 @@ pub fn do_genesis<'a, S: ReadonlyKV, A: AccountsCodeStorage>(
 ## Key Differences from Cosmos SDK
 
 | Aspect               | Cosmos SDK                                     | Evolve                                                                        |
-| -------------------- | ---------------------------------------------- | ----------------------------------------------------------------------------- |
+|----------------------|------------------------------------------------|-------------------------------------------------------------------------------|
 | **Module Init**      | Static `InitGenesis` functions called in order | Dynamic account creation with custom `#[init]` methods                        |
 | **Dependencies**     | Manual ordering of module initialization       | Explicit dependency passing via initialization parameters                     |
 | **Genesis Format**   | Predefined JSON structure                      | Application-defined, encoding-agnostic                                        |
@@ -270,7 +280,8 @@ pub fn install_account_codes(codes: &mut impl WritableAccountsCodeStorage) {
 }
 ```
 
-**Note**: In the future, this step may be replaced by dynamic loading mechanisms where account code is loaded from external sources (WASM modules, etc.) rather than being statically compiled into the application.
+**Note**: In the future, this step may be replaced by dynamic loading mechanisms where account code is loaded from
+external sources (WASM modules, etc.) rather than being statically compiled into the application.
 
 3. **Include in genesis:**
 

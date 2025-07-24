@@ -1,9 +1,12 @@
+pub mod eoa;
 pub mod storage;
 pub mod testing;
 pub mod types;
 
-pub use crate::types::Tx;
+use crate::eoa::eoa_account::{EoaAccount, EoaAccountRef};
+pub use crate::types::TestTx;
 use borsh::BorshDeserialize;
+use evolve_authentication::AuthenticationTxValidator;
 use evolve_block_info::account::{BlockInfo, BlockInfoRef};
 use evolve_cometbft::types::TendermintBlock;
 use evolve_core::events_api::EVENT_HANDLER_ACCOUNT_ID;
@@ -19,30 +22,19 @@ use evolve_poa::account::{Poa, PoaRef};
 use evolve_scheduler::scheduler_account::{Scheduler, SchedulerRef};
 use evolve_scheduler::server::{SchedulerBeginBlocker, SchedulerEndBlocker};
 use evolve_server_core::{
-    AccountsCodeStorage, PostTxExecution, TxDecoder, TxValidator, WritableAccountsCodeStorage,
+    AccountsCodeStorage, PostTxExecution, TxDecoder, WritableAccountsCodeStorage,
 };
 use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::Stf;
 use evolve_token::account::{Token, TokenRef};
 
-pub const ALICE: AccountId = AccountId::new(100_000);
-pub const BOB: AccountId = AccountId::new(100_001);
-
 pub const MINTER: AccountId = AccountId::new(100_002);
-
-pub struct TxValidatorHandler;
-
-impl TxValidator<Tx> for TxValidatorHandler {
-    fn validate_tx(&self, _tx: &Tx, _env: &mut dyn Environment) -> SdkResult<()> {
-        Ok(())
-    }
-}
 
 pub struct NoOpPostTx;
 
-impl PostTxExecution<Tx> for NoOpPostTx {
+impl PostTxExecution<TestTx> for NoOpPostTx {
     fn after_tx_executed(
-        _tx: &Tx,
+        _tx: &TestTx,
         _gas_consumed: u64,
         _tx_result: SdkResult<InvokeResponse>,
         _env: &mut dyn Environment,
@@ -52,10 +44,10 @@ impl PostTxExecution<Tx> for NoOpPostTx {
 }
 
 pub type CustomStf = Stf<
-    Tx,
-    TendermintBlock<Tx>,
+    TestTx,
+    TendermintBlock<TestTx>,
     SchedulerBeginBlocker,
-    TxValidatorHandler,
+    AuthenticationTxValidator<TestTx>,
     SchedulerEndBlocker,
     NoOpPostTx,
 >;
@@ -63,16 +55,16 @@ pub type CustomStf = Stf<
 pub const STF: CustomStf = CustomStf::new(
     SchedulerBeginBlocker,
     SchedulerEndBlocker,
-    TxValidatorHandler,
+    AuthenticationTxValidator::new(),
     NoOpPostTx,
 );
 
 #[derive(Clone)]
 pub struct TxDecoderImpl;
 
-impl TxDecoder<Tx> for TxDecoderImpl {
-    fn decode(&self, bytes: &mut &[u8]) -> SdkResult<Tx> {
-        Tx::deserialize(bytes).map_err(|_| ERR_ENCODING)
+impl TxDecoder<TestTx> for TxDecoderImpl {
+    fn decode(&self, bytes: &mut &[u8]) -> SdkResult<TestTx> {
+        TestTx::deserialize(bytes).map_err(|_| ERR_ENCODING)
     }
 }
 
@@ -85,6 +77,7 @@ pub fn install_account_codes(codes: &mut impl WritableAccountsCodeStorage) {
     codes.add_code(BlockInfo::new()).unwrap();
     codes.add_code(Poa::new()).unwrap();
     codes.add_code(Escrow::new()).unwrap();
+    codes.add_code(EoaAccount::new()).unwrap();
 }
 
 pub fn do_genesis<'a, S: ReadonlyKV, A: AccountsCodeStorage>(
@@ -98,6 +91,11 @@ pub fn do_genesis<'a, S: ReadonlyKV, A: AccountsCodeStorage>(
     let (_, state) = stf.sudo(storage, codes, genesis_height, |env| {
         // Create name service account: this must be done first
         let ns_acc = NameServiceRef::initialize(vec![], env)?.0;
+
+        // create EOAs
+        let alice_account = EoaAccountRef::initialize(env)?.0;
+        let bob_account = EoaAccountRef::initialize(env)?.0;
+
         // Create atom token
         let atom = TokenRef::initialize(
             FungibleAssetMetadata {
@@ -107,7 +105,7 @@ pub fn do_genesis<'a, S: ReadonlyKV, A: AccountsCodeStorage>(
                 icon_url: "https://lol.wtf".to_string(),
                 description: "The atom coin".to_string(),
             },
-            vec![(ALICE, 1000), (BOB, 2000)],
+            vec![(alice_account.0, 1000), (bob_account.0, 2000)],
             Some(MINTER),
             env,
         )?

@@ -10,6 +10,9 @@ documentation = "A test application for the evolve stack."
 [dependencies]
 evolve_core.workspace = true
 evolve_fungible_asset.workspace = true
+evolve_authentication.workspace = true
+evolve_collections.workspace = true
+evolve_macros.workspace = true
 evolve_server_core.workspace = true
 evolve_stf = { workspace = true, features = ["testing"] }
 

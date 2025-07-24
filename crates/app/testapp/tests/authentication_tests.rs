@@ -1,9 +1,9 @@
+use evolve_authentication::ERR_NOT_EOA;
 use evolve_cometbft::types::TendermintBlock;
-use evolve_core::{AccountId, Environment, InvokeRequest, SdkResult};
+use evolve_core::runtime_api::{CreateAccountRequest, RUNTIME_ACCOUNT_ID};
+use evolve_core::{AccountId, InvokeRequest, Message};
 use evolve_fungible_asset::TransferMsg;
-use evolve_gas::account::ERR_OUT_OF_GAS;
 use evolve_ns::account::ResolveNameMsg;
-use evolve_poa::account::Poa;
 use evolve_server_core::WritableKV;
 use evolve_stf::gas::GasCounter;
 use evolve_testapp::{do_genesis, install_account_codes, TestTx, STF};
@@ -90,7 +90,7 @@ fn test_successful_transaction() {
 }
 
 #[test]
-fn test_out_of_gas_transaction() {
+fn test_not_eoa_transaction() {
     let (storage, atom_id, _poa_id) = setup_test_environment();
     let codes = {
         let mut codes = AccountStorageMock::new();
@@ -98,50 +98,28 @@ fn test_out_of_gas_transaction() {
         codes
     };
 
-    // create a TX failing because of gas limit
-    let out_of_gas_tx = TestTx {
-        sender: ALICE,
+    // create a TX failing because not EOA account
+    let not_eoa = TestTx {
+        // we pretend sender is runtime; which is not EOA, so it cannot send Txs.
+        sender: RUNTIME_ACCOUNT_ID,
         recipient: atom_id,
-        request: InvokeRequest::new(&TransferMsg {
-            to: BOB,
-            amount: 200,
+        request: InvokeRequest::new(&CreateAccountRequest {
+            code_id: "".to_string(),
+            init_message: Message::new(&0).unwrap(),
         })
-        .unwrap(),
-        gas_limit: 1500,
+        .expect("REASON"),
+        gas_limit: 500_000,
         funds: vec![],
     };
 
-    // execute block with out of gas transaction
-    let block = TendermintBlock::make_for_testing(vec![out_of_gas_tx]);
+    // execute block with not EOA transaction
+    let block = TendermintBlock::make_for_testing(vec![not_eoa]);
     let (mut block_results, _new_state) = STF.apply_block(&storage, &codes, &block);
 
     // extract and verify result
-    let out_of_gas_result = block_results.tx_results.pop().unwrap();
+    let not_eoa_result = block_results.tx_results.pop().unwrap();
     assert_eq!(
-        out_of_gas_result.response.expect_err("expected an error"),
-        ERR_OUT_OF_GAS
+        not_eoa_result.response.expect_err("expected an error"),
+        ERR_NOT_EOA,
     );
-}
-
-#[test]
-fn test_poa_validator_query() {
-    let (storage, _atom_id, poa_id) = setup_test_environment();
-    let codes = {
-        let mut codes = AccountStorageMock::new();
-        install_account_codes(&mut codes);
-        codes
-    };
-
-    // test run as
-    STF.run_with_code(
-        &storage,
-        &codes,
-        poa_id,
-        |x: &Poa, env: &dyn Environment| -> SdkResult<()> {
-            let validators = x.get_validator_set(env)?;
-            assert_eq!(validators.len(), 0); // TODO: add validators
-            Ok(())
-        },
-    )
-    .unwrap();
 }

@@ -3,8 +3,8 @@ use evolve_core::{AccountId, FungibleAsset, InvokeRequest};
 use evolve_server_core::Transaction;
 use sha2::Digest;
 
-#[derive(BorshSerialize, BorshDeserialize)]
-pub struct Tx {
+#[derive(BorshSerialize, BorshDeserialize, Clone)]
+pub struct TestTx {
     pub sender: AccountId,
     pub recipient: AccountId,
     pub request: InvokeRequest,
@@ -12,7 +12,7 @@ pub struct Tx {
     pub funds: Vec<FungibleAsset>,
 }
 
-impl Transaction for Tx {
+impl Transaction for TestTx {
     fn sender(&self) -> AccountId {
         self.sender
     }

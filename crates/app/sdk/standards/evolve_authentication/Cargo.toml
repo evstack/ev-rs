@@ -1,0 +1,16 @@
+[package]
+name = "evolve_authentication"
+version = "0.1.0"
+edition = "2024"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+evolve_collections = { workspace = true }
+evolve_core = { workspace = true }
+evolve_server_core = { workspace = true }
+evolve_macros = { workspace = true }
+borsh = { workspace = true }
+[lints]
+workspace = true

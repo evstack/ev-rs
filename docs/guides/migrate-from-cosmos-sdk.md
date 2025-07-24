@@ -1,6 +1,8 @@
 # Migrating from a Cosmos-SDK chain
 
-This guide provides instructions for migrating state from a Cosmos-SDK based blockchain to Evolve. The migration process involves transforming the state format from Protobuf (used by Cosmos-SDK) to Borsh (used by Evolve) while maintaining data integrity and compatibility.
+This guide provides instructions for migrating state from a Cosmos-SDK based blockchain to Evolve. The migration process
+involves transforming the state format from Protobuf (used by Cosmos-SDK) to Borsh (used by Evolve) while maintaining
+data integrity and compatibility.
 
 ## Important Notes
 
@@ -9,26 +11,28 @@ This guide provides instructions for migrating state from a Cosmos-SDK based blo
 - **Cosmos-SDK**: Uses Protobuf for state serialization
 - **Evolve**: Uses Borsh for state serialization
 
-⚠️ **State Layout**: Evolve uses a different state key layout compared to Cosmos-SDK, which may require state key transformations during migration.
+⚠️ **State Layout**: Evolve uses a different state key layout compared to Cosmos-SDK, which may require state key
+transformations during migration.
 
 ⚠️ **Account Model**: Evolve uses a different account model where each token has its own account instance and address.
 
 ## Supported Modules
 
-| Module       | Status       | Notes                  |
-| ------------ | ------------ | ---------------------- |
+| Module       | Status      | Notes                  |
+|--------------|-------------|------------------------|
 | Bank         | ✅ Supported | Full migration support |
 | BeginBlock   | ✅ Supported | -                      |
 | EndBlock     | ✅ Supported | -                      |
-| Staking      | 🔄 Planned   | -                      |
-| Distribution | 🔄 Planned   | -                      |
-| Gov          | 🔄 Planned   | -                      |
-| IBC          | 🔄 Planned   | -                      |
-| Auth         | 🔄 Planned   | –                      |
+| Staking      | 🔄 Planned  | -                      |
+| Distribution | 🔄 Planned  | -                      |
+| Gov          | 🔄 Planned  | -                      |
+| IBC          | 🔄 Planned  | -                      |
+| Auth         | 🔄 Planned  | –                      |
 
 ## Migration: Bank Module
 
-The Bank module manages token balances and transfers. The migration process transforms Cosmos-SDK's account-centric balance model to Evolve's token-centric account model.
+The Bank module manages token balances and transfers. The migration process transforms Cosmos-SDK's account-centric
+balance model to Evolve's token-centric account model.
 
 ### Genesis State Structure
 
@@ -455,4 +459,5 @@ After migration, validate the state by:
 - **Minter Rights**: Consider if any tokens need minting capabilities post-migration
 - **System Integration**: Ensure migrated tokens work with other Evolve modules (gas, scheduler, etc.)
 
-This migration approach transforms Cosmos-SDK's account-centric bank model to Evolve's token-centric model, where each token is its own account/contract with proper metadata and initial balance distributions.
+This migration approach transforms Cosmos-SDK's account-centric bank model to Evolve's token-centric model, where each
+token is its own account/contract with proper metadata and initial balance distributions.
