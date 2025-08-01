@@ -2,12 +2,12 @@
 mod example;
 
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{ERR_UNKNOWN_FUNCTION, Environment, ErrorCode, Message, SdkResult};
+use evolve_core::{ERR_UNKNOWN_FUNCTION, Environment, Message, SdkResult, define_error};
 use evolve_macros::account_impl;
 use evolve_server_core::{Transaction, TxValidator};
 use std::marker::PhantomData;
 
-pub const ERR_NOT_EOA: ErrorCode = ErrorCode::new(4111, "not an externally owned account");
+define_error!(ERR_NOT_EOA, 0x41, "not an externally owned account");
 
 #[account_impl(AuthenticationInterface)]
 pub mod auth_interface {

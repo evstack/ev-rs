@@ -9,13 +9,13 @@ use evolve_macros::account_impl;
 pub mod pool {
     use borsh::{BorshDeserialize, BorshSerialize};
     use evolve_collections::item::Item;
-    use evolve_core::{Environment, ErrorCode, FungibleAsset, SdkResult};
+    use evolve_core::{define_error, Environment, FungibleAsset, SdkResult};
     use evolve_fungible_asset::{FungibleAssetInterfaceRef, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
     use evolve_token::account::TokenRef;
 
-    const ERR_INVALID_FUNDS_AMOUNT: ErrorCode = ErrorCode::new(0, "invalid funds amount");
-    const ERR_INVALID_ASSET_ID: ErrorCode = ErrorCode::new(1, "invalid asset id");
+    define_error!(ERR_INVALID_FUNDS_AMOUNT, 0x1, "invalid funds amount");
+    define_error!(ERR_INVALID_ASSET_ID, 0x2, "invalid asset id");
 
     #[derive(BorshDeserialize, BorshSerialize, Clone)]
     pub struct PoolState {

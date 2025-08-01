@@ -1,3 +1,7 @@
+use crate::errors::{
+    ERR_INVALID_CHECKPOINT, ERR_KEY_TOO_LARGE, ERR_OVERLAY_SIZE_EXCEEDED, ERR_TOO_MANY_EVENTS,
+    ERR_VALUE_TOO_LARGE,
+};
 use evolve_core::events_api::Event;
 use evolve_core::{ErrorCode, Message, ReadonlyKV, SdkResult};
 use evolve_server_core::StateChange as CoreStateChange;
@@ -9,12 +13,6 @@ const MAX_EVENTS_PER_EXECUTION: usize = 10_000; // Maximum events that can be em
 const MAX_KEY_SIZE: usize = 256; // Maximum size of a storage key in bytes
 const MAX_VALUE_SIZE: usize = 1024 * 1024; // Maximum size of a storage value (1MB)
 
-pub const ERR_OVERLAY_SIZE_EXCEEDED: ErrorCode = ErrorCode::new(429, "overlay size limit exceeded");
-pub const ERR_TOO_MANY_EVENTS: ErrorCode = ErrorCode::new(429, "too many events emitted");
-pub const ERR_KEY_TOO_LARGE: ErrorCode = ErrorCode::new(413, "storage key too large");
-pub const ERR_VALUE_TOO_LARGE: ErrorCode = ErrorCode::new(413, "storage value too large");
-pub const ERR_INVALID_CHECKPOINT: ErrorCode =
-    ErrorCode::new(400, "checkpoint does not belong to this execution state");
 /// Represents one change to the overlay so it can be undone.
 /// Optimized to store deltas instead of full previous values.
 #[derive(Debug)]

@@ -7,13 +7,13 @@ pub mod escrow {
     use evolve_collections::item::Item;
     use evolve_collections::map::Map;
     use evolve_core::{
-        ensure, AccountId, Environment, ErrorCode, FungibleAsset, SdkResult, ERR_UNAUTHORIZED,
+        define_error, ensure, AccountId, Environment, FungibleAsset, SdkResult, ERR_UNAUTHORIZED,
     };
     use evolve_fungible_asset::FungibleAssetInterfaceRef;
     use evolve_macros::{exec, init};
     use evolve_unique::unique::{UniqueId, UniqueRef};
 
-    pub const ERR_LOCK_NOT_READY: ErrorCode = ErrorCode::new(0, "lock not matured");
+    define_error!(ERR_LOCK_NOT_READY, 0x1, "lock not matured");
 
     #[derive(BorshDeserialize, BorshSerialize, Clone, Debug)]
     pub struct Lock {

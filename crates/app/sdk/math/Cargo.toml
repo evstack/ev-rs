@@ -10,6 +10,11 @@ rust-version.workspace = true
 evolve_core.workspace = true
 
 fixed = { workspace = true }
+linkme = {version = "0.3", default-features = false, optional = true}
 
 [lints]
 workspace = true
+
+[features]
+default = []
+error-decode = ["linkme", "evolve_core/error-decode"]

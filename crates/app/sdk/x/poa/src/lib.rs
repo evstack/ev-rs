@@ -4,21 +4,24 @@ use evolve_macros::account_impl;
 pub mod account {
     use borsh::{BorshDeserialize, BorshSerialize};
     use evolve_collections::item::Item;
-    use evolve_collections::queue::ERR_DATA_CORRUPTION;
     use evolve_collections::unordered_map::UnorderedMap;
     use evolve_collections::vector::Vector;
+    use evolve_collections::ERR_DATA_CORRUPTION;
     use evolve_cometbft_account_trait::consensus_account::{
         AbciValsetManagerAccount, ValidatorUpdate,
     };
-    use evolve_core::{AccountId, Environment, ErrorCode, SdkResult, ERR_UNAUTHORIZED};
+    use evolve_core::{define_error, AccountId, Environment, SdkResult, ERR_UNAUTHORIZED};
     use evolve_events::EventsEmitter;
     use evolve_macros::{exec, init, query};
     use evolve_scheduler::begin_block_account_interface::BeginBlockAccountInterface;
 
-    pub const ERR_NO_VALIDATORS: ErrorCode = ErrorCode::new(0, "no validators left");
-    pub const ERR_VALIDATOR_NOT_FOUND: ErrorCode = ErrorCode::new(1, "validator not found");
-    pub const ERR_VALIDATOR_ALREADY_EXISTS: ErrorCode =
-        ErrorCode::new(2, "validator already exists");
+    define_error!(ERR_NO_VALIDATORS, 0x1, "no validators left");
+    define_error!(ERR_VALIDATOR_NOT_FOUND, 0x2, "validator not found");
+    define_error!(
+        ERR_VALIDATOR_ALREADY_EXISTS,
+        0x3,
+        "validator already exists"
+    );
 
     #[derive(BorshSerialize, BorshDeserialize, Clone)]
     pub enum ValsetChange {

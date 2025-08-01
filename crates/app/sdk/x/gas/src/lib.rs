@@ -5,10 +5,10 @@ pub mod account {
     use borsh::{BorshDeserialize, BorshSerialize};
     use evolve_collections::item::Item;
     use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
-    use evolve_core::{Environment, ErrorCode, SdkResult, ERR_UNAUTHORIZED};
+    use evolve_core::{define_error, Environment, SdkResult, ERR_UNAUTHORIZED};
     use evolve_macros::{exec, init, query};
 
-    pub const ERR_OUT_OF_GAS: ErrorCode = ErrorCode::new(0, "out of gas");
+    define_error!(ERR_OUT_OF_GAS, 0x1, "out of gas");
 
     #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
     pub struct StorageGasConfig {

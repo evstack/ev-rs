@@ -207,7 +207,7 @@ mod test {
     impl TxDecoder<MyTx> for MyDecoder {
         fn decode(&self, bytes: &mut &[u8]) -> SdkResult<MyTx> {
             if bytes.is_empty() {
-                Err(ErrorCode::new(0, "empty bytes"))
+                Err(ErrorCode::new(202))
             } else {
                 Ok(MyTx)
             }

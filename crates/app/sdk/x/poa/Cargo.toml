@@ -1,20 +1,25 @@
 [package]
-name = "evolve_poa"
-version = "0.1.0"
 edition = "2021"
-repository.workspace = true
 license.workspace = true
+name = "evolve_poa"
+repository.workspace = true
 rust-version.workspace = true
+version = "0.1.0"
 
 [dependencies]
 evolve_collections.workspace = true
-evolve_core.workspace = true
-evolve_scheduler.workspace = true
-evolve_macros.workspace = true
-evolve_events.workspace = true
 evolve_cometbft_account_trait.workspace = true
+evolve_core.workspace = true
+evolve_events.workspace = true
+evolve_macros.workspace = true
+evolve_scheduler.workspace = true
 
 borsh.workspace = true
+linkme = {version = "0.3", default-features = false, optional = true}
 
 [lints]
 workspace = true
+
+[features]
+default = []
+error-decode = ["linkme", "evolve_core/error-decode"]

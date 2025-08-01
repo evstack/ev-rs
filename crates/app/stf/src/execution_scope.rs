@@ -1,7 +1,5 @@
-use crate::ERR_EXEC_IN_QUERY;
-use evolve_core::{ErrorCode, SdkResult};
-
-pub const ERR_TOO_MANY_OBJECTS: ErrorCode = ErrorCode::new(20, "too many objects");
+use crate::errors::ERR_EXEC_IN_QUERY;
+use evolve_core::SdkResult;
 
 /// Maximum number of objects that can be created in a single transaction
 const MAX_OBJECTS_PER_TRANSACTION: u64 = u16::MAX as u64;
@@ -53,7 +51,7 @@ impl ExecutionScope {
             // Transaction scope: overwrite last 2 bytes with object_id as u16
             ExecutionScope::Transaction(tx_id) => {
                 if object_id > MAX_OBJECTS_PER_TRANSACTION {
-                    return Err(ERR_TOO_MANY_OBJECTS);
+                    return Err(crate::errors::ERR_TOO_MANY_OBJECTS);
                 }
                 let object_id_u16 = object_id as u16;
                 let mut result = *tx_id;

@@ -1,24 +1,26 @@
 [package]
-name = "evolve_stf"
-version = "0.1.0"
 edition = "2021"
-repository.workspace = true
 license.workspace = true
+name = "evolve_stf"
+repository.workspace = true
 rust-version.workspace = true
+version = "0.1.0"
 
 [dependencies]
 evolve_core.workspace = true
-evolve_server_core.workspace = true
 evolve_fungible_asset.workspace = true
 evolve_gas.workspace = true
 evolve_ns.workspace = true
+evolve_server_core.workspace = true
 evolve_unique.workspace = true
-
+linkme = {version = "0.3", default-features = false, optional = true}
 
 [dev-dependencies]
 
-[features]
-testing = []
-
 [lints]
 workspace = true
+
+[features]
+default = []
+error-decode = ["linkme", "evolve_core/error-decode", "evolve_gas/error-decode"]
+testing = []

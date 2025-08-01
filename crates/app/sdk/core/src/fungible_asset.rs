@@ -1,9 +1,5 @@
-use crate::{AccountId, ErrorCode, SdkResult};
+use crate::{AccountId, SdkResult};
 use borsh::{BorshDeserialize, BorshSerialize};
-
-pub const ERR_INCOMPATIBLE_FA: ErrorCode = ErrorCode::new(10, "incompatible fungible asset");
-pub const ERR_INSUFFICIENT_BALANCE: ErrorCode = ErrorCode::new(11, "insufficient balance");
-pub const ERR_OVERFLOW: ErrorCode = ErrorCode::new(12, "amount overflow");
 
 /// A simple fungible asset with `account_id` and `amount`.
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize, Eq, PartialEq)]
@@ -20,10 +16,13 @@ impl FungibleAsset {
     /// - An overflow occurs (i.e., `amount + other.amount > u128::MAX`).
     pub fn increase(&mut self, other: Self) -> SdkResult<()> {
         if self.asset_id != other.asset_id {
-            return Err(ERR_INCOMPATIBLE_FA);
+            return Err(crate::ERR_INCOMPATIBLE_FA);
         }
 
-        let new_amount = self.amount.checked_add(other.amount).ok_or(ERR_OVERFLOW)?;
+        let new_amount = self
+            .amount
+            .checked_add(other.amount)
+            .ok_or(crate::ERR_OVERFLOW)?;
 
         self.amount = new_amount;
         Ok(())
@@ -36,10 +35,10 @@ impl FungibleAsset {
     /// - The balance would go negative (i.e., `self.amount < other.amount`).
     pub fn decrease(&mut self, other: Self) -> SdkResult<()> {
         if self.asset_id != other.asset_id {
-            return Err(ERR_INCOMPATIBLE_FA);
+            return Err(crate::ERR_INCOMPATIBLE_FA);
         }
         if self.amount < other.amount {
-            return Err(ERR_INSUFFICIENT_BALANCE);
+            return Err(crate::ERR_INSUFFICIENT_BALANCE);
         }
 
         self.amount -= other.amount;
@@ -98,7 +97,7 @@ mod tests {
         };
         let result = asset1.increase(asset2);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), ERR_INCOMPATIBLE_FA);
+        assert_eq!(result.unwrap_err(), crate::ERR_INCOMPATIBLE_FA);
     }
 
     #[test]
@@ -113,6 +112,6 @@ mod tests {
         };
         let result = asset1.decrease(asset2);
         assert!(result.is_err());
-        assert_eq!(result.unwrap_err(), ERR_INSUFFICIENT_BALANCE);
+        assert_eq!(result.unwrap_err(), crate::ERR_INSUFFICIENT_BALANCE);
     }
 }

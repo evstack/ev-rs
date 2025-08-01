@@ -1,5 +1,4 @@
 use crate::encoding::Encodable;
-pub use crate::fungible_asset::FungibleAsset;
 pub use crate::message::{InvokeRequest, InvokeResponse, Message};
 use borsh::{BorshDeserialize, BorshSerialize};
 
@@ -14,14 +13,21 @@ pub mod storage_api;
 pub mod unique_api;
 
 pub use error::ErrorCode;
+pub use fungible_asset::FungibleAsset;
 
-pub const ERR_ENCODING: ErrorCode = ErrorCode::new(0, "encoding error");
-pub const ERR_UNKNOWN_FUNCTION: ErrorCode = ErrorCode::new(1, "unknown function");
-pub const ERR_ACCOUNT_NOT_INITIALIZED: ErrorCode = ErrorCode::new(2, "account not initialized");
-pub const ERR_UNAUTHORIZED: ErrorCode = ErrorCode::new(3, "unauthorized");
-pub const ERR_NOT_PAYABLE: ErrorCode = ErrorCode::new(4, "not payable");
-pub const ERR_ONE_COIN: ErrorCode = ErrorCode::new(5, "one coin");
+define_error!(ERR_ENCODING, 0x01, "encoding error");
+define_error!(ERR_UNKNOWN_FUNCTION, 0x02, "unknown function");
+define_error!(ERR_ACCOUNT_NOT_INIT, 0x03, "account not initialized");
+define_error!(ERR_UNAUTHORIZED, 0x04, "unauthorized");
+define_error!(ERR_NOT_PAYABLE, 0x05, "not payable");
+define_error!(ERR_ONE_COIN, 0x06, "one coin");
+define_error!(ERR_INCOMPATIBLE_FA, 0x07, "incompatible fungible asset");
+define_error!(ERR_INSUFFICIENT_BALANCE, 0x08, "insufficient balance");
+define_error!(ERR_OVERFLOW, 0x09, "amount overflow");
 
+#[cfg(feature = "error-decode")]
+pub type SdkResult<T> = Result<T, crate::error::DecodedError>;
+#[cfg(not(feature = "error-decode"))]
 pub type SdkResult<T> = Result<T, ErrorCode>;
 
 #[derive(
@@ -52,6 +58,7 @@ impl AccountId {
         self.0.to_be_bytes().into()
     }
 }
+
 pub trait Environment {
     fn whoami(&self) -> AccountId;
     fn sender(&self) -> AccountId;
@@ -79,7 +86,7 @@ pub trait AccountCode: Send + Sync {
 }
 
 pub trait ReadonlyKV {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode>;
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, crate::error::ErrorCode>;
 }
 
 pub trait InvokableMessage: Encodable + Clone {

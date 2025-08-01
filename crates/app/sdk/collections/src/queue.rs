@@ -1,10 +1,7 @@
 use crate::item::Item;
 use crate::map::Map;
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{Environment, ErrorCode, SdkResult};
-
-pub const ERR_EMPTY: ErrorCode = ErrorCode::new(1, "queue is empty");
-pub const ERR_DATA_CORRUPTION: ErrorCode = ErrorCode::new(2, "data corruption");
+use evolve_core::{Environment, SdkResult};
 
 /// A simple queue with indices [front..back).
 ///
@@ -57,14 +54,14 @@ where
     }
 
     /// Dequeues an item from the front of the queue.
-    /// Returns an error `ERR_EMPTY` if the queue is empty.
+    /// Returns an error `crate::ERR_EMPTY` if the queue is empty.
     /// Complexity: O(1)
     pub fn pop_front(&self, env: &mut dyn Environment) -> SdkResult<V> {
         let front = self.get_front(env)?;
         let back = self.get_back(env)?;
 
         if front == back {
-            return Err(ERR_EMPTY);
+            return Err(crate::ERR_EMPTY);
         }
 
         // Retrieve the item at `front`
@@ -78,14 +75,14 @@ where
     }
 
     /// Dequeues an item from the *back* of the queue.
-    /// Returns an error `ERR_EMPTY` if the queue is empty.
+    /// Returns an error `crate::ERR_EMPTY` if the queue is empty.
     /// Complexity: O(1)
     pub fn pop_back(&self, env: &mut dyn Environment) -> SdkResult<V> {
         let front = self.get_front(env)?;
         let back = self.get_back(env)?;
 
         if back == front {
-            return Err(ERR_EMPTY);
+            return Err(crate::ERR_EMPTY);
         }
 
         let last_index = back - 1;
@@ -148,7 +145,7 @@ where
 
         match item_result {
             Ok(Some(item)) => Some(Ok(item)),
-            Ok(None) => Some(Err(ERR_DATA_CORRUPTION)),
+            Ok(None) => Some(Err(crate::ERR_DATA_CORRUPTION)),
             Err(e) => Some(Err(e)),
         }
     }
@@ -196,9 +193,9 @@ mod tests {
         // Now empty again
         assert!(queue.is_empty(&env)?);
 
-        // Popping from empty => ERR_EMPTY
+        // Popping from empty => crate::ERR_EMPTY
         let err = queue.pop_front(&mut env).unwrap_err();
-        assert_eq!(err.code(), ERR_EMPTY.code());
+        assert_eq!(err.code(), crate::ERR_EMPTY.code());
 
         Ok(())
     }
@@ -230,9 +227,9 @@ mod tests {
         // queue is now empty
         assert!(queue.is_empty(&env)?);
 
-        // pop_back on empty => ERR_EMPTY
+        // pop_back on empty => crate::ERR_EMPTY
         let err = queue.pop_back(&mut env).unwrap_err();
-        assert_eq!(err.code(), ERR_EMPTY.code());
+        assert_eq!(err.code(), crate::ERR_EMPTY.code());
 
         Ok(())
     }
@@ -382,7 +379,11 @@ mod tests {
 
         // Because we forcibly removed the item, we expect error code=404
         let err = result.unwrap_err();
-        assert_eq!(err, ERR_DATA_CORRUPTION, "Expected missing item code=404");
+        assert_eq!(
+            err,
+            crate::ERR_DATA_CORRUPTION,
+            "Expected missing item code=404"
+        );
 
         // The next call should yield None since we only had 1 item
         assert!(iter.next().is_none());

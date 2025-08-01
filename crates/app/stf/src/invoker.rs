@@ -16,8 +16,8 @@ use evolve_server_core::{AccountsCodeStorage, Transaction};
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use crate::errors::{ERR_ACCOUNT_DOES_NOT_EXIST, ERR_CODE_NOT_FOUND};
 use crate::runtime_api_impl;
-use crate::{ERR_ACCOUNT_DOES_NOT_EXIST, ERR_CODE_NOT_FOUND};
 
 /// Execution context for account operations and transaction processing.
 ///
@@ -230,7 +230,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
             || to == EVENT_HANDLER_ACCOUNT_ID
             || to == UNIQUE_HANDLER_ACCOUNT_ID
         {
-            return Err(ErrorCode::new(400, "cannot send funds to system accounts"));
+            return Err(ErrorCode::new(400));
         }
 
         // Execute all transfers atomically - if any fail, all fail

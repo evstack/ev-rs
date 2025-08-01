@@ -1,13 +1,18 @@
 [package]
-name = "evolve_core"
-version = "0.1.0"
 edition = "2021"
-repository.workspace = true
 license.workspace = true
+name = "evolve_core"
+repository.workspace = true
 rust-version.workspace = true
+version = "0.1.0"
 
 [dependencies]
-borsh = { workspace = true, features = ["derive"] }
+borsh = {workspace = true, features = ["derive"]}
+linkme = {version = "0.3", default-features = false, optional = true}
 
 [lints]
 workspace = true
+
+[features]
+default = []
+error-decode = ["linkme"]

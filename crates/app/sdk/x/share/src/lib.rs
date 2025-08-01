@@ -4,16 +4,16 @@ use evolve_macros::account_impl;
 pub mod share {
     use evolve_collections::{item::Item, map::Map};
     use evolve_core::{
-        AccountId, ERR_UNAUTHORIZED, Environment, ErrorCode, FungibleAsset, SdkResult, ensure,
+        AccountId, ERR_UNAUTHORIZED, Environment, FungibleAsset, SdkResult, define_error, ensure,
         one_coin,
     };
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
     use evolve_token::account::TokenRef;
 
-    pub const ERR_INVALID_COIN: ErrorCode = ErrorCode::new(0, "invalid coin");
-    pub const ERR_NOT_ENOUGH_BALANCE: ErrorCode = ErrorCode::new(1, "not enough balance");
-    pub const ERR_OVERFLOW: ErrorCode = ErrorCode::new(2, "arithmetic overflow");
+    define_error!(ERR_INVALID_COIN, 0x1, "invalid coin");
+    define_error!(ERR_NOT_ENOUGH_BALANCE, 0x2, "not enough balance");
+    define_error!(ERR_OVERFLOW, 0x3, "arithmetic overflow");
 
     pub struct Share {
         metadata: Item<FungibleAssetMetadata>,

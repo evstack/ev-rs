@@ -1,22 +1,27 @@
 [package]
-name = "evolve_escrow"
-version = "0.1.0"
 edition = "2021"
 license.workspace = true
+name = "evolve_escrow"
 repository.workspace = true
 rust-version.workspace = true
+version = "0.1.0"
 
 [dependencies]
-evolve_core.workspace = true
 evolve_collections.workspace = true
+evolve_core.workspace = true
 evolve_macros.workspace = true
 
-evolve_events.workspace = true
 evolve_block_info.workspace = true
-evolve_unique.workspace = true
+evolve_events.workspace = true
 evolve_fungible_asset.workspace = true
+evolve_unique.workspace = true
 
 borsh.workspace = true
+linkme = {version = "0.3", default-features = false, optional = true}
 
 [lints]
 workspace = true
+
+[features]
+default = []
+error-decode = ["linkme", "evolve_core/error-decode"]

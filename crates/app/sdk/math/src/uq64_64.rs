@@ -1,8 +1,8 @@
-use evolve_core::ErrorCode;
+use evolve_core::{ErrorCode, define_error};
 use fixed::{FixedU128, types::extra::U64};
 use std::ops::{Add, Div, Mul, Sub};
 
-pub const ERR_DIVISION_BY_ZERO: ErrorCode = ErrorCode::new(0, "divide by zero");
+define_error!(ERR_DIVISION_BY_ZERO, 0x1, "divide by zero");
 
 /// A UQ64.64 fixed-point number representation
 ///

@@ -1,5 +1,5 @@
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{Environment, ErrorCode, SdkResult};
+use evolve_core::{Environment, SdkResult};
 
 use crate::map::Map;
 use crate::vector::Vector;
@@ -192,14 +192,14 @@ where
                     Ok(Some(v)) => Some(Ok((k, v))),
                     Ok(None) => {
                         // This "shouldn't" happen if everything is consistent, but let's handle it
-                        Some(Err(ErrorCode::new(404, "Value missing for key")))
+                        Some(Err(crate::ERR_VALUE_MISSING))
                     }
                     Err(e) => Some(Err(e)),
                 }
             }
             Ok(None) => {
                 // Also shouldn't happen if consistent, but handle it
-                Some(Err(ErrorCode::new(404, "Key missing in vector")))
+                Some(Err(crate::ERR_KEY_MISSING))
             }
             Err(e) => Some(Err(e)),
         }
@@ -212,7 +212,7 @@ mod tests {
     // Brings UnorderedMap, etc. into scope
     use crate::mocks::MockEnvironment;
     use borsh::{BorshDeserialize, BorshSerialize};
-    use evolve_core::SdkResult;
+    use evolve_core::{ErrorCode, SdkResult};
 
     /// Simple data type for testing our UnorderedMap
     #[derive(Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize, Clone)]
@@ -245,8 +245,8 @@ mod tests {
 
         // Non-existent key -> get should fail, may_get -> None
         let err = map.get(&999, &env).err().unwrap();
-        // Adjust error code/message to match your real `ERR_NOT_FOUND`
-        assert_eq!(err.code(), 404 /* or your not-found code */);
+        // Check that we get ERR_NOT_FOUND error
+        assert_eq!(err, crate::ERR_NOT_FOUND);
 
         let maybe_missing = map.may_get(&999, &env)?;
         assert_eq!(maybe_missing, None);
@@ -470,11 +470,8 @@ mod tests {
 
         // 3) (Optional) You can also test returning an error from your closure
         //    to ensure it bubbles up correctly:
-        let err_result = map.update(
-            &42,
-            |_old_value| Err(ErrorCode::new(123, "Simulated failure")),
-            &mut env,
-        );
+
+        let err_result = map.update(&42, |_old_value| Err(ErrorCode::new(123)), &mut env);
         assert!(err_result.is_err());
         let err = err_result.err().unwrap();
         assert_eq!(err.code(), 123);

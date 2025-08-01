@@ -175,12 +175,12 @@ mod tests {
 
         // Update with an error
         let update_result = item.update(
-            |_| Err(ErrorCode::new(42, "custom")), // Return an error
+            |_| Err(ErrorCode::new(42)), // Return an error
             &mut env,
         );
 
         assert!(update_result.is_err());
-        assert_eq!(update_result.unwrap_err(), ErrorCode::new(42, "custom"));
+        assert_eq!(update_result.unwrap_err(), ErrorCode::new(42));
 
         // Verify the value was not changed
         let get_result = item.may_get(&env).unwrap();

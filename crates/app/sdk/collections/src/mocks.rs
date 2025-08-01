@@ -53,10 +53,10 @@ impl Environment for MockEnvironment {
 
     fn do_query(&self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse> {
         if self.should_fail {
-            return Err(ErrorCode::new(99, "Simulated environment failure"));
+            return Err(ErrorCode::new(99));
         }
         if to != STORAGE_ACCOUNT_ID {
-            return Err(ErrorCode::new(1, "Unsupported account ID"));
+            return Err(ErrorCode::new(1));
         }
 
         let request = data.get::<StorageGetRequest>()?;
@@ -71,10 +71,10 @@ impl Environment for MockEnvironment {
         _funds: Vec<FungibleAsset>,
     ) -> SdkResult<InvokeResponse> {
         if self.should_fail {
-            return Err(ErrorCode::new(99, "Simulated environment failure"));
+            return Err(ErrorCode::new(99));
         }
         if to != STORAGE_ACCOUNT_ID {
-            return Err(ErrorCode::new(1, "Unsupported account ID"));
+            return Err(ErrorCode::new(1));
         }
 
         match data.function() {
@@ -92,7 +92,7 @@ impl Environment for MockEnvironment {
                 self.storage.remove(&request.key);
                 Ok(InvokeResponse::new(&())?)
             }
-            _ => Err(ErrorCode::new(0, "Invalid storage function identifier")),
+            _ => Err(ErrorCode::new(0)),
         }
     }
 }

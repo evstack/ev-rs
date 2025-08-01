@@ -10,6 +10,7 @@
 //! - Error handling and validation
 //! - Gas metering and resource management
 
+pub mod errors;
 mod execution_scope;
 pub mod execution_state;
 pub mod gas;
@@ -26,8 +27,8 @@ use crate::invoker::Invoker;
 use crate::results::{BlockResult, TxResult};
 use evolve_core::events_api::Event;
 use evolve_core::{
-    AccountCode, AccountId, Environment, ErrorCode, InvokableMessage, InvokeRequest,
-    InvokeResponse, ReadonlyKV, SdkResult,
+    AccountCode, AccountId, Environment, InvokableMessage, InvokeRequest, InvokeResponse,
+    ReadonlyKV, SdkResult,
 };
 use evolve_gas::account::{GasService, StorageGasConfig};
 use evolve_ns::{resolve_name, GLOBAL_NAME_SERVICE_REF};
@@ -36,15 +37,6 @@ use evolve_server_core::{
     EndBlocker as EndBlockerTrait, PostTxExecution, Transaction, TxValidator as TxValidatorTrait,
 };
 use std::marker::PhantomData;
-
-pub const ERR_ACCOUNT_DOES_NOT_EXIST: ErrorCode = ErrorCode::new(404, "account does not exist");
-pub const ERR_CODE_NOT_FOUND: ErrorCode = ErrorCode::new(401, "account code not found");
-pub const ERR_EXEC_IN_QUERY: ErrorCode =
-    ErrorCode::new(1, "exec functionality not available during queries");
-pub const ERR_INVALID_CODE_ID: ErrorCode = ErrorCode::new(400, "invalid code identifier");
-pub const ERR_EVENT_NAME_TOO_LONG: ErrorCode = ErrorCode::new(413, "event name too long");
-pub const ERR_EVENT_CONTENT_TOO_LARGE: ErrorCode = ErrorCode::new(413, "event content too large");
-pub const ERR_SAME_CODE_MIGRATION: ErrorCode = ErrorCode::new(400, "cannot migrate to same code");
 
 // Security limits
 const MAX_CODE_ID_LENGTH: usize = 256;
@@ -464,7 +456,8 @@ where
             GasCounter::infinite(),
             GLOBAL_NAME_SERVICE_REF.0,
         );
-        let account_id = resolve_name(account_name, &invoker)?.ok_or(ERR_ACCOUNT_DOES_NOT_EXIST)?;
+        let account_id = resolve_name(account_name, &invoker)?
+            .ok_or(crate::errors::ERR_ACCOUNT_DOES_NOT_EXIST)?;
         let account_id_invoker = invoker.branch_query(account_id);
         handle(T::from(account_id), &account_id_invoker)
     }

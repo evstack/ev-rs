@@ -3,11 +3,11 @@ use evolve_macros::account_impl;
 #[account_impl(Token)]
 pub mod account {
     use evolve_collections::{item::Item, map::Map};
-    use evolve_core::{AccountId, Environment, ErrorCode, SdkResult, ERR_UNAUTHORIZED};
+    use evolve_core::{define_error, AccountId, Environment, SdkResult, ERR_UNAUTHORIZED};
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
 
-    pub const ERR_NOT_ENOUGH_BALANCE: ErrorCode = ErrorCode::new(0, "not enough balance balance");
+    define_error!(ERR_NOT_ENOUGH_BALANCE, 0x1, "not enough balance");
 
     pub struct Token {
         pub metadata: Item<FungibleAssetMetadata>,
