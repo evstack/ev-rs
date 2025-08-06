@@ -85,8 +85,8 @@ pub trait AccountCode: Send + Sync {
     fn query(&self, env: &dyn Environment, request: &InvokeRequest) -> SdkResult<InvokeResponse>;
 }
 
-pub trait ReadonlyKV {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, crate::error::ErrorCode>;
+pub trait ReadonlyKV: Send + Sync {
+    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode>;
 }
 
 pub trait InvokableMessage: Encodable + Clone {

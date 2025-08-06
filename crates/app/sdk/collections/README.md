@@ -167,4 +167,4 @@ key with a byte to distinguish between different maps. The `Item` collection is 
 `()` as the key.
 
 The collections interact with the blockchain's storage through the `Environment` trait, which provides methods for
-querying and executing storage operations. 
+querying and executing storage operations.

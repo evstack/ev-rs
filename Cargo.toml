@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "crates/types",
     "crates/rpc",
     "crates/app/stf",
     "crates/app/sdk/collections",
@@ -10,11 +9,11 @@ members = [
     "crates/app/sdk/standards/*",
     "crates/app/sdk/x/*",
     "crates/storage",
-    "crates/app/testapp",
     "crates/app/sdk/testing",
     "crates/consensus/cometbft",
     "crates/consensus/cometbft_account_trait",
     "crates/app/sdk/math",
+    "crates/app/testapp",
 ]
 resolver = "2"
 
@@ -49,9 +48,17 @@ evolve_cometbft_account_trait = { path = "crates/consensus/cometbft_account_trai
 evolve_stf = { path = "crates/app/stf" }
 
 evolve_testing = { path = "crates/app/sdk/testing" }
-evolve_testapp = { path = "crates/app/testapp" }
+
+evolve_storage = { path = "crates/storage" }
+
 
 # outside deps
+linkme = { version = "0.3" }
+commonware-cryptography = "0.0.56"
+commonware-runtime = "0.0.56"
+commonware-storage = "0.0.56"
+commonware-utils = "0.0.56"
+commonware-codec = "0.0.56"
 borsh = { features = ["derive"], version = "1.5.5" }
 fixed = { version = "1.29", features = ["borsh", "serde"] }
 log = { version = "0.4.27" }
@@ -59,7 +66,7 @@ tokio = { version = "1.44.2", features = ["full"] }
 futures = "0.3.31"
 base64 = "0.22.1"
 sha2 = { version = "0.10.8" }
-
+async-trait = "0.1"
 [workspace.lints.rust]
 # missing_docs = "deny"
 

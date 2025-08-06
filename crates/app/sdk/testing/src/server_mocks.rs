@@ -59,7 +59,7 @@ impl Default for StorageMock {
 
 impl ReadonlyKV for StorageMock {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
-        self.state.get(key).cloned().map(Ok).transpose()
+        Ok(self.state.get(key).cloned())
     }
 }
 
