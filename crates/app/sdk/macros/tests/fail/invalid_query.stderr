@@ -2,7 +2,7 @@ error: `#[query(...)]` cannot have arguments; queries cannot be payable
    --> tests/fail/invalid_query.rs:101:9
     |
 101 |         #[query(payable)]
-    |         ^^^^^^^^^^^^^^^^^
+    |         ^
 
 warning: unused import: `query`
   --> tests/fail/invalid_query.rs:84:35

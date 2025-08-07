@@ -1,6 +1,6 @@
 use crate::account::NameServiceRef;
+use evolve_core::account_impl;
 use evolve_core::{AccountId, Environment, SdkResult};
-use evolve_macros::account_impl;
 
 /// TODO: make this magic with daemon accounts
 pub const GLOBAL_NAME_SERVICE_REF: NameServiceRef = NameServiceRef::new(AccountId::new(65535));

@@ -1,4 +1,4 @@
-use evolve_macros::account_impl;
+use evolve_core::account_impl;
 pub use fa_interface::*;
 
 #[account_impl(FungibleAssetInterface)]

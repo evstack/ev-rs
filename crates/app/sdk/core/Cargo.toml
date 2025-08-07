@@ -9,6 +9,7 @@ version = "0.1.0"
 [dependencies]
 borsh = {workspace = true, features = ["derive"]}
 linkme = {version = "0.3", default-features = false, optional = true}
+evolve_macros = {path = "../macros"}
 
 [lints]
 workspace = true

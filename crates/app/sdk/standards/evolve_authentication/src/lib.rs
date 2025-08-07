@@ -1,9 +1,9 @@
 #[cfg(test)]
 mod example;
 
+use evolve_core::account_impl;
 use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::{ERR_UNKNOWN_FUNCTION, Environment, Message, SdkResult, define_error};
-use evolve_macros::account_impl;
 use evolve_server_core::{Transaction, TxValidator};
 use std::marker::PhantomData;
 

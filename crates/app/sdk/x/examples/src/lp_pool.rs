@@ -1,6 +1,6 @@
 // We implement a pool account which is also an LP token that users can transfer.
 
-use evolve_macros::account_impl;
+use evolve_core::account_impl;
 
 // Account impl macro defines who is the one implementing the AccountCode trait.
 // the accountCode trait is implemented based on exec/init/query methods which are marked
