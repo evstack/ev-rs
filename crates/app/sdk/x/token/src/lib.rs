@@ -8,6 +8,7 @@ pub mod account {
     use evolve_macros::{exec, init, query};
 
     define_error!(ERR_NOT_ENOUGH_BALANCE, 0x1, "not enough balance");
+    define_error!(ERR_UNDERFLOW, 0x2, "arithmetic underflow");
 
     pub struct Token {
         pub metadata: Item<FungibleAssetMetadata>,
@@ -81,6 +82,11 @@ pub mod account {
             self.mint_unchecked(recipient, amount, env)
         }
 
+        /// Burns tokens from an account without authorization checks.
+        ///
+        /// This is an internal method that assumes the caller has already validated
+        /// that the operation is authorized. Returns an error if the balance or
+        /// total supply would underflow.
         pub fn burn_unchecked(
             &self,
             from_account: AccountId,
@@ -89,11 +95,23 @@ pub mod account {
         ) -> SdkResult<()> {
             self.balances.update(
                 &from_account,
-                |balance| Ok(balance.unwrap_or_default() - amount),
+                |balance| {
+                    balance
+                        .unwrap_or_default()
+                        .checked_sub(amount)
+                        .ok_or(ERR_UNDERFLOW)
+                },
                 env,
             )?;
-            self.total_supply
-                .update(|supply| Ok(supply.unwrap_or_default() - amount), env)?;
+            self.total_supply.update(
+                |supply| {
+                    supply
+                        .unwrap_or_default()
+                        .checked_sub(amount)
+                        .ok_or(ERR_UNDERFLOW)
+                },
+                env,
+            )?;
 
             Ok(())
         }

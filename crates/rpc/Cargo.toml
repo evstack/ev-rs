@@ -1,7 +1,7 @@
 [package]
 edition = "2021"
 name = "evolve_rpc"
-version = "0.0.1"
+version = "0.1.0"
 
 license.workspace = true
 repository.workspace = true

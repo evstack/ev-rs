@@ -9,6 +9,7 @@ pub mod account {
     use evolve_macros::{exec, init, query};
 
     define_error!(ERR_OUT_OF_GAS, 0x1, "out of gas");
+    define_error!(ERR_GAS_CONFIG_NOT_SET, 0x2, "gas config not set");
 
     #[derive(BorshSerialize, BorshDeserialize, Clone, Debug)]
     pub struct StorageGasConfig {
@@ -63,7 +64,9 @@ pub mod account {
         /// Reads the storage gas config.
         #[query]
         pub fn get_storage_gas_config(&self, env: &dyn Environment) -> SdkResult<StorageGasConfig> {
-            Ok(self.storage_gas_config.may_get(env)?.unwrap())
+            self.storage_gas_config
+                .may_get(env)?
+                .ok_or(ERR_GAS_CONFIG_NOT_SET)
         }
     }
 }

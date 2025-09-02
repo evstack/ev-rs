@@ -10,10 +10,12 @@ members = [
     "crates/app/sdk/x/*",
     "crates/storage",
     "crates/app/sdk/testing",
-    "crates/consensus/cometbft",
-    "crates/consensus/cometbft_account_trait",
     "crates/app/sdk/math",
     "crates/app/testapp",
+    "crates/testing/simulator",
+    "crates/testing/proptest",
+    "crates/testing/debugger",
+    "crates/testing/cli",
 ]
 resolver = "2"
 
@@ -42,18 +44,19 @@ evolve_scheduler = { path = "crates/app/sdk/x/scheduler" }
 evolve_token = { path = "crates/app/sdk/x/token" }
 evolve_unique = { path = "crates/app/sdk/x/unique" }
 
-evolve_cometbft = { path = "crates/consensus/cometbft" }
-evolve_cometbft_account_trait = { path = "crates/consensus/cometbft_account_trait" }
-
 evolve_stf = { path = "crates/app/stf" }
 
 evolve_testing = { path = "crates/app/sdk/testing" }
 
 evolve_storage = { path = "crates/storage" }
 
+evolve_simulator = { path = "crates/testing/simulator" }
+evolve_proptest = { path = "crates/testing/proptest" }
+evolve_debugger = { path = "crates/testing/debugger" }
+
 
 # outside deps
-linkme = { version = "0.3" }
+linkme = { version = "0.3", default-features = false }
 commonware-cryptography = "0.0.56"
 commonware-runtime = "0.0.56"
 commonware-storage = "0.0.56"

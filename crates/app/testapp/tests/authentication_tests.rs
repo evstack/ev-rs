@@ -1,5 +1,4 @@
 use evolve_authentication::ERR_NOT_EOA;
-use evolve_cometbft::types::TendermintBlock;
 use evolve_core::runtime_api::{CreateAccountRequest, RUNTIME_ACCOUNT_ID};
 use evolve_core::{AccountId, InvokeRequest, Message};
 use evolve_fungible_asset::TransferMsg;
@@ -81,7 +80,7 @@ fn test_successful_transaction() {
     };
 
     // execute block with successful transaction
-    let block = TendermintBlock::make_for_testing(vec![ok_tx]);
+    let block = evolve_testapp::block::TestBlock::make_for_testing(vec![ok_tx]);
     let (mut block_results, _new_state) = STF.apply_block(&storage, &codes, &block);
 
     // extract and verify result
@@ -113,7 +112,7 @@ fn test_not_eoa_transaction() {
     };
 
     // execute block with not EOA transaction
-    let block = TendermintBlock::make_for_testing(vec![not_eoa]);
+    let block = evolve_testapp::block::TestBlock::make_for_testing(vec![not_eoa]);
     let (mut block_results, _new_state) = STF.apply_block(&storage, &codes, &block);
 
     // extract and verify result

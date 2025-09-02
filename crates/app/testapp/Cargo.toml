@@ -24,8 +24,6 @@ evolve_token.workspace = true
 evolve_gas.workspace = true
 evolve_poa.workspace = true
 
-evolve_cometbft = { workspace = true, features = ["testing"] }
-
 borsh.workspace = true
 log.workspace = true
 tokio.workspace = true

@@ -98,22 +98,30 @@ where
             _phantoms: PhantomData,
         }
     }
-    /// Executes the given closure with runtime privileges.
+    /// Executes the given closure with system-level privileges.
     ///
-    /// This method provides a way to execute operations with system-level privileges,
-    /// typically used for administrative tasks or system initialization.
+    /// This method is intended for genesis initialization and system-level operations
+    /// that need to bypass normal transaction flow. Unlike a traditional "sudo" model,
+    /// this is not accessible during normal runtime - it can only be invoked by the
+    /// consensus engine during specific lifecycle events (genesis, upgrades).
+    ///
+    /// # Use Cases
+    ///
+    /// - Genesis account creation and initialization
+    /// - System parameter configuration
+    /// - Protocol upgrades
     ///
     /// # Arguments
     ///
     /// * `storage` - Read-only storage backend
     /// * `account_codes` - Account code storage
     /// * `execution_height` - Block height for execution context
-    /// * `action` - Closure to execute with runtime privileges
+    /// * `action` - Closure to execute with system privileges
     ///
     /// # Returns
     ///
     /// Returns a tuple containing the result of the action and the execution state.
-    pub fn sudo<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a, R>(
+    pub fn system_exec<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a, R>(
         &self,
         storage: &'a S,
         account_codes: &'a A,
@@ -128,10 +136,17 @@ where
 
         Ok((resp, ctx.into_execution_results().0))
     }
-    /// Executes the given closure impersonating the specified account.
+    /// Executes the given closure impersonating the specified account with system privileges.
     ///
-    /// This method allows executing operations as if they were initiated by a specific account.
-    /// It's only available in test builds or with the testing feature enabled for security reasons.
+    /// This method allows executing operations as if they were initiated by a specific account,
+    /// bypassing normal authentication. It is only available in test builds or with the
+    /// `testing` feature enabled for security reasons.
+    ///
+    /// # Security Note
+    ///
+    /// This is a testing utility and should never be exposed in production builds.
+    /// It exists to facilitate integration testing where simulating user actions
+    /// is necessary without going through full transaction signing.
     ///
     /// # Arguments
     ///
@@ -145,7 +160,7 @@ where
     ///
     /// Returns a tuple containing the result of the action and the execution state.
     #[cfg(any(test, feature = "testing"))]
-    pub fn sudo_as<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a, R>(
+    pub fn system_exec_as<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a, R>(
         &self,
         storage: &'a S,
         account_codes: &'a A,
@@ -480,10 +495,4 @@ where
             _phantoms: PhantomData,
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {}
 }

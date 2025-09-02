@@ -21,8 +21,8 @@ impl ReadonlyKV for Storage {
     }
 }
 
-impl evolve_cometbft::consensus::Storage for Storage {
-    fn get_latest_block(&self) -> u64 {
+impl Storage {
+    pub fn get_latest_block(&self) -> u64 {
         self.height
     }
 }

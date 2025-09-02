@@ -16,8 +16,7 @@ governs its behavior. An account’s state is encapsulated behind its unique `Ac
 In Evolve, there is no concept of “sudo.” Whenever something is executed, it is because one account (which could be the
 runtime itself, using a well-known account ID) has requested it. The account receiving the request then decides whether
 or not to process it. This design ensures that each account retains complete control over permissions, making it harder
-to inadvertently break invariants—unlike in certain other frameworks (e.g., Cosmos-SDK) where there are no strict
-execution guarantees.
+to inadvertently break invariants.
 
 ### Composition and Extensibility
 

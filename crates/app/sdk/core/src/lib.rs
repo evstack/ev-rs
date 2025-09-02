@@ -144,6 +144,35 @@ pub fn one_coin(env: &dyn Environment) -> SdkResult<FungibleAsset> {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::message::Message;
+    use borsh::{BorshDeserialize, BorshSerialize};
+
+    #[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize)]
+    struct TestPayload {
+        value: u32,
+        name: String,
+    }
+
     #[test]
-    fn test_invoke_request_encode_decode() {}
+    fn test_invoke_request_encode_decode() {
+        let function_id: u64 = 42;
+        let human_name = "test_function";
+        let payload = TestPayload {
+            value: 123,
+            name: "test".to_string(),
+        };
+
+        // Create InvokeRequest using the public API
+        let message = Message::new(&payload).expect("message creation should succeed");
+        let request = InvokeRequest::new_from_message(human_name, function_id, message);
+
+        // Verify accessors work
+        assert_eq!(request.function(), function_id);
+        assert_eq!(request.human_name(), human_name);
+
+        // Verify payload can be retrieved
+        let retrieved: TestPayload = request.get().expect("get should succeed");
+        assert_eq!(retrieved, payload);
+    }
 }

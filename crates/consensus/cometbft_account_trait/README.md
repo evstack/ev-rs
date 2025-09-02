@@ -1,1 +1,0 @@
-Note, this exists as a standalone dependency to avoid leaking unnecessary comet deps.

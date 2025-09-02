@@ -1,0 +1,24 @@
+[package]
+name = "evolve-sim"
+version = "0.1.0"
+edition = "2021"
+description = "CLI tool for running Evolve SDK simulations and debugging"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "evolve-sim"
+path = "src/main.rs"
+
+[dependencies]
+evolve_simulator = { path = "../simulator" }
+evolve_debugger = { path = "../debugger" }
+evolve_core = { path = "../../app/sdk/core" }
+
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[dev-dependencies]
+tempfile = "3.10"

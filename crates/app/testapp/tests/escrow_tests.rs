@@ -14,7 +14,7 @@ fn test_escrow() {
     let minted_money = app.mint_atom(escrow_creator, 1000);
     // create escrow
     let (lock_id, escrow) = app
-        .sudo_as(escrow_creator, |env| {
+        .system_exec_as(escrow_creator, |env| {
             // create escrow
             let escrow_ref = EscrowRef::initialize(
                 resolve_name("unique", env)?.unwrap(),
@@ -37,7 +37,7 @@ fn test_escrow() {
     // now if we try to withdraw from the lock, it will fail
     // since the height of unlocking has not been reached yet.
     let err = app
-        .sudo_as(escrow_money_recipient, |env| {
+        .system_exec_as(escrow_money_recipient, |env| {
             escrow.withdraw_funds(lock_id, env)
         })
         .expect_err("Should fail");
@@ -45,7 +45,7 @@ fn test_escrow() {
 
     // try unauthorized
     let err = app
-        .sudo_as(escrow_unauthorized, |env| {
+        .system_exec_as(escrow_unauthorized, |env| {
             escrow.withdraw_funds(lock_id, env)
         })
         .expect_err("Should fail");
@@ -53,7 +53,7 @@ fn test_escrow() {
 
     // now jumping to unlock height all will be good.
     app.go_to_height(unlock_height);
-    app.sudo_as(escrow_money_recipient, |env| {
+    app.system_exec_as(escrow_money_recipient, |env| {
         escrow.withdraw_funds(lock_id, env)?;
         Ok(())
     })

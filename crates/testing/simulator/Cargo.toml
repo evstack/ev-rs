@@ -1,0 +1,36 @@
+[package]
+name = "evolve_simulator"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Deterministic simulation engine for Evolve SDK testing"
+
+[dependencies]
+evolve_core = { workspace = true }
+evolve_server_core = { workspace = true }
+evolve_stf = { workspace = true, features = ["testing"] }
+evolve_testing = { workspace = true }
+
+# PRNG
+rand = "0.8"
+rand_chacha = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
+serde_json = "1.0"
+
+# Hashing
+sha2.workspace = true
+
+# Time tracking
+instant = "0.1"
+
+[dev-dependencies]
+proptest = "1.4"
+
+[features]
+default = []
+error-decode = []  # For define_error! macro cfg compatibility

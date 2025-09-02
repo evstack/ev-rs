@@ -1,4 +1,3 @@
-use evolve_cometbft::types::TendermintBlock;
 use evolve_core::{AccountId, Environment, InvokeRequest, SdkResult};
 use evolve_fungible_asset::TransferMsg;
 use evolve_gas::account::ERR_OUT_OF_GAS;
@@ -81,7 +80,7 @@ fn test_successful_transaction() {
     };
 
     // execute block with successful transaction
-    let block = TendermintBlock::make_for_testing(vec![ok_tx]);
+    let block = evolve_testapp::block::TestBlock::make_for_testing(vec![ok_tx]);
     let (mut block_results, _new_state) = STF.apply_block(&storage, &codes, &block);
 
     // extract and verify result
@@ -112,7 +111,7 @@ fn test_out_of_gas_transaction() {
     };
 
     // execute block with out of gas transaction
-    let block = TendermintBlock::make_for_testing(vec![out_of_gas_tx]);
+    let block = evolve_testapp::block::TestBlock::make_for_testing(vec![out_of_gas_tx]);
     let (mut block_results, _new_state) = STF.apply_block(&storage, &codes, &block);
 
     // extract and verify result

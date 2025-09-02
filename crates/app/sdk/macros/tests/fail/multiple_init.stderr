@@ -10,4 +10,4 @@ warning: unused import: `init`
 84 | use evolve_macros::{account_impl, init};
    |                                   ^^^^
    |
-   = note: `#[warn(unused_imports)]` on by default
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

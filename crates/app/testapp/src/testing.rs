@@ -18,14 +18,14 @@ impl TestApp {
         Default::default()
     }
 
-    pub fn sudo_as<R>(
+    pub fn system_exec_as<R>(
         &mut self,
         impersonate: AccountId,
         action: impl Fn(&mut dyn Environment) -> SdkResult<R>,
     ) -> SdkResult<R> {
         let (resp, state) =
             self.stf
-                .sudo_as(&self.state, &self.codes, self.block, impersonate, action)?;
+                .system_exec_as(&self.state, &self.codes, self.block, impersonate, action)?;
         let changes = state.into_changes()?;
         self.state.apply_changes(changes)?;
         Ok(resp)
@@ -36,7 +36,7 @@ impl TestApp {
     }
 
     pub fn mint_atom(&mut self, recipient: AccountId, amount: u128) -> FungibleAsset {
-        self.sudo_as(MINTER, |env| {
+        self.system_exec_as(MINTER, |env| {
             let atom_token = resolve_as_ref::<TokenRef>("atom", env)?.unwrap();
             atom_token.mint(recipient, amount, env)?;
             Ok(FungibleAsset {
@@ -52,7 +52,7 @@ impl TestApp {
         self.block = height;
         let state = self
             .stf
-            .sudo(&self.state, &self.codes, height, |env| {
+            .system_exec(&self.state, &self.codes, height, |env| {
                 let block_info = resolve_as_ref::<BlockInfoRef>("block_info", env)?.unwrap();
                 block_info.set_block_info(height, 0, env)
             })

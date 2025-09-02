@@ -6,10 +6,6 @@ pub mod account {
     use evolve_collections::item::Item;
     use evolve_collections::unordered_map::UnorderedMap;
     use evolve_collections::vector::Vector;
-    use evolve_collections::ERR_DATA_CORRUPTION;
-    use evolve_cometbft_account_trait::consensus_account::{
-        AbciValsetManagerAccount, ValidatorUpdate,
-    };
     use evolve_core::{define_error, AccountId, Environment, SdkResult, ERR_UNAUTHORIZED};
     use evolve_events::EventsEmitter;
     use evolve_macros::{exec, init, query};
@@ -27,30 +23,6 @@ pub mod account {
     pub enum ValsetChange {
         Add(AccountId),
         Remove(AccountId),
-    }
-
-    impl ValsetChange {
-        fn into_validator_update(
-            self,
-            account: &Poa,
-            env: &dyn Environment,
-        ) -> SdkResult<ValidatorUpdate> {
-            let (account_id, power) = match self {
-                ValsetChange::Add(id) => (id, 1),
-                ValsetChange::Remove(id) => (id, 0),
-            };
-
-            let validator = account.validators.get(&account_id, env)?;
-            let pub_key = evolve_cometbft_account_trait::consensus_account::Pubkey::Ed25519(
-                validator
-                    .pub_key
-                    .try_into()
-                    .map_err(|_| ERR_DATA_CORRUPTION)?,
-            );
-
-            // Return your ValidatorUpdate
-            Ok(ValidatorUpdate { power, pub_key })
-        }
     }
 
     #[derive(BorshSerialize, BorshDeserialize, Clone)]
@@ -190,22 +162,6 @@ pub mod account {
                     return Ok(());
                 }
             }
-        }
-    }
-
-    impl AbciValsetManagerAccount for Poa {
-        #[query]
-        fn valset_changes(&self, env: &dyn Environment) -> SdkResult<Vec<ValidatorUpdate>> {
-            // get all valset changes
-            let changes = self
-                .valset_changes
-                .iter(env)?
-                .map(|change| {
-                    let change = change?;
-                    change.into_validator_update(self, env)
-                })
-                .collect::<SdkResult<Vec<_>>>()?;
-            Ok(changes)
         }
     }
 }

@@ -1,5 +1,6 @@
 //! CommonwareStorage implementation using commonware's ADB
 
+use crate::cache::{CachedValue, ShardedDbCache};
 use crate::types::{
     create_storage_key, create_storage_value_chunk, StorageKey, StorageValueChunk,
     STORAGE_VALUE_SIZE,
@@ -56,12 +57,17 @@ fn map_concurrency_error(err: impl std::fmt::Display) -> ErrorCode {
 }
 
 /// CommonwareStorage implements evolve's storage traits using commonware's ADB
+///
+/// Includes an in-memory read cache (ShardedDbCache) that reduces async lock contention
+/// on the ADB RwLock for repeated reads of the same keys.
 pub struct CommonwareStorage<C>
 where
     C: Storage + Clock + Metrics + Clone + Send + Sync + 'static,
 {
     context: Arc<C>,
     adb: Arc<RwLock<AdbInstance<C>>>,
+    /// Read cache for fast synchronous lookups
+    cache: Arc<ShardedDbCache>,
 }
 
 impl<C> Clone for CommonwareStorage<C>
@@ -72,6 +78,7 @@ where
         Self {
             context: self.context.clone(),
             adb: self.adb.clone(),
+            cache: self.cache.clone(),
         }
     }
 }
@@ -97,7 +104,7 @@ where
             bitmap_metadata_partition: format!("{}/bitmap-metadata", config.partition_prefix),
             translator: EightCap,
             thread_pool: None,
-            buffer_pool: PoolRef::new(1024, 10), // 1KB pages, 10 page cache
+            buffer_pool: PoolRef::new(4096, 16384), // 4KB pages, 16K page cache = 64MB
         };
 
         // Initialize ADBc
@@ -108,7 +115,13 @@ where
         Ok(Self {
             context: Arc::new(context),
             adb: Arc::new(RwLock::new(adb)),
+            cache: Arc::new(ShardedDbCache::with_defaults()),
         })
+    }
+
+    /// Returns a reference to the read cache for external management.
+    pub fn cache(&self) -> &Arc<ShardedDbCache> {
+        &self.cache
     }
 
     /// Commit the current state and generate a commit hash
@@ -143,6 +156,9 @@ where
             return Err(StorageError::Key(crate::types::ERR_BATCH_TOO_LARGE));
         }
 
+        // Collect keys for cache invalidation
+        let mut keys_to_invalidate = Vec::with_capacity(operations.len());
+
         // Pre-compute all storage keys and values before acquiring the lock
         let mut prepared_updates = Vec::with_capacity(operations.len());
 
@@ -157,11 +173,13 @@ where
                         });
                     }
 
+                    keys_to_invalidate.push(key.clone());
                     let storage_key = create_storage_key(&key)?;
                     let storage_value = create_storage_value_chunk(&value)?;
                     prepared_updates.push((storage_key, storage_value));
                 }
                 crate::types::Operation::Remove { key } => {
+                    keys_to_invalidate.push(key.clone());
                     let storage_key = create_storage_key(&key)?;
                     // Set empty value to indicate removal
                     let empty_value = create_storage_value_chunk(&[])?;
@@ -180,11 +198,16 @@ where
                 .map_err(|e| StorageError::Adb(e.to_string()))?;
         }
 
+        // Invalidate cache entries for modified keys
+        for key in keys_to_invalidate {
+            self.cache.invalidate(&key);
+        }
+
         Ok(())
     }
 
-    /// Internal async get implementation
-    async fn get_async(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
+    /// Internal async get implementation - bypasses cache, hits ADB directly.
+    async fn get_async_uncached(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
         let storage_key = create_storage_key(key)?;
         let adb = self.adb.clone();
 
@@ -225,9 +248,24 @@ where
     C: Storage + Clock + Metrics + Clone + Send + Sync + 'static,
 {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
-        // Use futures::executor to block on the async operation
-        // This works both inside and outside of async contexts
-        futures::executor::block_on(self.get_async(key))
+        // Fast path: check cache first (synchronous, no async overhead)
+        if let Some(cached) = self.cache.get(key) {
+            return match cached {
+                CachedValue::Present(data) => Ok(Some(data)),
+                CachedValue::Absent => Ok(None),
+            };
+        }
+
+        // Cache miss: fetch from ADB (async)
+        let result = futures::executor::block_on(self.get_async_uncached(key))?;
+
+        // Populate cache with the result
+        match &result {
+            Some(data) => self.cache.insert_present(key.to_vec(), data.clone()),
+            None => self.cache.insert_absent(key.to_vec()),
+        }
+
+        Ok(result)
     }
 }
 

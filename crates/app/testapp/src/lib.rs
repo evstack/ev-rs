@@ -1,14 +1,15 @@
+pub mod block;
 pub mod eoa;
 pub mod storage;
 pub mod testing;
 pub mod types;
 
+use crate::block::TestBlock;
 use crate::eoa::eoa_account::{EoaAccount, EoaAccountRef};
 pub use crate::types::TestTx;
 use borsh::BorshDeserialize;
 use evolve_authentication::AuthenticationTxValidator;
 use evolve_block_info::account::{BlockInfo, BlockInfoRef};
-use evolve_cometbft::types::TendermintBlock;
 use evolve_core::events_api::EVENT_HANDLER_ACCOUNT_ID;
 use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
 use evolve_core::storage_api::STORAGE_ACCOUNT_ID;
@@ -45,7 +46,7 @@ impl PostTxExecution<TestTx> for NoOpPostTx {
 
 pub type CustomStf = Stf<
     TestTx,
-    TendermintBlock<TestTx>,
+    TestBlock<TestTx>,
     SchedulerBeginBlocker,
     AuthenticationTxValidator<TestTx>,
     SchedulerEndBlocker,
@@ -88,7 +89,7 @@ pub fn do_genesis<'a, S: ReadonlyKV, A: AccountsCodeStorage>(
     let genesis_height = 0; // TODO
     let genesis_time_unix_ms = 0; // TODO
 
-    let (_, state) = stf.sudo(storage, codes, genesis_height, |env| {
+    let (_, state) = stf.system_exec(storage, codes, genesis_height, |env| {
         // Create name service account: this must be done first
         let ns_acc = NameServiceRef::initialize(vec![], env)?.0;
 

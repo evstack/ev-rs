@@ -5,7 +5,7 @@ use crate::errors::{
 use evolve_core::events_api::Event;
 use evolve_core::{ErrorCode, Message, ReadonlyKV, SdkResult};
 use evolve_server_core::StateChange as CoreStateChange;
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 // Security limits to prevent memory exhaustion attacks
 const MAX_OVERLAY_ENTRIES: usize = 100_000; // Maximum number of keys in overlay
@@ -104,13 +104,19 @@ pub struct ExecutionState<'a, S> {
     unique_objects: u64,
 }
 
+// Initial capacity for overlay HashMap to avoid early rehashing
+// Most transactions touch 10-100 keys, so 256 is a reasonable starting point
+const INITIAL_OVERLAY_CAPACITY: usize = 256;
+const INITIAL_UNDO_LOG_CAPACITY: usize = 128;
+const INITIAL_EVENTS_CAPACITY: usize = 64;
+
 impl<'a, S> ExecutionState<'a, S> {
     pub fn new(base_storage: &'a S) -> Self {
         Self {
             base_storage,
-            overlay: HashMap::new(),
-            undo_log: Vec::new(),
-            events: Vec::new(),
+            overlay: HashMap::with_capacity(INITIAL_OVERLAY_CAPACITY),
+            undo_log: Vec::with_capacity(INITIAL_UNDO_LOG_CAPACITY),
+            events: Vec::with_capacity(INITIAL_EVENTS_CAPACITY),
             unique_objects: 0,
         }
     }
@@ -390,7 +396,7 @@ mod tests {
     use super::*;
     // bring in the Checkpoint and StateChange
     use evolve_core::{ErrorCode, Message, ReadonlyKV};
-    use std::collections::HashMap;
+    use hashbrown::HashMap;
 
     /// A simple in-memory mock that implements `ReadonlyKV`.
     /// It is strictly read-only for our demonstration, meaning you can

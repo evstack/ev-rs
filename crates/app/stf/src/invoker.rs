@@ -8,15 +8,15 @@ use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
 use evolve_core::storage_api::STORAGE_ACCOUNT_ID;
 use evolve_core::unique_api::UNIQUE_HANDLER_ACCOUNT_ID;
 use evolve_core::{
-    AccountCode, AccountId, Environment, ErrorCode, FungibleAsset, InvokeRequest, InvokeResponse,
-    Message, ReadonlyKV, SdkResult,
+    AccountCode, AccountId, Environment, FungibleAsset, InvokeRequest, InvokeResponse, Message,
+    ReadonlyKV, SdkResult,
 };
 use evolve_gas::account::StorageGasConfig;
 use evolve_server_core::{AccountsCodeStorage, Transaction};
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::errors::{ERR_ACCOUNT_DOES_NOT_EXIST, ERR_CODE_NOT_FOUND};
+use crate::errors::{ERR_ACCOUNT_DOES_NOT_EXIST, ERR_CODE_NOT_FOUND, ERR_FUNDS_TO_SYSTEM_ACCOUNT};
 use crate::runtime_api_impl;
 
 /// Execution context for account operations and transaction processing.
@@ -75,10 +75,29 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, S, A> {
         // Take checkpoint before ANY state changes
         let checkpoint = self.storage.borrow().checkpoint();
 
-        // Helper closure to restore checkpoint on error
+        // Helper closure to restore checkpoint on error.
+        //
+        // # Panics
+        //
+        // This closure panics if checkpoint restoration fails. This is intentional and
+        // unavoidable for the following reasons:
+        //
+        // 1. **State corruption**: A failed checkpoint restore means the in-memory state
+        //    is inconsistent - some operations succeeded, others didn't, and we cannot
+        //    determine which changes were applied.
+        //
+        // 2. **No safe recovery**: Returning an error would allow the blockchain to continue
+        //    with corrupted state, potentially causing invalid state transitions, incorrect
+        //    balances, or consensus failures across nodes.
+        //
+        // 3. **Fail-fast principle**: It's safer to halt the node immediately than to
+        //    propagate corrupted state. Operators can investigate and restart from a
+        //    known-good state.
+        //
+        // In practice, checkpoint restoration should never fail unless there's a bug in
+        // the checkpoint/restore implementation or memory corruption has occurred.
         let restore_checkpoint = |storage: &RefCell<ExecutionState<'_, S>>| {
             if let Err(restore_err) = storage.borrow_mut().restore(checkpoint) {
-                // Log the error and panic as we cannot recover
                 eprintln!("CRITICAL: Failed to restore checkpoint: {restore_err:?}");
                 panic!("CRITICAL: Failed to restore checkpoint after error - blockchain state is corrupted and cannot continue safely");
             }
@@ -230,7 +249,7 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
             || to == EVENT_HANDLER_ACCOUNT_ID
             || to == UNIQUE_HANDLER_ACCOUNT_ID
         {
-            return Err(ErrorCode::new(400));
+            return Err(ERR_FUNDS_TO_SYSTEM_ACCOUNT);
         }
 
         // Execute all transfers atomically - if any fail, all fail
@@ -303,6 +322,29 @@ impl<'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'a, S, A> {
         handle(&code, &env)
     }
 
+    /// Consumes the Invoker and returns the final execution results.
+    ///
+    /// Returns the execution state, total gas used, and emitted events.
+    ///
+    /// # Panics
+    ///
+    /// This method panics if multiple references to `ExecutionState` exist when called.
+    /// This is intentional because:
+    ///
+    /// 1. **Ownership invariant**: The Invoker owns the execution state and must be the
+    ///    sole owner when finalization occurs. Multiple references indicate a bug in
+    ///    reference management (e.g., a branched Invoker was not properly dropped).
+    ///
+    /// 2. **State integrity**: We cannot safely extract and return the `ExecutionState`
+    ///    if other references exist - they could mutate it after we've "finalized" it,
+    ///    leading to inconsistent state being committed to the blockchain.
+    ///
+    /// 3. **No graceful fallback**: Cloning `ExecutionState` is not semantically correct
+    ///    here as it would mean committing a snapshot while other code holds references
+    ///    to the "real" state.
+    ///
+    /// If this panic occurs, it indicates a bug in the STF that must be fixed. The panic
+    /// message includes diagnostic information to aid debugging.
     pub fn into_execution_results(
         self,
     ) -> (
