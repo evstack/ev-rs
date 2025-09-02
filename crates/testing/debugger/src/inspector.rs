@@ -246,7 +246,10 @@ impl StateSummary {
             }
 
             if self.prefix_counts.len() > 10 {
-                output.push_str(&format!("  ... and {} more prefixes\n", self.prefix_counts.len() - 10));
+                output.push_str(&format!(
+                    "  ... and {} more prefixes\n",
+                    self.prefix_counts.len() - 10
+                ));
             }
         }
 
@@ -291,9 +294,9 @@ impl<'a> TraceQuery<'a> {
     pub fn involving(mut self, account: AccountId) -> Self {
         let account_bytes = account_to_bytes(account);
         self.filters.push(Box::new(move |e| match e {
-            TraceEvent::TxStart { sender, recipient, .. } => {
-                *sender == account_bytes || *recipient == account_bytes
-            }
+            TraceEvent::TxStart {
+                sender, recipient, ..
+            } => *sender == account_bytes || *recipient == account_bytes,
             TraceEvent::Call { from, to, .. } => *from == account_bytes || *to == account_bytes,
             _ => false,
         }));
@@ -302,15 +305,16 @@ impl<'a> TraceQuery<'a> {
 
     /// Filters to state changes on keys with a prefix.
     pub fn key_prefix(mut self, prefix: Vec<u8>) -> Self {
-        self.filters.push(Box::new(move |e| {
-            matches!(e, TraceEvent::StateChange { key, .. } if key.starts_with(&prefix))
-        }));
+        self.filters.push(Box::new(
+            move |e| matches!(e, TraceEvent::StateChange { key, .. } if key.starts_with(&prefix)),
+        ));
         self
     }
 
     /// Filters to only errors.
     pub fn errors(mut self) -> Self {
-        self.filters.push(Box::new(|e| matches!(e, TraceEvent::Error { .. })));
+        self.filters
+            .push(Box::new(|e| matches!(e, TraceEvent::Error { .. })));
         self
     }
 

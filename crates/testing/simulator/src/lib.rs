@@ -35,7 +35,7 @@ pub mod storage;
 pub mod time;
 
 pub use metrics::{BlockMetrics, MetricsConfig, PerformanceReport, SimMetrics, TxMetrics};
-pub use seed::{SeededRng, SeedInfo};
+pub use seed::{SeedInfo, SeededRng};
 pub use storage::{SimulatedStorage, StorageConfig, StorageSnapshot, StorageStats};
 pub use time::{SimulatedTime, TimeConfig, TimeSnapshot};
 

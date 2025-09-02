@@ -20,8 +20,7 @@ pub struct ReplayConfig {
 pub fn execute(config: ReplayConfig) -> Result<(), String> {
     // Load trace
     println!("Loading trace from: {}", config.trace_path.display());
-    let trace = load_trace(&config.trace_path)
-        .map_err(|e| format!("Failed to load trace: {e}"))?;
+    let trace = load_trace(&config.trace_path).map_err(|e| format!("Failed to load trace: {e}"))?;
 
     println!("Trace loaded successfully");
     println!("  Seed: {}", trace.seed);
@@ -174,7 +173,11 @@ fn print_current_event(replayer: &Replayer) {
 
 fn format_event(event: &TraceEvent) -> String {
     match event {
-        TraceEvent::BlockStart { height, timestamp_ms, .. } => {
+        TraceEvent::BlockStart {
+            height,
+            timestamp_ms,
+            ..
+        } => {
             format!("BlockStart(height={height}, ts={timestamp_ms})")
         }
         TraceEvent::BlockEnd { height, .. } => {
@@ -183,8 +186,16 @@ fn format_event(event: &TraceEvent) -> String {
         TraceEvent::TxStart { tx_id, .. } => {
             format!("TxStart(id={:02x}{:02x}...)", tx_id[0], tx_id[1])
         }
-        TraceEvent::TxEnd { tx_id, success, gas_used, .. } => {
-            format!("TxEnd(id={:02x}{:02x}..., success={success}, gas={gas_used})", tx_id[0], tx_id[1])
+        TraceEvent::TxEnd {
+            tx_id,
+            success,
+            gas_used,
+            ..
+        } => {
+            format!(
+                "TxEnd(id={:02x}{:02x}..., success={success}, gas={gas_used})",
+                tx_id[0], tx_id[1]
+            )
         }
         TraceEvent::StateChange { key, .. } => {
             let key_str = String::from_utf8_lossy(key);
@@ -200,7 +211,9 @@ fn format_event(event: &TraceEvent) -> String {
         TraceEvent::CallReturn { success, .. } => {
             format!("CallReturn(success={success})")
         }
-        TraceEvent::GasCharge { amount, remaining, .. } => {
+        TraceEvent::GasCharge {
+            amount, remaining, ..
+        } => {
             format!("GasCharge(amount={amount}, remaining={remaining})")
         }
         TraceEvent::EventEmitted { name, .. } => {
@@ -244,24 +257,20 @@ fn run_interactive_mode(replayer: &mut Replayer) -> Result<(), String> {
         }
 
         match parts[0] {
-            "s" | "step" => {
-                match replayer.step() {
-                    StepResult::Ok => print_current_event(replayer),
-                    StepResult::HitBreakpoint(idx) => {
-                        println!("Hit breakpoint {idx}");
-                        print_current_event(replayer);
-                    }
-                    StepResult::AtEnd => println!("At end of trace"),
-                    StepResult::AtBeginning => println!("At beginning of trace"),
+            "s" | "step" => match replayer.step() {
+                StepResult::Ok => print_current_event(replayer),
+                StepResult::HitBreakpoint(idx) => {
+                    println!("Hit breakpoint {idx}");
+                    print_current_event(replayer);
                 }
-            }
-            "b" | "back" => {
-                match replayer.step_back() {
-                    StepResult::Ok => print_current_event(replayer),
-                    StepResult::AtBeginning => println!("At beginning of trace"),
-                    _ => {}
-                }
-            }
+                StepResult::AtEnd => println!("At end of trace"),
+                StepResult::AtBeginning => println!("At beginning of trace"),
+            },
+            "b" | "back" => match replayer.step_back() {
+                StepResult::Ok => print_current_event(replayer),
+                StepResult::AtBeginning => println!("At beginning of trace"),
+                _ => {}
+            },
             "goto" if parts.len() > 1 => {
                 if let Ok(pos) = parts[1].parse::<usize>() {
                     replayer.goto_position(pos);
@@ -270,16 +279,14 @@ fn run_interactive_mode(replayer: &mut Replayer) -> Result<(), String> {
                     println!("Invalid position");
                 }
             }
-            "r" | "run" => {
-                match replayer.run_to_breakpoint() {
-                    StepResult::HitBreakpoint(idx) => {
-                        println!("Hit breakpoint {idx}");
-                        print_current_event(replayer);
-                    }
-                    StepResult::AtEnd => println!("Reached end of trace"),
-                    _ => {}
+            "r" | "run" => match replayer.run_to_breakpoint() {
+                StepResult::HitBreakpoint(idx) => {
+                    println!("Hit breakpoint {idx}");
+                    print_current_event(replayer);
                 }
-            }
+                StepResult::AtEnd => println!("Reached end of trace"),
+                _ => {}
+            },
             "state" => {
                 let state = replayer.current_state();
                 println!("Current state: {} keys", state.len());

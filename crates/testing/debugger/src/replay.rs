@@ -233,7 +233,10 @@ impl Replayer {
     /// Returns the current block height based on trace position.
     pub fn current_block(&self) -> Option<u64> {
         // Find the most recent block start before current position
-        for event in self.trace.events[..=self.position.min(self.trace.len().saturating_sub(1))].iter().rev() {
+        for event in self.trace.events[..=self.position.min(self.trace.len().saturating_sub(1))]
+            .iter()
+            .rev()
+        {
             if let TraceEvent::BlockStart { height, .. } = event {
                 return Some(*height);
             }
@@ -244,7 +247,10 @@ impl Replayer {
     /// Returns the current transaction ID based on trace position.
     pub fn current_tx(&self) -> Option<[u8; 32]> {
         // Find the most recent tx start before current position
-        for event in self.trace.events[..=self.position.min(self.trace.len().saturating_sub(1))].iter().rev() {
+        for event in self.trace.events[..=self.position.min(self.trace.len().saturating_sub(1))]
+            .iter()
+            .rev()
+        {
             match event {
                 TraceEvent::TxStart { tx_id, .. } => return Some(*tx_id),
                 TraceEvent::TxEnd { .. } => return None, // We're after a tx end

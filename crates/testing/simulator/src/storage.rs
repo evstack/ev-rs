@@ -74,7 +74,10 @@ pub enum StorageOp {
         result: StorageOpResult,
     },
     /// A remove operation.
-    Remove { key: Vec<u8>, result: StorageOpResult },
+    Remove {
+        key: Vec<u8>,
+        result: StorageOpResult,
+    },
 }
 
 /// Result of a storage operation.
@@ -402,7 +405,9 @@ mod tests {
         let mut storage = SimulatedStorage::new(42, StorageConfig::no_faults());
 
         // Set and get
-        storage.set_with_faults(b"key1".to_vec(), b"value1".to_vec()).unwrap();
+        storage
+            .set_with_faults(b"key1".to_vec(), b"value1".to_vec())
+            .unwrap();
         let value = storage.get_with_faults(b"key1").unwrap();
         assert_eq!(value, Some(b"value1".to_vec()));
 
@@ -441,8 +446,12 @@ mod tests {
         let config = StorageConfig::no_faults().with_logging();
         let mut storage = SimulatedStorage::new(42, config);
 
-        storage.set_with_faults(b"k1".to_vec(), b"v1".to_vec()).unwrap();
-        storage.set_with_faults(b"k2".to_vec(), b"v2".to_vec()).unwrap();
+        storage
+            .set_with_faults(b"k1".to_vec(), b"v1".to_vec())
+            .unwrap();
+        storage
+            .set_with_faults(b"k2".to_vec(), b"v2".to_vec())
+            .unwrap();
         let _ = storage.get_with_faults(b"k1");
         let _ = storage.get_with_faults(b"k3"); // miss
 
@@ -459,11 +468,19 @@ mod tests {
         let mut storage2 = SimulatedStorage::new(2, StorageConfig::no_faults());
 
         // Same data should produce same hash regardless of insertion order
-        storage1.set_with_faults(b"a".to_vec(), b"1".to_vec()).unwrap();
-        storage1.set_with_faults(b"b".to_vec(), b"2".to_vec()).unwrap();
+        storage1
+            .set_with_faults(b"a".to_vec(), b"1".to_vec())
+            .unwrap();
+        storage1
+            .set_with_faults(b"b".to_vec(), b"2".to_vec())
+            .unwrap();
 
-        storage2.set_with_faults(b"b".to_vec(), b"2".to_vec()).unwrap();
-        storage2.set_with_faults(b"a".to_vec(), b"1".to_vec()).unwrap();
+        storage2
+            .set_with_faults(b"b".to_vec(), b"2".to_vec())
+            .unwrap();
+        storage2
+            .set_with_faults(b"a".to_vec(), b"1".to_vec())
+            .unwrap();
 
         assert_eq!(storage1.state_hash(), storage2.state_hash());
     }
@@ -472,10 +489,14 @@ mod tests {
     fn test_snapshot_restore() {
         let mut storage = SimulatedStorage::new(42, StorageConfig::no_faults());
 
-        storage.set_with_faults(b"k1".to_vec(), b"v1".to_vec()).unwrap();
+        storage
+            .set_with_faults(b"k1".to_vec(), b"v1".to_vec())
+            .unwrap();
         let snapshot = storage.snapshot();
 
-        storage.set_with_faults(b"k2".to_vec(), b"v2".to_vec()).unwrap();
+        storage
+            .set_with_faults(b"k2".to_vec(), b"v2".to_vec())
+            .unwrap();
         assert_eq!(storage.len(), 2);
 
         storage.restore(snapshot);
@@ -488,7 +509,9 @@ mod tests {
         let config = StorageConfig::no_faults().with_logging();
         let mut storage = SimulatedStorage::new(42, config);
 
-        storage.set_with_faults(b"key".to_vec(), b"value".to_vec()).unwrap();
+        storage
+            .set_with_faults(b"key".to_vec(), b"value".to_vec())
+            .unwrap();
         let _ = storage.get_with_faults(b"key");
         storage.remove_with_faults(b"key").unwrap();
 

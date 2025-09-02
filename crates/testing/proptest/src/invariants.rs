@@ -431,11 +431,8 @@ mod tests {
     fn test_custom_invariant() {
         let storage = MockStorage::new();
 
-        let custom = CustomInvariant::new(
-            "always_ok",
-            "Always passes",
-            |_state| InvariantResult::Ok,
-        );
+        let custom =
+            CustomInvariant::new("always_ok", "Always passes", |_state| InvariantResult::Ok);
 
         assert!(custom.check(&storage).is_ok());
     }

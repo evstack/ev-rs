@@ -104,12 +104,7 @@ impl ExecutionTrace {
         let mut state = self.initial_state.clone();
 
         for event in self.events.iter().take(event_index + 1) {
-            if let TraceEvent::StateChange {
-                key,
-                new_value,
-                ..
-            } = event
-            {
+            if let TraceEvent::StateChange { key, new_value, .. } = event {
                 match new_value {
                     Some(value) => {
                         state.data.insert(key.clone(), value.clone());
@@ -292,10 +287,7 @@ pub enum TraceEvent {
     },
 
     /// Checkpoint created.
-    Checkpoint {
-        id: u64,
-        event_index: usize,
-    },
+    Checkpoint { id: u64, event_index: usize },
 
     /// Rollback to checkpoint.
     Rollback {
@@ -332,7 +324,10 @@ impl TraceEvent {
 
     /// Returns true if this is a block boundary event.
     pub fn is_block_boundary(&self) -> bool {
-        matches!(self, TraceEvent::BlockStart { .. } | TraceEvent::BlockEnd { .. })
+        matches!(
+            self,
+            TraceEvent::BlockStart { .. } | TraceEvent::BlockEnd { .. }
+        )
     }
 
     /// Returns true if this is a transaction boundary event.
@@ -490,7 +485,8 @@ impl TraceBuilder {
     pub fn checkpoint(&mut self, id: u64) {
         let event_index = self.event_counter;
         self.event_counter += 1;
-        self.trace.push_event(TraceEvent::Checkpoint { id, event_index });
+        self.trace
+            .push_event(TraceEvent::Checkpoint { id, event_index });
     }
 
     /// Records a rollback.
@@ -544,7 +540,11 @@ mod tests {
 
         builder.state_change(b"key1".to_vec(), None, Some(b"value1".to_vec()));
         builder.state_change(b"key2".to_vec(), None, Some(b"value2".to_vec()));
-        builder.state_change(b"key1".to_vec(), Some(b"value1".to_vec()), Some(b"updated".to_vec()));
+        builder.state_change(
+            b"key1".to_vec(),
+            Some(b"value1".to_vec()),
+            Some(b"updated".to_vec()),
+        );
 
         let trace = builder.finish();
 

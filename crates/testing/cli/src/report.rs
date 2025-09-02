@@ -13,11 +13,12 @@ pub struct ReportConfig {
 
 /// Execute the report command.
 pub fn execute(config: ReportConfig) -> Result<(), String> {
-    let trace_path = config.trace_path.ok_or("Trace path is required for report generation")?;
+    let trace_path = config
+        .trace_path
+        .ok_or("Trace path is required for report generation")?;
 
     // Load trace
-    let trace = load_trace(&trace_path)
-        .map_err(|e| format!("Failed to load trace: {e}"))?;
+    let trace = load_trace(&trace_path).map_err(|e| format!("Failed to load trace: {e}"))?;
 
     // Generate report data
     let report = generate_report_data(&trace, config.per_block);
@@ -33,8 +34,7 @@ pub fn execute(config: ReportConfig) -> Result<(), String> {
     // Write output
     match config.output_path {
         Some(path) => {
-            std::fs::write(&path, output)
-                .map_err(|e| format!("Failed to write output: {e}"))?;
+            std::fs::write(&path, output).map_err(|e| format!("Failed to write output: {e}"))?;
             println!("Report written to: {}", path.display());
         }
         None => {
@@ -205,27 +205,51 @@ fn format_text(report: &ReportData) -> String {
     output.push_str(&format!("Seed: {}\n\n", report.seed));
 
     output.push_str("Summary:\n");
-    output.push_str(&format!("  Total events: {}\n", report.summary.total_events));
-    output.push_str(&format!("  Total blocks: {}\n", report.summary.total_blocks));
-    output.push_str(&format!("  Total transactions: {}\n", report.summary.total_txs));
+    output.push_str(&format!(
+        "  Total events: {}\n",
+        report.summary.total_events
+    ));
+    output.push_str(&format!(
+        "  Total blocks: {}\n",
+        report.summary.total_blocks
+    ));
+    output.push_str(&format!(
+        "  Total transactions: {}\n",
+        report.summary.total_txs
+    ));
     output.push_str(&format!(
         "  Total state changes: {}\n",
         report.summary.total_state_changes
     ));
-    output.push_str(&format!("  Total errors: {}\n\n", report.summary.total_errors));
+    output.push_str(&format!(
+        "  Total errors: {}\n\n",
+        report.summary.total_errors
+    ));
 
     output.push_str("Event Breakdown:\n");
     output.push_str(&format!("  Block events: {}\n", report.events.block_events));
-    output.push_str(&format!("  Transaction events: {}\n", report.events.tx_events));
-    output.push_str(&format!("  State changes: {}\n", report.events.state_changes));
+    output.push_str(&format!(
+        "  Transaction events: {}\n",
+        report.events.tx_events
+    ));
+    output.push_str(&format!(
+        "  State changes: {}\n",
+        report.events.state_changes
+    ));
     output.push_str(&format!("  Calls: {}\n", report.events.calls));
     output.push_str(&format!("  Gas charges: {}\n", report.events.gas_charges));
-    output.push_str(&format!("  Events emitted: {}\n", report.events.events_emitted));
+    output.push_str(&format!(
+        "  Events emitted: {}\n",
+        report.events.events_emitted
+    ));
     output.push_str(&format!("  Errors: {}\n\n", report.events.errors));
 
     output.push_str("Final State:\n");
     output.push_str(&format!("  Key count: {}\n", report.state.final_key_count));
-    output.push_str(&format!("  Size: {} bytes\n", report.state.final_size_bytes));
+    output.push_str(&format!(
+        "  Size: {} bytes\n",
+        report.state.final_size_bytes
+    ));
 
     if !report.state.top_prefixes.is_empty() {
         output.push_str("  Top prefixes:\n");
@@ -272,11 +296,17 @@ fn format_csv(report: &ReportData) -> String {
     output.push_str(&format!("state_changes,{}\n", report.events.state_changes));
     output.push_str(&format!("calls,{}\n", report.events.calls));
     output.push_str(&format!("gas_charges,{}\n", report.events.gas_charges));
-    output.push_str(&format!("events_emitted,{}\n", report.events.events_emitted));
+    output.push_str(&format!(
+        "events_emitted,{}\n",
+        report.events.events_emitted
+    ));
     output.push_str(&format!("errors,{}\n", report.events.errors));
 
     // State
-    output.push_str(&format!("final_key_count,{}\n", report.state.final_key_count));
+    output.push_str(&format!(
+        "final_key_count,{}\n",
+        report.state.final_key_count
+    ));
     output.push_str(&format!(
         "final_size_bytes,{}\n",
         report.state.final_size_bytes

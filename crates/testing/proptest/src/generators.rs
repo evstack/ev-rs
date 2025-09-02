@@ -54,7 +54,8 @@ pub fn arb_nonzero_amount() -> impl Strategy<Value = u128> {
 
 /// Strategy for generating fungible assets.
 pub fn arb_fungible_asset() -> impl Strategy<Value = FungibleAsset> {
-    (arb_account_id(), arb_amount()).prop_map(|(asset_id, amount)| FungibleAsset { asset_id, amount })
+    (arb_account_id(), arb_amount())
+        .prop_map(|(asset_id, amount)| FungibleAsset { asset_id, amount })
 }
 
 /// Strategy for generating fungible assets with a specific asset ID.
@@ -121,19 +122,11 @@ pub struct TestTx {
 #[derive(Debug, Clone)]
 pub enum TestOperation {
     /// Transfer tokens.
-    Transfer {
-        asset_id: AccountId,
-        amount: u128,
-    },
+    Transfer { asset_id: AccountId, amount: u128 },
     /// Store arbitrary data.
-    Store {
-        key: Vec<u8>,
-        value: Vec<u8>,
-    },
+    Store { key: Vec<u8>, value: Vec<u8> },
     /// Delete data.
-    Delete {
-        key: Vec<u8>,
-    },
+    Delete { key: Vec<u8> },
     /// No-op (for testing gas only).
     Noop,
 }
@@ -165,14 +158,16 @@ pub fn arb_tx(accounts: Vec<AccountId>) -> impl Strategy<Value = TestTx> {
         1000u64..1_000_000,
         0u64..1000,
     )
-        .prop_map(|(id, sender, recipient, operation, gas_limit, nonce)| TestTx {
-            id,
-            sender,
-            recipient,
-            operation,
-            gas_limit,
-            nonce,
-        })
+        .prop_map(
+            |(id, sender, recipient, operation, gas_limit, nonce)| TestTx {
+                id,
+                sender,
+                recipient,
+                operation,
+                gas_limit,
+                nonce,
+            },
+        )
 }
 
 /// A test block containing multiple transactions.
@@ -213,17 +208,14 @@ pub fn arb_block_sequence(
 
     strategies
         .into_iter()
-        .fold(
-            Just(Vec::new()).boxed(),
-            |acc, block_strategy| {
-                (acc, block_strategy)
-                    .prop_map(|(mut blocks, block)| {
-                        blocks.push(block);
-                        blocks
-                    })
-                    .boxed()
-            },
-        )
+        .fold(Just(Vec::new()).boxed(), |acc, block_strategy| {
+            (acc, block_strategy)
+                .prop_map(|(mut blocks, block)| {
+                    blocks.push(block);
+                    blocks
+                })
+                .boxed()
+        })
 }
 
 /// Configuration for test scenario generation.
@@ -278,11 +270,7 @@ pub fn arb_scenario(config: ScenarioConfig) -> impl Strategy<Value = TestScenari
         proptest::collection::vec(arb_amount(), num_accounts),
     )
         .prop_flat_map(move |(seed, accounts, balances)| {
-            let initial_balances: Vec<_> = accounts
-                .iter()
-                .cloned()
-                .zip(balances)
-                .collect();
+            let initial_balances: Vec<_> = accounts.iter().cloned().zip(balances).collect();
 
             let accounts_clone = accounts.clone();
             arb_block_sequence(accounts_clone, num_blocks, max_txs).prop_map(move |blocks| {

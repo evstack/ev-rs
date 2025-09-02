@@ -57,12 +57,7 @@ impl<Tx> KeyPredictor<Tx> for NoOpKeyPredictor {
 /// * `Tx` - The transaction type
 /// * `S` - The storage backend type
 /// * `P` - The key predictor type
-pub fn warm_cache<Tx, S, P>(
-    cache: &ShardedDbCache,
-    storage: &S,
-    txs: &[Tx],
-    predictor: &P,
-)
+pub fn warm_cache<Tx, S, P>(cache: &ShardedDbCache, storage: &S, txs: &[Tx], predictor: &P)
 where
     S: ReadonlyKV,
     P: KeyPredictor<Tx>,
@@ -97,8 +92,7 @@ pub async fn warm_cache_async<Tx, S, P>(
     storage: Arc<S>,
     txs: Vec<Tx>,
     predictor: Arc<P>,
-)
-where
+) where
     Tx: Send + Sync + 'static,
     S: ReadonlyKV + Send + Sync + 'static,
     P: KeyPredictor<Tx> + Send + Sync + 'static,

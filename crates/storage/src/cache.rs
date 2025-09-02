@@ -67,11 +67,7 @@ impl DbCache {
         // Simple eviction: if at capacity, clear half
         // This is O(n) but happens rarely and avoids LRU tracking overhead
         if entries.len() >= self.max_entries {
-            let to_remove: Vec<_> = entries
-                .keys()
-                .take(self.max_entries / 2)
-                .cloned()
-                .collect();
+            let to_remove: Vec<_> = entries.keys().take(self.max_entries / 2).cloned().collect();
             for k in to_remove {
                 entries.remove(&k);
             }
@@ -143,11 +139,7 @@ impl CacheShard {
 
         // Simple eviction: if at capacity, clear half
         if entries.len() >= self.max_entries {
-            let to_remove: Vec<_> = entries
-                .keys()
-                .take(self.max_entries / 2)
-                .cloned()
-                .collect();
+            let to_remove: Vec<_> = entries.keys().take(self.max_entries / 2).cloned().collect();
             for k in to_remove {
                 entries.remove(&k);
             }
@@ -283,7 +275,9 @@ impl ShardedDbCache {
 
                 // Fetch from storage and cache
                 match fetch_fn(key) {
-                    Some(value) => self.shards[shard_idx].insert((*key).clone(), CachedValue::Present(value)),
+                    Some(value) => {
+                        self.shards[shard_idx].insert((*key).clone(), CachedValue::Present(value))
+                    }
                     None => self.shards[shard_idx].insert((*key).clone(), CachedValue::Absent),
                 }
             }

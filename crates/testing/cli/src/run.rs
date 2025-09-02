@@ -52,9 +52,10 @@ pub fn execute(config: RunConfig) -> Result<(), String> {
     let mut simulator = Simulator::new(seed, sim_config);
 
     // Create trace builder if tracing enabled
-    let mut trace_builder = config.trace_output.as_ref().map(|_| {
-        TraceBuilder::new(seed, StateSnapshot::empty())
-    });
+    let mut trace_builder = config
+        .trace_output
+        .as_ref()
+        .map(|_| TraceBuilder::new(seed, StateSnapshot::empty()));
 
     // Run simulation
     let start_time = std::time::Instant::now();
@@ -92,7 +93,10 @@ pub fn execute(config: RunConfig) -> Result<(), String> {
 
     match config.output_format.as_str() {
         "json" => {
-            println!("{}", serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".into()));
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".into())
+            );
         }
         _ => {
             println!("=== Simulation Report ===");
@@ -131,8 +135,7 @@ pub fn execute(config: RunConfig) -> Result<(), String> {
             TraceFormat::Binary
         };
 
-        save_trace(&trace, &path, format)
-            .map_err(|e| format!("Failed to save trace: {e}"))?;
+        save_trace(&trace, &path, format).map_err(|e| format!("Failed to save trace: {e}"))?;
 
         println!();
         println!("Trace saved to: {}", path.display());

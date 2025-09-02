@@ -108,9 +108,9 @@ impl Breakpoint {
             }
 
             Breakpoint::OnAccount(account) => match event {
-                TraceEvent::TxStart { sender, recipient, .. } => {
-                    sender == account || recipient == account
-                }
+                TraceEvent::TxStart {
+                    sender, recipient, ..
+                } => sender == account || recipient == account,
                 TraceEvent::Call { from, to, .. } => from == account || to == account,
                 _ => false,
             },
@@ -135,13 +135,9 @@ impl Breakpoint {
 
             Breakpoint::OnEventIndex(idx) => event.event_index() == *idx,
 
-            Breakpoint::All(breakpoints) => {
-                breakpoints.iter().all(|bp| bp.matches(event, state))
-            }
+            Breakpoint::All(breakpoints) => breakpoints.iter().all(|bp| bp.matches(event, state)),
 
-            Breakpoint::Any(breakpoints) => {
-                breakpoints.iter().any(|bp| bp.matches(event, state))
-            }
+            Breakpoint::Any(breakpoints) => breakpoints.iter().any(|bp| bp.matches(event, state)),
 
             Breakpoint::Not(bp) => !bp.matches(event, state),
         }

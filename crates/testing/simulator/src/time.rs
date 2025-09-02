@@ -107,7 +107,9 @@ impl SimulatedTime {
         self.current_block = self.current_block.saturating_add(1);
 
         // Advance ticks to align with block boundary
-        let target_tick = self.current_block.saturating_mul(self.config.ticks_per_block);
+        let target_tick = self
+            .current_block
+            .saturating_mul(self.config.ticks_per_block);
         if self.current_tick < target_tick {
             self.current_tick = target_tick;
         }
@@ -139,7 +141,9 @@ impl SimulatedTime {
     /// Returns the milliseconds per block.
     #[inline]
     pub fn block_time_ms(&self) -> u64 {
-        self.config.ticks_per_block.saturating_mul(self.config.tick_ms)
+        self.config
+            .ticks_per_block
+            .saturating_mul(self.config.tick_ms)
     }
 
     /// Returns a snapshot of the current time state.

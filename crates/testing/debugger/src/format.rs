@@ -97,7 +97,10 @@ impl TraceHeader {
 }
 
 /// Serializes a trace to bytes.
-pub fn serialize_trace(trace: &ExecutionTrace, format: TraceFormat) -> Result<Vec<u8>, FormatError> {
+pub fn serialize_trace(
+    trace: &ExecutionTrace,
+    format: TraceFormat,
+) -> Result<Vec<u8>, FormatError> {
     match format {
         TraceFormat::Binary => serialize_binary(trace, false),
         TraceFormat::BinaryCompressed => serialize_binary(trace, true),
@@ -114,7 +117,9 @@ pub fn deserialize_trace(data: &[u8]) -> Result<ExecutionTrace, FormatError> {
     } else if data.starts_with(b"{") {
         deserialize_json(data)
     } else {
-        Err(FormatError::InvalidFormat("Unknown trace format".to_string()))
+        Err(FormatError::InvalidFormat(
+            "Unknown trace format".to_string(),
+        ))
     }
 }
 
@@ -124,13 +129,13 @@ fn serialize_binary(trace: &ExecutionTrace, compress: bool) -> Result<Vec<u8>, F
 
     // Write header
     let header = TraceHeader::new(compress);
-    let header_bytes = bincode::serialize(&header)
-        .map_err(|e| FormatError::Serialization(e.to_string()))?;
+    let header_bytes =
+        bincode::serialize(&header).map_err(|e| FormatError::Serialization(e.to_string()))?;
     output.extend_from_slice(&header_bytes);
 
     // Serialize trace
-    let trace_bytes = bincode::serialize(trace)
-        .map_err(|e| FormatError::Serialization(e.to_string()))?;
+    let trace_bytes =
+        bincode::serialize(trace).map_err(|e| FormatError::Serialization(e.to_string()))?;
 
     if compress {
         // Compress the trace data
@@ -150,7 +155,9 @@ fn deserialize_binary(data: &[u8]) -> Result<ExecutionTrace, FormatError> {
     // Parse header
     let header_size = std::mem::size_of::<TraceHeader>();
     if data.len() < header_size {
-        return Err(FormatError::InvalidFormat("Data too short for header".to_string()));
+        return Err(FormatError::InvalidFormat(
+            "Data too short for header".to_string(),
+        ));
     }
 
     let header: TraceHeader = bincode::deserialize(&data[..header_size])
@@ -171,11 +178,9 @@ fn deserialize_binary(data: &[u8]) -> Result<ExecutionTrace, FormatError> {
         let mut decompressed = Vec::new();
         decoder.read_to_end(&mut decompressed)?;
 
-        bincode::deserialize(&decompressed)
-            .map_err(|e| FormatError::Deserialization(e.to_string()))
+        bincode::deserialize(&decompressed).map_err(|e| FormatError::Deserialization(e.to_string()))
     } else {
-        bincode::deserialize(trace_data)
-            .map_err(|e| FormatError::Deserialization(e.to_string()))
+        bincode::deserialize(trace_data).map_err(|e| FormatError::Deserialization(e.to_string()))
     }
 }
 
@@ -196,7 +201,11 @@ fn deserialize_json(data: &[u8]) -> Result<ExecutionTrace, FormatError> {
 }
 
 /// Saves a trace to a file.
-pub fn save_trace(trace: &ExecutionTrace, path: &Path, format: TraceFormat) -> Result<(), FormatError> {
+pub fn save_trace(
+    trace: &ExecutionTrace,
+    path: &Path,
+    format: TraceFormat,
+) -> Result<(), FormatError> {
     let data = serialize_trace(trace, format)?;
     std::fs::write(path, data)?;
     Ok(())

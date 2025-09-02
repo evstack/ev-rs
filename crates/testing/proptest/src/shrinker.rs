@@ -453,12 +453,7 @@ mod tests {
             }
         };
 
-        let shrinker = FailureShrink::new(
-            scenario,
-            violation,
-            replay_fn,
-            ShrinkConfig::default(),
-        );
+        let shrinker = FailureShrink::new(scenario, violation, replay_fn, ShrinkConfig::default());
 
         let minimal = shrinker.shrink();
 

@@ -261,7 +261,9 @@ impl SimMetricsSnapshot {
             txs_success: self.txs_success.saturating_sub(other.txs_success),
             txs_failed: self.txs_failed.saturating_sub(other.txs_failed),
             gas_consumed: self.gas_consumed.saturating_sub(other.gas_consumed),
-            execution_time_ns: self.execution_time_ns.saturating_sub(other.execution_time_ns),
+            execution_time_ns: self
+                .execution_time_ns
+                .saturating_sub(other.execution_time_ns),
             state_size_bytes: self.state_size_bytes,
         }
     }
