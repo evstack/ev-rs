@@ -251,7 +251,7 @@ fn run_interactive_mode(replayer: &mut Replayer) -> Result<(), String> {
             break;
         }
 
-        let parts: Vec<&str> = line.trim().split_whitespace().collect();
+        let parts: Vec<&str> = line.split_whitespace().collect();
         if parts.is_empty() {
             continue;
         }

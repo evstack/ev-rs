@@ -7,6 +7,8 @@ pub mod vector;
 
 #[cfg(test)]
 mod mocks;
+#[cfg(test)]
+mod prop_tests;
 pub mod queue;
 
 define_error!(ERR_NOT_FOUND, 0x01, "object not found");

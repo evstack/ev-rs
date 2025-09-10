@@ -3,7 +3,8 @@ pub mod evolve_core {
     pub struct AccountId(pub [u8; 32]);
     pub struct InvokeRequest;
     pub struct InvokeResponse;
-    pub trait Environment {}
+    pub trait EnvironmentQuery {}
+    pub trait Environment: EnvironmentQuery {}
     pub struct FungibleAsset;
     pub struct SdkError;
     pub type SdkResult<T> = Result<T, SdkError>;
@@ -34,7 +35,7 @@ pub mod evolve_core {
         fn identifier(&self) -> String;
         fn init(
             &self,
-            env: &mut dyn Environment,
+            env: &mut dyn EnvironmentQuery,
             request: &InvokeRequest,
         ) -> SdkResult<InvokeResponse>;
         fn execute(
@@ -44,7 +45,7 @@ pub mod evolve_core {
         ) -> SdkResult<InvokeResponse>;
         fn query(
             &self,
-            env: &dyn Environment,
+            env: &mut dyn EnvironmentQuery,
             request: &InvokeRequest,
         ) -> SdkResult<InvokeResponse>;
     }
@@ -56,7 +57,7 @@ pub mod evolve_core {
             _name: String,
             _msg: &T,
             _funds: Vec<FungibleAsset>,
-            _env: &mut dyn Environment,
+            _env: &mut dyn EnvironmentQuery,
         ) -> SdkResult<(AccountId, T)> {
             unimplemented!()
         }
@@ -73,7 +74,7 @@ pub mod evolve_core {
         pub fn query_account<T, R>(
             _account_id: AccountId,
             _msg: &T,
-            _env: &dyn Environment,
+            _env: &mut dyn EnvironmentQuery,
         ) -> SdkResult<R> {
             unimplemented!()
         }

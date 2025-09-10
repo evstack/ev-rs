@@ -62,11 +62,14 @@ impl AccountId {
     }
 }
 
-pub trait Environment {
+pub trait EnvironmentQuery {
     fn whoami(&self) -> AccountId;
     fn sender(&self) -> AccountId;
     fn funds(&self) -> &[FungibleAsset];
-    fn do_query(&self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse>;
+    fn do_query(&mut self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse>;
+}
+
+pub trait Environment: EnvironmentQuery {
     fn do_exec(
         &mut self,
         to: AccountId,
@@ -85,7 +88,11 @@ pub trait AccountCode: Send + Sync {
         env: &mut dyn Environment,
         request: &InvokeRequest,
     ) -> SdkResult<InvokeResponse>;
-    fn query(&self, env: &dyn Environment, request: &InvokeRequest) -> SdkResult<InvokeResponse>;
+    fn query(
+        &self,
+        env: &mut dyn EnvironmentQuery,
+        request: &InvokeRequest,
+    ) -> SdkResult<InvokeResponse>;
 }
 
 pub trait ReadonlyKV: Send + Sync {
@@ -133,7 +140,7 @@ macro_rules! ensure {
     };
 }
 
-pub fn one_coin(env: &dyn Environment) -> SdkResult<FungibleAsset> {
+pub fn one_coin(env: &dyn EnvironmentQuery) -> SdkResult<FungibleAsset> {
     let funds = env.funds();
     ensure!(funds.len() == 1, ERR_ONE_COIN);
     Ok(FungibleAsset {

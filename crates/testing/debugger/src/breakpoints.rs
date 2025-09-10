@@ -92,12 +92,13 @@ impl Breakpoint {
     }
 
     /// Creates a negated breakpoint.
+    #[allow(clippy::should_implement_trait)]
     pub fn not(breakpoint: Breakpoint) -> Self {
         Breakpoint::Not(Box::new(breakpoint))
     }
 
     /// Checks if this breakpoint matches the given event and state.
-    pub fn matches(&self, event: &TraceEvent, state: &StateSnapshot) -> bool {
+    pub fn matches(&self, event: &TraceEvent, _state: &StateSnapshot) -> bool {
         match self {
             Breakpoint::OnBlock(height) => {
                 matches!(event, TraceEvent::BlockStart { height: h, .. } if h == height)
@@ -135,11 +136,11 @@ impl Breakpoint {
 
             Breakpoint::OnEventIndex(idx) => event.event_index() == *idx,
 
-            Breakpoint::All(breakpoints) => breakpoints.iter().all(|bp| bp.matches(event, state)),
+            Breakpoint::All(breakpoints) => breakpoints.iter().all(|bp| bp.matches(event, _state)),
 
-            Breakpoint::Any(breakpoints) => breakpoints.iter().any(|bp| bp.matches(event, state)),
+            Breakpoint::Any(breakpoints) => breakpoints.iter().any(|bp| bp.matches(event, _state)),
 
-            Breakpoint::Not(bp) => !bp.matches(event, state),
+            Breakpoint::Not(bp) => !bp.matches(event, _state),
         }
     }
 
@@ -177,6 +178,14 @@ impl Breakpoint {
             }
             Breakpoint::Not(bp) => format!("not ({})", bp.description()),
         }
+    }
+}
+
+impl std::ops::Not for Breakpoint {
+    type Output = Breakpoint;
+
+    fn not(self) -> Self::Output {
+        Breakpoint::Not(Box::new(self))
     }
 }
 

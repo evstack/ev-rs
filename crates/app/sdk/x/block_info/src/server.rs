@@ -1,10 +1,21 @@
 use crate::account::BlockInfoRef;
-use evolve_core::Environment;
-use evolve_ns::resolve_as_ref;
+use evolve_core::{AccountId, Environment};
 use evolve_server_core::{BeginBlocker, Block};
 use std::marker::PhantomData;
 
-pub struct SetTimeBeginBlocker<T>(PhantomData<T>);
+pub struct SetTimeBeginBlocker<T> {
+    block_info_id: AccountId,
+    _phantom: PhantomData<T>,
+}
+
+impl<T> SetTimeBeginBlocker<T> {
+    pub const fn new(block_info_id: AccountId) -> Self {
+        Self {
+            block_info_id,
+            _phantom: PhantomData,
+        }
+    }
+}
 
 pub trait BlockTimeProvider {
     fn time_unix_ms(&self) -> u64;
@@ -16,9 +27,7 @@ where
     B: Block<Tx> + BlockTimeProvider,
 {
     fn begin_block(&self, block: &B, env: &mut dyn Environment) {
-        resolve_as_ref::<BlockInfoRef>("block_info".to_string(), env)
-            .unwrap()
-            .unwrap()
+        BlockInfoRef::from(self.block_info_id)
             .set_block_info(block.height(), block.time_unix_ms(), env)
             .unwrap()
     }

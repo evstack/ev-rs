@@ -6,7 +6,9 @@ pub mod account {
     use evolve_collections::item::Item;
     use evolve_collections::unordered_map::UnorderedMap;
     use evolve_collections::vector::Vector;
-    use evolve_core::{define_error, AccountId, Environment, SdkResult, ERR_UNAUTHORIZED};
+    use evolve_core::{
+        define_error, AccountId, Environment, EnvironmentQuery, SdkResult, ERR_UNAUTHORIZED,
+    };
     use evolve_events::EventsEmitter;
     use evolve_macros::{exec, init, query};
     use evolve_scheduler::begin_block_account_interface::BeginBlockAccountInterface;
@@ -136,7 +138,10 @@ pub mod account {
         }
 
         #[query]
-        pub fn get_validator_set(&self, env: &dyn Environment) -> SdkResult<Vec<Validator>> {
+        pub fn get_validator_set(
+            &self,
+            env: &mut dyn EnvironmentQuery,
+        ) -> SdkResult<Vec<Validator>> {
             self.validators
                 .iter(env)?
                 .map(|v| v.map(|v| v.1))
@@ -144,7 +149,10 @@ pub mod account {
         }
 
         #[query]
-        pub fn get_valset_changes(&self, env: &dyn Environment) -> SdkResult<Vec<ValsetChange>> {
+        pub fn get_valset_changes(
+            &self,
+            env: &mut dyn EnvironmentQuery,
+        ) -> SdkResult<Vec<ValsetChange>> {
             self.valset_changes.iter(env)?.collect()
         }
     }

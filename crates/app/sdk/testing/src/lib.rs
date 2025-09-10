@@ -6,8 +6,8 @@ use evolve_core::storage_api::{
     StorageSetRequest, StorageSetResponse, STORAGE_ACCOUNT_ID,
 };
 use evolve_core::{
-    AccountId, Environment, FungibleAsset, InvokableMessage, InvokeRequest, InvokeResponse,
-    Message, SdkResult, ERR_UNKNOWN_FUNCTION,
+    AccountId, Environment, EnvironmentQuery, FungibleAsset, InvokableMessage, InvokeRequest,
+    InvokeResponse, Message, SdkResult, ERR_UNKNOWN_FUNCTION,
 };
 use std::collections::HashMap;
 
@@ -107,7 +107,7 @@ impl MockEnv {
         }
     }
 
-    fn handle_storage_query(&self, request: &InvokeRequest) -> SdkResult<InvokeResponse> {
+    fn handle_storage_query(&mut self, request: &InvokeRequest) -> SdkResult<InvokeResponse> {
         match request.function() {
             StorageGetRequest::FUNCTION_IDENTIFIER => {
                 let storage_get: StorageGetRequest = request.get()?;
@@ -126,7 +126,7 @@ impl MockEnv {
     }
 }
 
-impl Environment for MockEnv {
+impl EnvironmentQuery for MockEnv {
     fn whoami(&self) -> AccountId {
         self.whoami
     }
@@ -139,7 +139,7 @@ impl Environment for MockEnv {
         self.funds.as_ref()
     }
 
-    fn do_query(&self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse> {
+    fn do_query(&mut self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse> {
         if to == STORAGE_ACCOUNT_ID {
             return self.handle_storage_query(data);
         };
@@ -152,7 +152,9 @@ impl Environment for MockEnv {
             None => Err(ERR_UNKNOWN_FUNCTION),
         }
     }
+}
 
+impl Environment for MockEnv {
     fn do_exec(
         &mut self,
         to: AccountId,
@@ -357,7 +359,7 @@ mod tests {
         }
 
         // Create environment with a custom query handler
-        let env = MockEnv::new(whoami, sender).with_query_handler(
+        let mut env = MockEnv::new(whoami, sender).with_query_handler(
             // The closure must accept (AccountId, Req) -> SdkResult<Resp>
             |sender_id: AccountId, req: CustomQueryReq| -> SdkResult<CustomQueryResp> {
                 // We can do something interesting here, e.g. check the `sender_id` or the `req`.

@@ -4,8 +4,8 @@ use evolve_core::account_impl;
 pub mod share {
     use evolve_collections::{item::Item, map::Map};
     use evolve_core::{
-        AccountId, ERR_UNAUTHORIZED, Environment, FungibleAsset, SdkResult, define_error, ensure,
-        one_coin,
+        AccountId, ERR_UNAUTHORIZED, Environment, EnvironmentQuery, FungibleAsset, SdkResult,
+        define_error, ensure, one_coin,
     };
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
@@ -264,7 +264,7 @@ pub mod share {
         }
 
         #[query]
-        fn metadata(&self, env: &dyn Environment) -> SdkResult<FungibleAssetMetadata> {
+        fn metadata(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<FungibleAssetMetadata> {
             Ok(self.metadata.may_get(env)?.unwrap())
         }
 
@@ -272,13 +272,13 @@ pub mod share {
         fn get_balance(
             &self,
             account: AccountId,
-            env: &dyn Environment,
+            env: &mut dyn EnvironmentQuery,
         ) -> SdkResult<Option<u128>> {
             self.balances.may_get(&account, env)
         }
 
         #[query]
-        fn total_supply(&self, env: &dyn Environment) -> SdkResult<u128> {
+        fn total_supply(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<u128> {
             self.total_supply.get(env)
         }
     }
@@ -287,7 +287,7 @@ pub mod share {
 #[cfg(test)]
 mod tests {
     use crate::share::{ERR_INVALID_COIN, ERR_NOT_ENOUGH_BALANCE, Share, TransferMsg};
-    use evolve_core::{AccountId, ERR_UNAUTHORIZED, Environment, FungibleAsset};
+    use evolve_core::{AccountId, ERR_UNAUTHORIZED, EnvironmentQuery, FungibleAsset};
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_testing::MockEnv;
 
@@ -341,27 +341,29 @@ mod tests {
     #[test]
     fn test_initialize_and_metadata() {
         // manager=42, initial_holder=10, holder_balance=1_000, backing_asset=999
-        let (share, env) = setup_share(42, 10, 1000, 999);
+        let (share, mut env) = setup_share(42, 10, 1000, 999);
 
         // Check the metadata
-        let md = share.metadata(&env).expect("metadata query failed");
+        let md = share.metadata(&mut env).expect("metadata query failed");
         assert_eq!(md.name, "ShareToken");
         assert_eq!(md.symbol, "ST");
         assert_eq!(md.decimals, 6);
 
         // Check the initial holder's balance
         let bal = share
-            .get_balance(AccountId::new(10), &env)
+            .get_balance(AccountId::new(10), &mut env)
             .expect("get_balance failed")
             .unwrap();
         assert_eq!(bal, 1000);
 
         // Check total supply
-        let total_supply = share.total_supply(&env).expect("total_supply query failed");
+        let total_supply = share
+            .total_supply(&mut env)
+            .expect("total_supply query failed");
         assert_eq!(total_supply, 1000);
 
         // Manager check
-        let manager = share.manager.get(&env).unwrap();
+        let manager = share.manager.get(&mut env).unwrap();
         assert_eq!(manager, AccountId::new(42));
     }
 
@@ -378,13 +380,13 @@ mod tests {
         assert!(result.is_ok(), "Transfer should succeed");
 
         let from_balance = share
-            .get_balance(AccountId::new(50), &env)
+            .get_balance(AccountId::new(50), &mut env)
             .expect("balance check failed")
             .unwrap();
         assert_eq!(from_balance, 700);
 
         let to_balance = share
-            .get_balance(AccountId::new(60), &env)
+            .get_balance(AccountId::new(60), &mut env)
             .expect("balance check failed")
             .unwrap();
         assert_eq!(to_balance, 300);
@@ -408,11 +410,11 @@ mod tests {
 
     #[test]
     fn test_get_balance_not_set_yet() {
-        let (share, env) = setup_share(2, 10, 100, 999);
+        let (share, mut env) = setup_share(2, 10, 100, 999);
 
         // Check an address that wasn't granted any initial shares
         let bal = share
-            .get_balance(AccountId::new(9999), &env)
+            .get_balance(AccountId::new(9999), &mut env)
             .expect("call failed");
         assert_eq!(bal, None);
     }
@@ -434,21 +436,21 @@ mod tests {
         }]);
 
         let recipient = AccountId::new(10);
-        let before_balance = share.get_balance(recipient, &env).unwrap().unwrap();
+        let before_balance = share.get_balance(recipient, &mut env).unwrap().unwrap();
         assert_eq!(before_balance, 500);
 
         let result = share.mint(recipient, &mut env);
         assert!(result.is_ok(), "Mint should succeed");
 
         // Now check the new share balance after ratio-based mint
-        let after_balance = share.get_balance(recipient, &env).unwrap().unwrap();
+        let after_balance = share.get_balance(recipient, &mut env).unwrap().unwrap();
 
         // For the first deposit (coin_deposited=0), minted == deposit => 100
         let expected_after = 600; // 500 + 100
         assert_eq!(after_balance, expected_after);
 
         // Verify coin_deposited changed from 0 -> 100
-        let coin_deposited = share.coin_deposited.get(&env).unwrap();
+        let coin_deposited = share.coin_deposited.get(&mut env).unwrap();
         assert_eq!(coin_deposited.amount, 100);
         assert_eq!(coin_deposited.asset_id, AccountId::new(999));
     }
@@ -502,12 +504,12 @@ mod tests {
 
         // Final balance of 10 should be 600 + 300 = 900
         let final_bal = share
-            .get_balance(AccountId::new(10), &env)
+            .get_balance(AccountId::new(10), &mut env)
             .unwrap()
             .unwrap();
         assert_eq!(final_bal, 900);
 
-        let final_coin_deposited = share.coin_deposited.get(&env).unwrap().amount;
+        let final_coin_deposited = share.coin_deposited.get(&mut env).unwrap().amount;
         // Should now be 150 total underlying
         assert_eq!(final_coin_deposited, 150);
     }
@@ -540,7 +542,7 @@ mod tests {
             }]);
 
         let before_balance = share
-            .get_balance(AccountId::new(10), &env)
+            .get_balance(AccountId::new(10), &mut env)
             .unwrap()
             .unwrap();
         assert_eq!(before_balance, 1100);
@@ -559,13 +561,13 @@ mod tests {
 
         // new balance = 1100 - 110 = 990
         let after_balance = share
-            .get_balance(AccountId::new(10), &env)
+            .get_balance(AccountId::new(10), &mut env)
             .unwrap()
             .unwrap();
         assert_eq!(after_balance, 990);
 
         // coin_deposited decreased by 10 => 100 - 10 = 90
-        let new_coin_deposited = share.coin_deposited.get(&env).unwrap().amount;
+        let new_coin_deposited = share.coin_deposited.get(&mut env).unwrap().amount;
         assert_eq!(new_coin_deposited, 90);
     }
 
@@ -626,13 +628,13 @@ mod tests {
             .expect("mint failed");
 
         // underlying deposit is now 500
-        let cd_before = share.coin_deposited.get(&env).unwrap().amount;
+        let cd_before = share.coin_deposited.get(&mut env).unwrap().amount;
         assert_eq!(cd_before, 500);
 
         // slash 200 -> authorized: sender is manager=42
         share.slash(200, &mut env).expect("slash failed");
 
-        let cd_after = share.coin_deposited.get(&env).unwrap().amount;
+        let cd_after = share.coin_deposited.get(&mut env).unwrap().amount;
         assert_eq!(cd_after, 300);
     }
 
@@ -665,12 +667,12 @@ mod tests {
 
         // slash entire deposit
         share.slash(100, &mut env).expect("slash failed");
-        let cd_after = share.coin_deposited.get(&env).unwrap().amount;
+        let cd_after = share.coin_deposited.get(&mut env).unwrap().amount;
         assert_eq!(cd_after, 0);
 
         // Additional slash calls saturate at 0, not negative
         share.slash(9999, &mut env).expect("slash failed again");
-        let cd_after2 = share.coin_deposited.get(&env).unwrap().amount;
+        let cd_after2 = share.coin_deposited.get(&mut env).unwrap().amount;
         assert_eq!(cd_after2, 0, "Slash saturates at zero");
     }
 }

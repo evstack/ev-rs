@@ -43,7 +43,7 @@ use evolve_server_core::AccountsCodeStorage;
 ///
 /// Returns the response from the system operation.
 pub fn handle_system_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
-    invoker: &mut Invoker<S, A>,
+    invoker: &mut Invoker<'_, '_, S, A>,
     request: &InvokeRequest,
     funds: Vec<FungibleAsset>,
 ) -> SdkResult<InvokeResponse> {
@@ -74,7 +74,7 @@ pub fn handle_system_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
 
             // Validate that the account exists before migration
             let current_code_id = runtime_api_impl::get_account_code_identifier_for_account(
-                &invoker.storage.borrow(),
+                invoker.storage,
                 req.account_id,
             )?
             .ok_or(ERR_ACCOUNT_DOES_NOT_EXIST)?;
@@ -82,7 +82,6 @@ pub fn handle_system_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
             // Validate that the new code exists
             let code_exists = invoker
                 .account_codes
-                .borrow()
                 .with_code(&req.new_code_id, |code| code.is_some())?;
             if !code_exists {
                 return Err(ERR_CODE_NOT_FOUND);
@@ -96,7 +95,7 @@ pub fn handle_system_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
 
             // set new account id
             runtime_api_impl::set_account_code_identifier_for_account(
-                &mut invoker.storage.borrow_mut(),
+                invoker.storage,
                 req.account_id,
                 &req.new_code_id,
             )?;
@@ -112,7 +111,7 @@ pub fn handle_system_query(_request: &InvokeRequest) -> SdkResult<InvokeResponse
 }
 
 pub fn handle_storage_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
-    invoker: &mut Invoker<S, A>,
+    invoker: &mut Invoker<'_, '_, S, A>,
     request: &InvokeRequest,
 ) -> SdkResult<InvokeResponse> {
     match request.function() {
@@ -125,9 +124,8 @@ pub fn handle_storage_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
             // increase gas costs
             invoker
                 .gas_counter
-                .borrow_mut()
                 .consume_set_gas(&key, &storage_set.value)?;
-            invoker.storage.borrow_mut().set(&key, storage_set.value)?;
+            invoker.storage.set(&key, storage_set.value)?;
 
             Ok(InvokeResponse::new(&StorageSetResponse {})?)
         }
@@ -135,8 +133,8 @@ pub fn handle_storage_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
             let storage_remove: StorageRemoveRequest = request.get()?;
             let mut key = invoker.whoami.as_bytes();
             key.extend(storage_remove.key);
-            invoker.gas_counter.borrow_mut().consume_remove_gas(&key)?;
-            invoker.storage.borrow_mut().remove(&key)?;
+            invoker.gas_counter.consume_remove_gas(&key)?;
+            invoker.storage.remove(&key)?;
             Ok(InvokeResponse::new(&StorageRemoveResponse {})?)
         }
         _ => Err(ERR_UNKNOWN_FUNCTION),
@@ -144,7 +142,7 @@ pub fn handle_storage_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
 }
 
 pub fn handle_event_handler_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
-    invoker: &mut Invoker<S, A>,
+    invoker: &mut Invoker<'_, '_, S, A>,
     request: &InvokeRequest,
 ) -> SdkResult<InvokeResponse> {
     match request.function() {
@@ -159,7 +157,7 @@ pub fn handle_event_handler_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
                 name: req.name,
                 contents: req.contents,
             };
-            invoker.storage.borrow_mut().emit_event(event)?;
+            invoker.storage.emit_event(event)?;
             Ok(InvokeResponse::new(&EmitEventResponse {})?)
         }
         _ => Err(ERR_UNKNOWN_FUNCTION),
@@ -167,7 +165,7 @@ pub fn handle_event_handler_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
 }
 
 pub fn handle_storage_query<S: ReadonlyKV, A: AccountsCodeStorage>(
-    invoker: &Invoker<S, A>,
+    invoker: &mut Invoker<'_, '_, S, A>,
     request: &InvokeRequest,
 ) -> SdkResult<InvokeResponse> {
     match request.function() {
@@ -177,12 +175,9 @@ pub fn handle_storage_query<S: ReadonlyKV, A: AccountsCodeStorage>(
             let mut key = storage_get.account_id.as_bytes();
             key.extend(storage_get.key);
 
-            let value = invoker.storage.borrow().get(&key)?;
+            let value = invoker.storage.get(&key)?;
 
-            invoker
-                .gas_counter
-                .borrow_mut()
-                .consume_get_gas(&key, &value)?;
+            invoker.gas_counter.consume_get_gas(&key, &value)?;
 
             Ok(InvokeResponse::new(&StorageGetResponse { value })?)
         }
@@ -191,12 +186,12 @@ pub fn handle_storage_query<S: ReadonlyKV, A: AccountsCodeStorage>(
 }
 
 pub fn handle_unique_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
-    invoker: &mut Invoker<S, A>,
+    invoker: &mut Invoker<'_, '_, S, A>,
     request: &InvokeRequest,
 ) -> SdkResult<InvokeResponse> {
     match request.function() {
         evolve_unique::unique::NextUniqueIdMsg::FUNCTION_IDENTIFIER => {
-            let next_created_object_counter = invoker.storage.borrow_mut().next_unique_object_id();
+            let next_created_object_counter = invoker.storage.next_unique_object_id();
             let unique_object_id = invoker.scope.unique_id(next_created_object_counter)?;
             InvokeResponse::new(&unique_object_id)
         }
@@ -205,12 +200,12 @@ pub fn handle_unique_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
 }
 
 pub fn handle_unique_query<S: ReadonlyKV, A: AccountsCodeStorage>(
-    invoker: &Invoker<S, A>,
+    invoker: &mut Invoker<'_, '_, S, A>,
     request: &InvokeRequest,
 ) -> SdkResult<InvokeResponse> {
     match request.function() {
         evolve_unique::unique::UniqueObjectsCreatedMsg::FUNCTION_IDENTIFIER => {
-            InvokeResponse::new(&invoker.storage.borrow().created_unique_objects())
+            InvokeResponse::new(&invoker.storage.created_unique_objects())
         }
         _ => Err(ERR_UNKNOWN_FUNCTION),
     }

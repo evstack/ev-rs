@@ -1,8 +1,11 @@
-use crate::{do_genesis, install_account_codes, CustomStf, MINTER, STF};
+use crate::{
+    build_stf, do_genesis, install_account_codes, CustomStf, GenesisAccounts, MINTER,
+    PLACEHOLDER_ACCOUNT,
+};
 use evolve_block_info::account::BlockInfoRef;
 use evolve_core::{AccountId, Environment, FungibleAsset, SdkResult};
-use evolve_ns::resolve_as_ref;
 use evolve_server_core::WritableKV;
+use evolve_stf::SystemAccounts;
 use evolve_testing::server_mocks::{AccountStorageMock, StorageMock};
 use evolve_token::account::TokenRef;
 
@@ -11,11 +14,16 @@ pub struct TestApp {
     codes: AccountStorageMock,
     state: StorageMock,
     stf: CustomStf,
+    accounts: GenesisAccounts,
 }
 
 impl TestApp {
     pub fn new() -> Self {
         Default::default()
+    }
+
+    pub fn accounts(&self) -> GenesisAccounts {
+        self.accounts
     }
 
     pub fn system_exec_as<R>(
@@ -36,8 +44,9 @@ impl TestApp {
     }
 
     pub fn mint_atom(&mut self, recipient: AccountId, amount: u128) -> FungibleAsset {
+        let atom_id = self.accounts.atom;
         self.system_exec_as(MINTER, |env| {
-            let atom_token = resolve_as_ref::<TokenRef>("atom", env)?.unwrap();
+            let atom_token = TokenRef::from(atom_id);
             atom_token.mint(recipient, amount, env)?;
             Ok(FungibleAsset {
                 asset_id: atom_token.0,
@@ -53,7 +62,7 @@ impl TestApp {
         let state = self
             .stf
             .system_exec(&self.state, &self.codes, height, |env| {
-                let block_info = resolve_as_ref::<BlockInfoRef>("block_info", env)?.unwrap();
+                let block_info = BlockInfoRef::from(self.accounts.block_info);
                 block_info.set_block_info(height, 0, env)
             })
             .unwrap()
@@ -66,14 +75,14 @@ impl TestApp {
 impl Default for TestApp {
     fn default() -> Self {
         // install stf
-        let stf = STF;
+        let bootstrap_stf = build_stf(SystemAccounts::placeholder(), PLACEHOLDER_ACCOUNT);
         let mut codes = AccountStorageMock::default();
         // install codes
         install_account_codes(&mut codes);
 
         let mut state = StorageMock::default();
 
-        let genesis_state = do_genesis(&stf, &codes, &state).unwrap();
+        let (genesis_state, accounts) = do_genesis(&bootstrap_stf, &codes, &state).unwrap();
         state
             .apply_changes(genesis_state.into_changes().unwrap())
             .unwrap();
@@ -82,7 +91,11 @@ impl Default for TestApp {
             block: 0,
             codes,
             state,
-            stf: STF,
+            stf: build_stf(
+                SystemAccounts::new(accounts.gas_service),
+                accounts.scheduler,
+            ),
+            accounts,
         }
     }
 }

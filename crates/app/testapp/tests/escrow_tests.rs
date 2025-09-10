@@ -1,6 +1,6 @@
+use evolve_core::unique_api::UNIQUE_HANDLER_ACCOUNT_ID;
 use evolve_core::{AccountId, ERR_UNAUTHORIZED};
 use evolve_escrow::escrow::{EscrowRef, ERR_LOCK_NOT_READY};
-use evolve_ns::resolve_name;
 use evolve_testapp::testing::TestApp;
 
 #[test]
@@ -10,18 +10,15 @@ fn test_escrow() {
     let escrow_money_recipient = AccountId::new(1001);
     let escrow_unauthorized = AccountId::new(1002);
     let unlock_height = 100;
+    let block_info_id = app.accounts().block_info;
 
     let minted_money = app.mint_atom(escrow_creator, 1000);
     // create escrow
     let (lock_id, escrow) = app
         .system_exec_as(escrow_creator, |env| {
             // create escrow
-            let escrow_ref = EscrowRef::initialize(
-                resolve_name("unique", env)?.unwrap(),
-                resolve_name("block_info", env)?.unwrap(),
-                env,
-            )?
-            .0;
+            let escrow_ref =
+                EscrowRef::initialize(UNIQUE_HANDLER_ACCOUNT_ID, block_info_id, env)?.0;
 
             let lock_id = escrow_ref.create_lock(
                 vec![minted_money.clone()],

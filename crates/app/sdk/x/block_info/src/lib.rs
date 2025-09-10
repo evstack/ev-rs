@@ -7,7 +7,7 @@ pub mod account {
     use borsh::{BorshDeserialize, BorshSerialize};
     use evolve_collections::item::Item;
     use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
-    use evolve_core::{Environment, SdkResult, ERR_UNAUTHORIZED};
+    use evolve_core::{Environment, EnvironmentQuery, SdkResult, ERR_UNAUTHORIZED};
     use evolve_macros::{exec, init, query};
 
     /// A simple struct to store both block height and time in one query.
@@ -69,19 +69,19 @@ pub mod account {
 
         /// Query the current height only.
         #[query]
-        pub fn get_height(&self, env: &dyn Environment) -> SdkResult<u64> {
+        pub fn get_height(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<u64> {
             self.height.get(env)
         }
 
         /// **New**: Query the current time only.
         #[query]
-        pub fn get_time_unix_ms(&self, env: &dyn Environment) -> SdkResult<u64> {
+        pub fn get_time_unix_ms(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<u64> {
             self.time_unix_ms.get(env)
         }
 
         /// **New**: Query both the height and time, returning a custom struct.
         #[query]
-        pub fn get_block_details(&self, env: &dyn Environment) -> SdkResult<BlockDetails> {
+        pub fn get_block_details(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<BlockDetails> {
             Ok(BlockDetails {
                 height: self.height.get(env)?,
                 time_unix_ms: self.time_unix_ms.get(env)?,
@@ -122,21 +122,22 @@ mod tests {
     fn test_initialize() {
         let initial_block = 100;
         let initial_time = 1650000000000; // 1,650,000,000,000 (approx example)
-        let (block_info, env) = setup_block_info(AccountId::new(42), initial_block, initial_time);
+        let (block_info, mut env) =
+            setup_block_info(AccountId::new(42), initial_block, initial_time);
 
         // Check `get_height` after initialization
-        let height = block_info.get_height(&env).expect("get_height failed");
+        let height = block_info.get_height(&mut env).expect("get_height failed");
         assert_eq!(height, initial_block);
 
         // Check `get_time_unix_ms` after initialization
         let time = block_info
-            .get_time_unix_ms(&env)
+            .get_time_unix_ms(&mut env)
             .expect("get_time_unix_ms failed");
         assert_eq!(time, initial_time);
 
         // Check the combined query
         let details = block_info
-            .get_block_details(&env)
+            .get_block_details(&mut env)
             .expect("get_block_details failed");
         assert_eq!(details.height, initial_block);
         assert_eq!(details.time_unix_ms, initial_time);
@@ -164,8 +165,8 @@ mod tests {
         );
 
         // Check that the block info was updated
-        let height = block_info.get_height(&env).unwrap();
-        let time = block_info.get_time_unix_ms(&env).unwrap();
+        let height = block_info.get_height(&mut env).unwrap();
+        let time = block_info.get_time_unix_ms(&mut env).unwrap();
 
         assert_eq!(height, new_block, "height should have been updated");
         assert_eq!(time, new_time, "time_unix_ms should have been updated");
@@ -187,17 +188,17 @@ mod tests {
         );
 
         // Ensure values were not updated
-        let height = block_info.get_height(&env).unwrap();
-        let time = block_info.get_time_unix_ms(&env).unwrap();
+        let height = block_info.get_height(&mut env).unwrap();
+        let time = block_info.get_time_unix_ms(&mut env).unwrap();
         assert_eq!(height, 300, "height should remain unchanged");
         assert_eq!(time, 1652222222222, "time_unix_ms should remain unchanged");
     }
 
     #[test]
     fn test_get_time_unix_ms() {
-        let (block_info, env) = setup_block_info(AccountId::new(42), 1234, 4321);
+        let (block_info, mut env) = setup_block_info(AccountId::new(42), 1234, 4321);
         let time = block_info
-            .get_time_unix_ms(&env)
+            .get_time_unix_ms(&mut env)
             .expect("get_time_unix_ms should succeed");
         assert_eq!(time, 4321);
     }
@@ -206,10 +207,11 @@ mod tests {
     fn test_get_block_details() {
         let initial_block = 777;
         let initial_time = 7777777777777;
-        let (block_info, env) = setup_block_info(AccountId::new(42), initial_block, initial_time);
+        let (block_info, mut env) =
+            setup_block_info(AccountId::new(42), initial_block, initial_time);
 
         let details = block_info
-            .get_block_details(&env)
+            .get_block_details(&mut env)
             .expect("get_block_details failed");
         assert_eq!(details.height, initial_block);
         assert_eq!(details.time_unix_ms, initial_time);

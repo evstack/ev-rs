@@ -305,11 +305,13 @@ fn merge_collected_info(
     source: CollectedInfo,
 ) -> Result<(), syn::Error> {
     // Merge init
-    if target.init_fn.is_some() && source.init_fn.is_some() {
-        return Err(syn::Error::new(
-            source.init_fn.unwrap().fn_name.span(),
-            "Multiple #[init] found.",
-        ));
+    if target.init_fn.is_some() {
+        if let Some(init) = source.init_fn {
+            return Err(syn::Error::new(
+                init.fn_name.span(),
+                "Multiple #[init] found.",
+            ));
+        }
     }
     if let Some(init) = source.init_fn {
         target.init_fn = Some(init);
@@ -641,7 +643,7 @@ fn generate_accountcode_impl(
             }
         });
         quote! {
-            fn query(&self, env: &dyn ::evolve_core::Environment, request: &::evolve_core::InvokeRequest)
+            fn query(&self, env: &mut dyn ::evolve_core::EnvironmentQuery, request: &::evolve_core::InvokeRequest)
                 -> ::evolve_core::SdkResult<::evolve_core::InvokeResponse>
             {
                 use ::evolve_core::InvokableMessage;
@@ -858,7 +860,7 @@ fn generate_query_wrapper(info: &FunctionInfo) -> proc_macro2::TokenStream {
         pub fn #fn_name(
             &self,
             #( #params_decl, )*
-            env: &dyn ::evolve_core::Environment
+            env: &mut dyn ::evolve_core::EnvironmentQuery
         ) -> ::evolve_core::SdkResult<#return_ty> {
             ::evolve_core::low_level::query_account(
                 self.0,

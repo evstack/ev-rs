@@ -3,7 +3,7 @@ pub use fa_interface::*;
 
 #[account_impl(FungibleAssetInterface)]
 mod fa_interface {
-    use evolve_core::{AccountId, Environment, SdkResult};
+    use evolve_core::{AccountId, Environment, EnvironmentQuery, SdkResult};
     use evolve_macros::{exec, query};
     #[derive(borsh::BorshSerialize, borsh::BorshDeserialize, Clone)]
     pub struct FungibleAssetMetadata {
@@ -18,11 +18,14 @@ mod fa_interface {
         fn transfer(&self, to: AccountId, amount: u128, env: &mut dyn Environment)
             -> SdkResult<()>;
         #[query]
-        fn metadata(&self, env: &dyn Environment) -> SdkResult<FungibleAssetMetadata>;
+        fn metadata(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<FungibleAssetMetadata>;
         #[query]
-        fn get_balance(&self, account: AccountId, env: &dyn Environment)
-            -> SdkResult<Option<u128>>;
+        fn get_balance(
+            &self,
+            account: AccountId,
+            env: &mut dyn EnvironmentQuery,
+        ) -> SdkResult<Option<u128>>;
         #[query]
-        fn total_supply(&self, env: &dyn Environment) -> SdkResult<u128>;
+        fn total_supply(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<u128>;
     }
 }

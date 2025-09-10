@@ -1,5 +1,5 @@
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{Environment, SdkResult};
+use evolve_core::{Environment, EnvironmentQuery, SdkResult};
 
 use crate::map::Map;
 use crate::vector::Vector;
@@ -53,22 +53,22 @@ where
     }
 
     /// Returns the number of key-value pairs in this map.
-    pub fn len(&self, env: &dyn Environment) -> SdkResult<u64> {
+    pub fn len(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<u64> {
         self.keys_vec.len(env)
     }
 
     /// Returns true if the map is empty.
-    pub fn is_empty(&self, env: &dyn Environment) -> SdkResult<bool> {
+    pub fn is_empty(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<bool> {
         Ok(self.len(env)? == 0)
     }
 
     /// Returns the value for `key`, or `None` if not present.
-    pub fn may_get(&self, key: &K, env: &dyn Environment) -> SdkResult<Option<V>> {
+    pub fn may_get(&self, key: &K, env: &mut dyn EnvironmentQuery) -> SdkResult<Option<V>> {
         self.values_map.may_get(key, env)
     }
 
     /// Returns the value for `key`, or an error if not present.
-    pub fn get(&self, key: &K, env: &dyn Environment) -> SdkResult<V> {
+    pub fn get(&self, key: &K, env: &mut dyn EnvironmentQuery) -> SdkResult<V> {
         self.values_map.get(key, env)
     }
 
@@ -149,7 +149,10 @@ where
     ///
     /// **Note**: Each `next()` call does a storage read under the hood for the key and value.
     /// If you need all data in-memory, you may want to collect them first.
-    pub fn iter<'a>(&'a self, env: &'a dyn Environment) -> SdkResult<UnorderedMapIter<'a, K, V>> {
+    pub fn iter<'a>(
+        &'a self,
+        env: &'a mut dyn EnvironmentQuery,
+    ) -> SdkResult<UnorderedMapIter<'a, K, V>> {
         let length = self.len(env)?;
         Ok(UnorderedMapIter {
             map: self,
@@ -165,7 +168,7 @@ where
 /// Each `next()` performs storage lookups.
 pub struct UnorderedMapIter<'a, K, V> {
     map: &'a UnorderedMap<K, V>,
-    env: &'a dyn Environment,
+    env: &'a mut dyn EnvironmentQuery,
     index: u64,
     length: u64,
 }
@@ -237,18 +240,18 @@ mod tests {
         assert_eq!(inserted, None);
 
         // Check `get` and `may_get`
-        let val = map.get(&42, &env)?;
+        let val = map.get(&42, &mut env)?;
         assert_eq!(val, TestData { x: 100 });
 
-        let maybe_val = map.may_get(&42, &env)?;
+        let maybe_val = map.may_get(&42, &mut env)?;
         assert_eq!(maybe_val, Some(TestData { x: 100 }));
 
         // Non-existent key -> get should fail, may_get -> None
-        let err = map.get(&999, &env).err().unwrap();
+        let err = map.get(&999, &mut env).err().unwrap();
         // Check that we get ERR_NOT_FOUND error
         assert_eq!(err, crate::ERR_NOT_FOUND);
 
-        let maybe_missing = map.may_get(&999, &env)?;
+        let maybe_missing = map.may_get(&999, &mut env)?;
         assert_eq!(maybe_missing, None);
 
         Ok(())
@@ -268,7 +271,7 @@ mod tests {
         assert_eq!(old_value, Some(TestData { x: 123 }));
 
         // Now retrieving key=1 should yield x=999
-        let val = map.get(&1, &env)?;
+        let val = map.get(&1, &mut env)?;
         assert_eq!(val, TestData { x: 999 });
 
         Ok(())
@@ -301,11 +304,11 @@ mod tests {
         assert_eq!(removed, Some(TestData { x: 222 }));
 
         // Now 2 is gone
-        assert!(map.may_get(&2, &env)?.is_none());
+        assert!(map.may_get(&2, &mut env)?.is_none());
 
         // Keys 1 and 3 remain
-        assert_eq!(map.get(&1, &env)?, TestData { x: 111 });
-        assert_eq!(map.get(&3, &env)?, TestData { x: 333 });
+        assert_eq!(map.get(&1, &mut env)?, TestData { x: 111 });
+        assert_eq!(map.get(&3, &mut env)?, TestData { x: 333 });
 
         // We expect the underlying vector used "swap remove"
         // so the iteration order might have changed, but 1 and 3 remain valid.
@@ -315,8 +318,8 @@ mod tests {
         assert_eq!(map.remove(&1, &mut env)?, Some(TestData { x: 111 }));
 
         // Nothing left
-        assert_eq!(map.len(&env)?, 0);
-        assert!(map.is_empty(&env)?);
+        assert_eq!(map.len(&mut env)?, 0);
+        assert!(map.is_empty(&mut env)?);
 
         Ok(())
     }
@@ -334,7 +337,7 @@ mod tests {
         // Because it's "unordered", we don't guarantee the iteration order.
         // We'll just gather all items and check we have the correct set.
         let mut found = vec![];
-        for entry_res in map.iter(&env)? {
+        for entry_res in map.iter(&mut env)? {
             let (k, v) = entry_res?;
             found.push((k, v));
         }
@@ -358,23 +361,23 @@ mod tests {
         let map = UnorderedMap::<u64, TestData>::new(60, 61, 62, 63);
         let mut env = MockEnvironment::new(1, 2);
 
-        assert_eq!(map.len(&env)?, 0);
-        assert!(map.is_empty(&env)?);
+        assert_eq!(map.len(&mut env)?, 0);
+        assert!(map.is_empty(&mut env)?);
 
         map.insert(&1, &TestData { x: 111 }, &mut env)?;
         map.insert(&2, &TestData { x: 222 }, &mut env)?;
 
-        assert_eq!(map.len(&env)?, 2);
-        assert!(!map.is_empty(&env)?);
+        assert_eq!(map.len(&mut env)?, 2);
+        assert!(!map.is_empty(&mut env)?);
 
         // Remove one key
         map.remove(&1, &mut env)?;
-        assert_eq!(map.len(&env)?, 1);
+        assert_eq!(map.len(&mut env)?, 1);
 
         // Remove last key
         map.remove(&2, &mut env)?;
-        assert_eq!(map.len(&env)?, 0);
-        assert!(map.is_empty(&env)?);
+        assert_eq!(map.len(&mut env)?, 0);
+        assert!(map.is_empty(&mut env)?);
 
         Ok(())
     }
@@ -390,8 +393,8 @@ mod tests {
         map2.insert(&1, &TestData { x: 222 }, &mut env)?;
 
         // Check each has its own stored value
-        assert_eq!(map1.get(&1, &env)?, TestData { x: 111 });
-        assert_eq!(map2.get(&1, &env)?, TestData { x: 222 });
+        assert_eq!(map1.get(&1, &mut env)?, TestData { x: 111 });
+        assert_eq!(map2.get(&1, &mut env)?, TestData { x: 222 });
 
         Ok(())
     }
@@ -411,8 +414,8 @@ mod tests {
         map.insert(&1, &TestData { x: 222 }, &mut env2)?;
 
         // Each environment sees its own data
-        assert_eq!(map.get(&1, &env1)?, TestData { x: 111 });
-        assert_eq!(map.get(&1, &env2)?, TestData { x: 222 });
+        assert_eq!(map.get(&1, &mut env1)?, TestData { x: 111 });
+        assert_eq!(map.get(&1, &mut env2)?, TestData { x: 222 });
 
         Ok(())
     }
@@ -448,7 +451,7 @@ mod tests {
         )?;
         assert_eq!(new_val, TestData { x: 999 });
         // Now the map must contain this new value
-        let stored_val = map.get(&42, &env)?;
+        let stored_val = map.get(&42, &mut env)?;
         assert_eq!(stored_val, TestData { x: 999 });
 
         // 2) Update on an existing key:
@@ -465,7 +468,7 @@ mod tests {
         )?;
         assert_eq!(updated_val, TestData { x: 1000 });
         // Verify stored value
-        let stored_val = map.get(&42, &env)?;
+        let stored_val = map.get(&42, &mut env)?;
         assert_eq!(stored_val, TestData { x: 1000 });
 
         // 3) (Optional) You can also test returning an error from your closure
@@ -476,7 +479,7 @@ mod tests {
         let err = err_result.err().unwrap();
         assert_eq!(err.code(), 123);
         // The map state should remain unchanged due to the error
-        let stored_val = map.get(&42, &env)?;
+        let stored_val = map.get(&42, &mut env)?;
         assert_eq!(stored_val, TestData { x: 1000 });
 
         Ok(())

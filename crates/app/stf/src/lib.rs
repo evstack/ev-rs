@@ -16,6 +16,7 @@ pub mod execution_state;
 pub mod gas;
 mod handlers;
 mod invoker;
+pub mod metrics;
 pub mod results;
 mod runtime_api_impl;
 mod unique_api_impl;
@@ -24,19 +25,20 @@ mod validation;
 use crate::execution_state::ExecutionState;
 use crate::gas::GasCounter;
 use crate::invoker::Invoker;
+use crate::metrics::{BlockExecutionMetrics, TxExecutionMetrics};
 use crate::results::{BlockResult, TxResult};
 use evolve_core::events_api::Event;
 use evolve_core::{
-    AccountCode, AccountId, Environment, InvokableMessage, InvokeRequest, InvokeResponse,
-    ReadonlyKV, SdkResult,
+    AccountCode, AccountId, Environment, EnvironmentQuery, InvokableMessage, InvokeRequest,
+    InvokeResponse, ReadonlyKV, SdkResult,
 };
 use evolve_gas::account::{GasService, StorageGasConfig};
-use evolve_ns::{resolve_name, GLOBAL_NAME_SERVICE_REF};
 use evolve_server_core::{
     AccountsCodeStorage, BeginBlocker as BeginBlockerTrait, Block as BlockTrait,
     EndBlocker as EndBlockerTrait, PostTxExecution, Transaction, TxValidator as TxValidatorTrait,
 };
 use std::marker::PhantomData;
+use std::time::Instant;
 
 // Security limits
 const MAX_CODE_ID_LENGTH: usize = 256;
@@ -63,7 +65,25 @@ pub struct Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx> {
     end_blocker: EndBlocker,
     tx_validator: TxValidator,
     post_tx_handler: PostTx,
+    system_accounts: SystemAccounts,
     _phantoms: PhantomData<(Tx, Block)>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct SystemAccounts {
+    pub gas_service: AccountId,
+}
+
+impl SystemAccounts {
+    pub const fn new(gas_service: AccountId) -> Self {
+        Self { gas_service }
+    }
+
+    pub const fn placeholder() -> Self {
+        Self {
+            gas_service: AccountId::new(u128::MAX),
+        }
+    }
 }
 
 impl<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx>
@@ -89,12 +109,14 @@ where
         end_blocker: EndBlocker,
         tx_validator: TxValidator,
         post_tx_handler: PostTx,
+        system_accounts: SystemAccounts,
     ) -> Self {
         Self {
             begin_blocker,
             end_blocker,
             tx_validator,
             post_tx_handler,
+            system_accounts,
             _phantoms: PhantomData,
         }
     }
@@ -128,13 +150,19 @@ where
         execution_height: u64,
         action: impl Fn(&mut dyn Environment) -> SdkResult<R>,
     ) -> SdkResult<(R, ExecutionState<'a, S>)> {
-        let execution_state = ExecutionState::new(storage);
-        let mut ctx =
-            Invoker::new_for_begin_block(execution_state, account_codes, execution_height);
-
-        let resp = action(&mut ctx)?;
-
-        Ok((resp, ctx.into_execution_results().0))
+        let mut execution_state = ExecutionState::new(storage);
+        let mut gas_counter = GasCounter::Infinite;
+        let resp = {
+            let mut ctx = Invoker::new_for_begin_block(
+                &mut execution_state,
+                account_codes,
+                &mut gas_counter,
+                execution_height,
+            );
+            action(&mut ctx)?
+        };
+        execution_state.pop_events();
+        Ok((resp, execution_state))
     }
     /// Executes the given closure impersonating the specified account with system privileges.
     ///
@@ -168,14 +196,20 @@ where
         impersonate: AccountId,
         action: impl Fn(&mut dyn Environment) -> SdkResult<R>,
     ) -> SdkResult<(R, ExecutionState<'a, S>)> {
-        let execution_state = ExecutionState::new(storage);
-        let mut ctx =
-            Invoker::new_for_begin_block(execution_state, account_codes, execution_height);
-        ctx.whoami = impersonate;
-
-        let resp = action(&mut ctx)?;
-
-        Ok((resp, ctx.into_execution_results().0))
+        let mut execution_state = ExecutionState::new(storage);
+        let mut gas_counter = GasCounter::Infinite;
+        let resp = {
+            let mut ctx = Invoker::new_for_begin_block(
+                &mut execution_state,
+                account_codes,
+                &mut gas_counter,
+                execution_height,
+            );
+            ctx.whoami = impersonate;
+            action(&mut ctx)?
+        };
+        execution_state.pop_events();
+        Ok((resp, execution_state))
     }
     /// Applies a complete block to the current state.
     ///
@@ -197,23 +231,23 @@ where
         account_codes: &'a A,
         block: &Block,
     ) -> (BlockResult, ExecutionState<'a, S>) {
-        let state = ExecutionState::new(storage);
+        let mut state = ExecutionState::new(storage);
 
         // run begin blocker.
-        let (mut state, gas_config, begin_block_events) =
-            self.do_begin_block(state, account_codes, block);
+        let (gas_config, begin_block_events) =
+            self.do_begin_block(&mut state, account_codes, block);
 
         // apply txs.
         let txs = block.txs();
         let mut tx_results = Vec::with_capacity(txs.len());
         for tx in txs {
             // apply tx
-            let tx_result: TxResult;
-            (tx_result, state) = self.apply_tx(state, account_codes, tx, gas_config.clone());
+            let tx_result: TxResult =
+                self.apply_tx(&mut state, account_codes, tx, gas_config.clone());
             tx_results.push(tx_result);
         }
 
-        let (state, end_block_events) = self.do_end_block(state, account_codes, block.height());
+        let end_block_events = self.do_end_block(&mut state, account_codes, block.height());
 
         (
             BlockResult {
@@ -225,57 +259,120 @@ where
         )
     }
 
-    fn do_begin_block<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
+    pub fn apply_block_with_metrics<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
         &self,
-        state: ExecutionState<'a, S>,
+        storage: &'a S,
         account_codes: &'a A,
         block: &Block,
-    ) -> (ExecutionState<'a, S>, StorageGasConfig, Vec<Event>) {
-        let mut ctx = Invoker::new_for_begin_block(state, account_codes, block.height());
+    ) -> (BlockResult, ExecutionState<'a, S>, BlockExecutionMetrics) {
+        let mut state = ExecutionState::new(storage);
+        let block_start_metrics = state.metrics_snapshot();
+        let block_timer = Instant::now();
 
-        self.begin_blocker.begin_block(block, &mut ctx);
+        let begin_timer = Instant::now();
+        let (gas_config, begin_block_events) =
+            self.do_begin_block(&mut state, account_codes, block);
+        let begin_block_ns = begin_timer.elapsed().as_nanos() as u64;
 
-        // find gas service account
-        let gas_service_account = resolve_name("gas".to_string(), &ctx)
-            .expect("CRITICAL: Failed to resolve gas service name - system configuration error")
-            .expect("CRITICAL: Gas service account must exist during begin_block - blockchain cannot operate without gas metering");
+        let txs = block.txs();
+        let mut tx_results = Vec::with_capacity(txs.len());
+        let mut tx_metrics = Vec::with_capacity(txs.len());
 
-        // get system gas config
-        let gas_config = ctx
-            .run_as(
-                gas_service_account,
-                |account: &GasService, env: &dyn Environment| {
+        for (index, tx) in txs.iter().enumerate() {
+            let tx_start_metrics = state.metrics_snapshot();
+            let tx_timer = Instant::now();
+            let tx_result = self.apply_tx(&mut state, account_codes, tx, gas_config.clone());
+            let duration_ns = tx_timer.elapsed().as_nanos() as u64;
+            let tx_end_metrics = state.metrics_snapshot();
+            let delta = tx_end_metrics.delta(tx_start_metrics);
+            tx_metrics.push(TxExecutionMetrics::from_delta(
+                index as u64,
+                duration_ns,
+                tx_result.gas_used,
+                delta,
+            ));
+            tx_results.push(tx_result);
+        }
+
+        let end_timer = Instant::now();
+        let end_block_events = self.do_end_block(&mut state, account_codes, block.height());
+        let end_block_ns = end_timer.elapsed().as_nanos() as u64;
+
+        let total_ns = block_timer.elapsed().as_nanos() as u64;
+        let block_end_metrics = state.metrics_snapshot();
+        let delta = block_end_metrics.delta(block_start_metrics);
+        let metrics = BlockExecutionMetrics::from_delta(
+            begin_block_ns,
+            end_block_ns,
+            total_ns,
+            delta,
+            tx_metrics,
+        );
+
+        (
+            BlockResult {
+                begin_block_events,
+                tx_results,
+                end_block_events,
+            },
+            state,
+            metrics,
+        )
+    }
+
+    fn do_begin_block<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
+        &self,
+        state: &mut ExecutionState<'a, S>,
+        account_codes: &'a A,
+        block: &Block,
+    ) -> (StorageGasConfig, Vec<Event>) {
+        let mut gas_counter = GasCounter::Infinite;
+        let gas_config = {
+            let mut ctx = Invoker::new_for_begin_block(
+                state,
+                account_codes,
+                &mut gas_counter,
+                block.height(),
+            );
+
+            self.begin_blocker.begin_block(block, &mut ctx);
+
+            // get system gas config
+            ctx.run_as(
+                self.system_accounts.gas_service,
+                |account: &GasService, env: &mut dyn EnvironmentQuery| {
                     account.storage_gas_config.may_get(env)
                 },
             )
             .expect("CRITICAL: Failed to run as gas service account - system configuration error")
-            .expect("CRITICAL: Gas service must have storage gas config - blockchain cannot operate without gas configuration");
+            .expect("CRITICAL: Gas service must have storage gas config - blockchain cannot operate without gas configuration")
+        };
 
-        let (state, _, events) = ctx.into_execution_results();
-
-        (state, gas_config, events)
+        let events = state.pop_events();
+        (gas_config, events)
     }
 
     fn do_end_block<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
         &self,
-        state: ExecutionState<'a, S>,
+        state: &mut ExecutionState<'a, S>,
         codes: &'a A,
         height: u64,
-    ) -> (ExecutionState<'a, S>, Vec<Event>) {
-        let mut ctx = Invoker::new_for_end_block(state, codes, height);
-        self.end_blocker.end_block(&mut ctx);
-
-        let (state, _, events) = ctx.into_execution_results();
-        (state, events)
+    ) -> Vec<Event> {
+        let mut gas_counter = GasCounter::Infinite;
+        {
+            let mut ctx = Invoker::new_for_end_block(state, codes, &mut gas_counter, height);
+            self.end_blocker.end_block(&mut ctx);
+        }
+        state.pop_events()
     }
 
     fn apply_tx<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
         &self,
-        state: ExecutionState<'a, S>,
+        state: &mut ExecutionState<'a, S>,
         codes: &'a A,
         tx: &Tx,
         gas_config: StorageGasConfig,
-    ) -> (TxResult, ExecutionState<'a, S>) {
+    ) -> TxResult {
         // NOTE: Transaction validation and execution are atomic - they share the same
         // ExecutionState throughout the process. The state cannot change between
         // validation and execution because:
@@ -284,20 +381,24 @@ where
         // 3. Transactions are processed sequentially, not concurrently
 
         // create validation context
-        let mut ctx = Invoker::new_for_validate_tx(state, codes, gas_config, tx);
+        let mut gas_counter = GasCounter::Finite {
+            gas_limit: tx.gas_limit(),
+            gas_used: 0,
+            storage_gas_config: gas_config,
+        };
+        let mut ctx = Invoker::new_for_validate_tx(state, codes, &mut gas_counter, tx);
         // do tx validation; we do not swap invoker
         match self.tx_validator.validate_tx(tx, &mut ctx) {
             Ok(()) => (),
             Err(err) => {
-                let (state, gas_used, events) = ctx.into_execution_results();
-                return (
-                    TxResult {
-                        events,
-                        gas_used,
-                        response: Err(err),
-                    },
-                    state,
-                );
+                drop(ctx);
+                let gas_used = gas_counter.gas_used();
+                let events = state.pop_events();
+                return TxResult {
+                    events,
+                    gas_used,
+                    response: Err(err),
+                };
             }
         }
 
@@ -307,18 +408,17 @@ where
 
         let response = ctx.do_exec(tx.recipient(), tx.request(), tx.funds().to_vec());
 
-        let (state, gas_used, events) = ctx.into_execution_results();
+        drop(ctx);
+        let gas_used = gas_counter.gas_used();
+        let events = state.pop_events();
 
         // TODO do post tx validation
 
-        (
-            TxResult {
-                events,
-                gas_used,
-                response,
-            },
-            state,
-        )
+        TxResult {
+            events,
+            gas_used,
+            response,
+        }
     }
 
     /// Executes a query against a specific account.
@@ -341,13 +441,14 @@ where
     pub fn query<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a, R: InvokableMessage>(
         &self,
         storage: &'a S,
-        account_codes: &'a mut A,
+        account_codes: &'a A,
         to: AccountId,
         req: &R,
         gc: GasCounter,
     ) -> SdkResult<InvokeResponse> {
-        let state = ExecutionState::new(storage);
-        let ctx = Invoker::new_for_query(state, account_codes, gc, to);
+        let mut state = ExecutionState::new(storage);
+        let mut gas_counter = gc;
+        let mut ctx = Invoker::new_for_query(&mut state, account_codes, &mut gas_counter, to);
         ctx.do_query(to, &InvokeRequest::new(req)?)
     }
     /// Executes a closure with read-only access to a specific account's code.
@@ -371,7 +472,7 @@ where
         storage: &S,
         account_storage: &A,
         account_id: AccountId,
-        handle: impl FnOnce(&T, &dyn Environment) -> SdkResult<R>,
+        handle: impl FnOnce(&T, &mut dyn EnvironmentQuery) -> SdkResult<R>,
     ) -> SdkResult<R> {
         self.run(storage, account_storage, account_id, move |t| {
             handle(&T::default(), t)
@@ -399,7 +500,7 @@ where
         storage: &S,
         account_storage: &A,
         account_id: AccountId,
-        handle: impl FnOnce(T, &dyn Environment) -> SdkResult<R>,
+        handle: impl FnOnce(T, &mut dyn EnvironmentQuery) -> SdkResult<R>,
     ) -> SdkResult<R> {
         self.run(storage, account_storage, account_id, move |t| {
             handle(T::from(account_id), t)
@@ -427,54 +528,13 @@ where
         storage: &S,
         account_storage: &A,
         account_id: AccountId,
-        handle: impl FnOnce(&dyn Environment) -> SdkResult<R>,
+        handle: impl FnOnce(&mut dyn EnvironmentQuery) -> SdkResult<R>,
     ) -> SdkResult<R> {
-        let state = ExecutionState::new(storage);
-        let invoker =
-            Invoker::new_for_query(state, account_storage, GasCounter::infinite(), account_id);
-        let account_id_invoker = invoker.branch_query(account_id);
-        handle(&account_id_invoker)
-    }
-
-    /// Resolves an account name and executes a closure with account access.
-    ///
-    /// This method combines name resolution with account execution, allowing
-    /// operations to be performed using human-readable account names instead
-    /// of raw account IDs.
-    ///
-    /// # Arguments
-    ///
-    /// * `storage` - Read-only storage backend
-    /// * `account_storage` - Account code storage
-    /// * `account_name` - Human-readable account name to resolve
-    /// * `handle` - Closure to execute with resolved account access
-    ///
-    /// # Returns
-    ///
-    /// Returns the result of the closure execution.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the account name cannot be resolved.
-    pub fn resolve_and_run_as_ref<T: From<AccountId>, R, S: ReadonlyKV, A: AccountsCodeStorage>(
-        &self,
-        storage: &S,
-        account_storage: &A,
-        account_name: String,
-        handle: impl FnOnce(T, &dyn Environment) -> SdkResult<R>,
-    ) -> SdkResult<R> {
-        let state = ExecutionState::new(storage);
-
-        let invoker = Invoker::new_for_query(
-            state,
-            account_storage,
-            GasCounter::infinite(),
-            GLOBAL_NAME_SERVICE_REF.0,
-        );
-        let account_id = resolve_name(account_name, &invoker)?
-            .ok_or(crate::errors::ERR_ACCOUNT_DOES_NOT_EXIST)?;
-        let account_id_invoker = invoker.branch_query(account_id);
-        handle(T::from(account_id), &account_id_invoker)
+        let mut state = ExecutionState::new(storage);
+        let mut gas_counter = GasCounter::Infinite;
+        let mut invoker =
+            Invoker::new_for_query(&mut state, account_storage, &mut gas_counter, account_id);
+        handle(&mut invoker)
     }
 }
 
@@ -492,6 +552,7 @@ where
             end_blocker: self.end_blocker.clone(),
             tx_validator: self.tx_validator.clone(),
             post_tx_handler: self.post_tx_handler.clone(),
+            system_accounts: self.system_accounts,
             _phantoms: PhantomData,
         }
     }

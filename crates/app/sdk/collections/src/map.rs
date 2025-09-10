@@ -4,7 +4,7 @@ use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageSetRequest,
     STORAGE_ACCOUNT_ID,
 };
-use evolve_core::{Environment, InvokeRequest, Message, SdkResult};
+use evolve_core::{Environment, EnvironmentQuery, InvokeRequest, Message, SdkResult};
 use std::marker::PhantomData;
 
 pub struct Map<K, V> {
@@ -39,11 +39,11 @@ where
         Ok(())
     }
 
-    pub fn get(&self, key: &K, backend: &dyn Environment) -> SdkResult<V> {
+    pub fn get(&self, key: &K, backend: &mut dyn EnvironmentQuery) -> SdkResult<V> {
         self.may_get(key, backend)?.ok_or(ERR_NOT_FOUND)
     }
 
-    pub fn may_get(&self, key: &K, env: &dyn Environment) -> SdkResult<Option<V>> {
+    pub fn may_get(&self, key: &K, env: &mut dyn EnvironmentQuery) -> SdkResult<Option<V>> {
         let bytes_key = self.make_key(key)?;
 
         let resp = env
@@ -62,7 +62,7 @@ where
         }
     }
 
-    pub fn exists(&self, key: &K, backend: &dyn Environment) -> SdkResult<bool> {
+    pub fn exists(&self, key: &K, backend: &mut dyn EnvironmentQuery) -> SdkResult<bool> {
         self.may_get(key, backend).map(|v| v.is_some())
     }
 
@@ -120,9 +120,9 @@ mod tests {
     fn test_get_nonexistent() {
         // Test getting a value that doesn't exist
         let map: Map<String, TestData> = Map::new(42);
-        let env = MockEnvironment::new(1, 2);
+        let mut env = MockEnvironment::new(1, 2);
 
-        let result = map.may_get(&"test_key".to_string(), &env);
+        let result = map.may_get(&"test_key".to_string(), &mut env);
         assert!(result.is_ok());
         assert_eq!(result.unwrap(), None);
     }
@@ -143,7 +143,7 @@ mod tests {
         assert!(set_result.is_ok());
 
         // Get the value
-        let get_result = map.may_get(&"test_key".to_string(), &env);
+        let get_result = map.may_get(&"test_key".to_string(), &mut env);
         assert!(get_result.is_ok());
 
         let retrieved_data = get_result.unwrap();
@@ -175,7 +175,7 @@ mod tests {
         assert_eq!(updated_data.name, "updated");
 
         // Verify the value was stored
-        let get_result = map.may_get(&"test_key".to_string(), &env).unwrap();
+        let get_result = map.may_get(&"test_key".to_string(), &mut env).unwrap();
         assert!(get_result.is_some());
         assert_eq!(get_result.unwrap(), updated_data);
     }
@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(updated_data.name, "initial_updated");
 
         // Verify the value was stored
-        let get_result = map.may_get(&"test_key".to_string(), &env).unwrap();
+        let get_result = map.may_get(&"test_key".to_string(), &mut env).unwrap();
         assert!(get_result.is_some());
         assert_eq!(get_result.unwrap(), updated_data);
     }
@@ -239,11 +239,11 @@ mod tests {
 
         // Verify they have different values
         let get1 = map1
-            .may_get(&"same_key".to_string(), &env)
+            .may_get(&"same_key".to_string(), &mut env)
             .unwrap()
             .unwrap();
         let get2 = map2
-            .may_get(&"same_key".to_string(), &env)
+            .may_get(&"same_key".to_string(), &mut env)
             .unwrap()
             .unwrap();
 
@@ -272,8 +272,8 @@ mod tests {
         map.set(&"key2".to_string(), &data2, &mut env).unwrap();
 
         // Verify they have different values
-        let get1 = map.may_get(&"key1".to_string(), &env).unwrap().unwrap();
-        let get2 = map.may_get(&"key2".to_string(), &env).unwrap().unwrap();
+        let get1 = map.may_get(&"key1".to_string(), &mut env).unwrap().unwrap();
+        let get2 = map.may_get(&"key2".to_string(), &mut env).unwrap().unwrap();
 
         assert_eq!(get1, data1);
         assert_eq!(get2, data2);
@@ -284,9 +284,9 @@ mod tests {
     fn test_get_with_environment_error() {
         // Test that errors from the environment are properly propagated during get
         let map: Map<String, TestData> = Map::new(42);
-        let env = MockEnvironment::with_failure();
+        let mut env = MockEnvironment::with_failure();
 
-        let result = map.may_get(&"test_key".to_string(), &env);
+        let result = map.may_get(&"test_key".to_string(), &mut env);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err().code(), 99);
     }
@@ -371,11 +371,11 @@ mod tests {
 
         // Verify they have different values
         let get1 = map
-            .may_get(&"same_key".to_string(), &env1)
+            .may_get(&"same_key".to_string(), &mut env1)
             .unwrap()
             .unwrap();
         let get2 = map
-            .may_get(&"same_key".to_string(), &env2)
+            .may_get(&"same_key".to_string(), &mut env2)
             .unwrap()
             .unwrap();
 

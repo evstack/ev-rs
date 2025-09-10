@@ -14,6 +14,7 @@ The STF is the central component that orchestrates the execution of transactions
 blockchain. It provides functions for:
 
 - Applying blocks (`apply_block`)
+- Applying blocks with instrumentation (`apply_block_with_metrics`)
 - Executing transactions (`apply_tx`)
 - Managing block lifecycle (`do_begin_block` and `do_end_block`)
 - Executing queries (`query`)
@@ -34,9 +35,9 @@ classDiagram
         -whoami: AccountId
         -sender: AccountId
         -funds: Vec<FungibleAsset>
-        -account_codes: Rc<RefCell>
-        -storage: Rc<RefCell<ExecutionState>>
-        -gas_counter: Rc<RefCell<GasCounter>>
+        -account_codes: &AccountsCodeStorage
+        -storage: &mut ExecutionState
+        -gas_counter: &mut GasCounter
         +do_query()
         +do_exec()
         +handle_system_exec()
@@ -153,6 +154,7 @@ The Invoker acts as an execution environment for actors in the system:
 - Tracks funds being transferred
 - Provides access to storage and gas accounting
 - Handles special system accounts
+- Exposes a read-only query environment (`EnvironmentQuery`) that allows gas tracking but forbids state mutation
 
 ## Execution Flow
 

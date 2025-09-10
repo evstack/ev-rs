@@ -1,7 +1,7 @@
 use crate::item::Item;
 use crate::map::Map;
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{Environment, SdkResult};
+use evolve_core::{Environment, EnvironmentQuery, SdkResult};
 
 /// A simple queue with indices [front..back).
 ///
@@ -26,12 +26,12 @@ impl<V> Queue<V> {
     }
 
     /// Returns the current value of `back`, or 0 if not set yet.
-    fn get_back(&self, env: &dyn Environment) -> SdkResult<u64> {
+    fn get_back(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<u64> {
         Ok(self.back.may_get(env)?.unwrap_or_default())
     }
 
     /// Returns the current value of `front`, or 0 if not set yet.
-    fn get_front(&self, env: &dyn Environment) -> SdkResult<u64> {
+    fn get_front(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<u64> {
         Ok(self.front.may_get(env)?.unwrap_or_default())
     }
 }
@@ -98,7 +98,7 @@ where
 
     /// Returns `true` if the queue has no items.
     /// Complexity: O(1)
-    pub fn is_empty(&self, env: &dyn Environment) -> SdkResult<bool> {
+    pub fn is_empty(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<bool> {
         let front = self.get_front(env)?;
         let back = self.get_back(env)?;
         Ok(front == back)
@@ -108,7 +108,7 @@ where
     /// - Each `next()` yields `SdkResult<V>`.
     /// - If some storage read fails, the iterator yields an `Err(...)`.
     /// - Once the queue is exhausted, `next()` returns `None`.
-    pub fn iter<'a>(&'a self, env: &'a dyn Environment) -> SdkResult<QueueIter<'a, V>> {
+    pub fn iter<'a>(&'a self, env: &'a mut dyn EnvironmentQuery) -> SdkResult<QueueIter<'a, V>> {
         let front = self.get_front(env)?;
         let back = self.get_back(env)?;
         Ok(QueueIter {
@@ -123,7 +123,7 @@ where
 /// An iterator over the items in `Queue<V>`.
 pub struct QueueIter<'a, V> {
     queue: &'a Queue<V>,
-    env: &'a dyn Environment,
+    env: &'a mut dyn EnvironmentQuery,
     index: u64,
     end: u64,
 }
@@ -161,9 +161,9 @@ mod tests {
     fn test_is_empty_initially() -> SdkResult<()> {
         // We'll create a queue of `u64` for simplicity
         let queue: Queue<u64> = Queue::new(0, 1, 2);
-        let env = MockEnvironment::new(100, 999); // whoami=100, sender=999
+        let mut env = MockEnvironment::new(100, 999); // whoami=100, sender=999
 
-        assert!(queue.is_empty(&env)?, "Queue should be empty at start");
+        assert!(queue.is_empty(&mut env)?, "Queue should be empty at start");
         Ok(())
     }
 
@@ -173,11 +173,11 @@ mod tests {
         let mut env = MockEnvironment::new(101, 999);
 
         // Initially empty
-        assert!(queue.is_empty(&env)?);
+        assert!(queue.is_empty(&mut env)?);
 
         // Push "Alice"
         queue.push_back(&"Alice".to_string(), &mut env)?;
-        assert!(!queue.is_empty(&env)?);
+        assert!(!queue.is_empty(&mut env)?);
 
         // Push "Bob"
         queue.push_back(&"Bob".to_string(), &mut env)?;
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(second, "Bob");
 
         // Now empty again
-        assert!(queue.is_empty(&env)?);
+        assert!(queue.is_empty(&mut env)?);
 
         // Popping from empty => crate::ERR_EMPTY
         let err = queue.pop_front(&mut env).unwrap_err();
@@ -225,7 +225,7 @@ mod tests {
         assert_eq!(popped, "A");
 
         // queue is now empty
-        assert!(queue.is_empty(&env)?);
+        assert!(queue.is_empty(&mut env)?);
 
         // pop_back on empty => crate::ERR_EMPTY
         let err = queue.pop_back(&mut env).unwrap_err();
@@ -253,7 +253,7 @@ mod tests {
         // queue has [20]
 
         // queue not empty
-        assert!(!queue.is_empty(&env)?);
+        assert!(!queue.is_empty(&mut env)?);
 
         // push_back 40, 50
         queue.push_back(&40, &mut env)?;
@@ -271,7 +271,7 @@ mod tests {
         assert_eq!(queue.pop_front(&mut env)?, 50);
 
         // queue is now empty
-        assert!(queue.is_empty(&env)?);
+        assert!(queue.is_empty(&mut env)?);
 
         Ok(())
     }
@@ -293,7 +293,7 @@ mod tests {
         }
 
         // queue empty now
-        assert!(queue.is_empty(&env)?);
+        assert!(queue.is_empty(&mut env)?);
 
         // push 1..100 again
         for i in 1..=100 {
@@ -307,7 +307,7 @@ mod tests {
         }
 
         // empty again
-        assert!(queue.is_empty(&env)?);
+        assert!(queue.is_empty(&mut env)?);
 
         Ok(())
     }
@@ -322,7 +322,7 @@ mod tests {
         queue.push_back(&"C".to_string(), &mut env)?;
 
         // We'll iterate them from front to back: [A, B, C]
-        let mut iter = queue.iter(&env)?;
+        let mut iter = queue.iter(&mut env)?;
         // 1) next => Ok("A")
         let first = iter.next().unwrap()?;
         assert_eq!(first, "A");
@@ -336,7 +336,7 @@ mod tests {
         assert!(iter.next().is_none());
 
         // Another approach is to collect them all
-        let all_items: Result<Vec<_>, _> = queue.iter(&env)?.collect();
+        let all_items: Result<Vec<_>, _> = queue.iter(&mut env)?.collect();
         let items_vec = all_items?;
         assert_eq!(items_vec, vec!["A", "B", "C"]);
 
@@ -346,14 +346,14 @@ mod tests {
     #[test]
     fn test_iter_empty_queue() -> SdkResult<()> {
         let queue: Queue<u64> = Queue::new(40, 41, 42);
-        let env = MockEnvironment::new(5, 500);
+        let mut env = MockEnvironment::new(5, 500);
 
         // No items pushed
-        let mut iter = queue.iter(&env)?;
+        let mut iter = queue.iter(&mut env)?;
         assert!(iter.next().is_none(), "No items in an empty queue");
 
         // We can also confirm that collecting yields an empty vec
-        let all: Result<Vec<_>, _> = queue.iter(&env)?.collect();
+        let all: Result<Vec<_>, _> = queue.iter(&mut env)?.collect();
         assert_eq!(all?.len(), 0);
 
         Ok(())
@@ -374,7 +374,7 @@ mod tests {
         //   The actual prefix+backing bytes depends on your encoding scheme.
 
         // If we try to iterate, we might get an "Item missing from queue" error
-        let mut iter = queue.iter(&env)?;
+        let mut iter = queue.iter(&mut env)?;
         let result = iter.next().unwrap(); // Some(Err(...))
 
         // Because we forcibly removed the item, we expect error code=404

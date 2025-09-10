@@ -1,0 +1,5 @@
+error[E0599]: no method named `do_exec` found for mutable reference `&mut dyn EnvironmentQuery` in the current scope
+  --> tests/fail/query_exec_call.rs:19:9
+   |
+19 |     env.do_exec(AccountId([0u8; 32]), &dummy, vec![])?;
+   |         ^^^^^^^ method not found in `&mut dyn EnvironmentQuery`

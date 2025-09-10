@@ -6,12 +6,40 @@ use evolve_core::events_api::Event;
 use evolve_core::{ErrorCode, Message, ReadonlyKV, SdkResult};
 use evolve_server_core::StateChange as CoreStateChange;
 use hashbrown::HashMap;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 // Security limits to prevent memory exhaustion attacks
 const MAX_OVERLAY_ENTRIES: usize = 100_000; // Maximum number of keys in overlay
 const MAX_EVENTS_PER_EXECUTION: usize = 10_000; // Maximum events that can be emitted
 const MAX_KEY_SIZE: usize = 256; // Maximum size of a storage key in bytes
 const MAX_VALUE_SIZE: usize = 1024 * 1024; // Maximum size of a storage value (1MB)
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExecutionMetrics {
+    pub storage_reads: u64,
+    pub storage_writes: u64,
+    pub events_emitted: u64,
+    pub checkpoints: u64,
+    pub restores: u64,
+    pub overlay_len_max: usize,
+    pub undo_log_len_max: usize,
+}
+
+impl ExecutionMetrics {
+    pub fn delta(self, before: ExecutionMetrics) -> ExecutionMetrics {
+        ExecutionMetrics {
+            storage_reads: self.storage_reads.saturating_sub(before.storage_reads),
+            storage_writes: self.storage_writes.saturating_sub(before.storage_writes),
+            events_emitted: self.events_emitted.saturating_sub(before.events_emitted),
+            checkpoints: self.checkpoints.saturating_sub(before.checkpoints),
+            restores: self.restores.saturating_sub(before.restores),
+            overlay_len_max: self.overlay_len_max.saturating_sub(before.overlay_len_max),
+            undo_log_len_max: self
+                .undo_log_len_max
+                .saturating_sub(before.undo_log_len_max),
+        }
+    }
+}
 
 /// Represents one change to the overlay so it can be undone.
 /// Optimized to store deltas instead of full previous values.
@@ -102,6 +130,8 @@ pub struct ExecutionState<'a, S> {
     events: Vec<Event>,
     /// Number of unique objects created.
     unique_objects: u64,
+    /// Execution metrics counters.
+    metrics: ExecutionMetricsCounter,
 }
 
 // Initial capacity for overlay HashMap to avoid early rehashing
@@ -109,6 +139,83 @@ pub struct ExecutionState<'a, S> {
 const INITIAL_OVERLAY_CAPACITY: usize = 256;
 const INITIAL_UNDO_LOG_CAPACITY: usize = 128;
 const INITIAL_EVENTS_CAPACITY: usize = 64;
+
+#[derive(Debug)]
+struct ExecutionMetricsCounter {
+    storage_reads: AtomicU64,
+    storage_writes: AtomicU64,
+    events_emitted: AtomicU64,
+    checkpoints: AtomicU64,
+    restores: AtomicU64,
+    overlay_len_max: AtomicUsize,
+    undo_log_len_max: AtomicUsize,
+}
+
+impl Default for ExecutionMetricsCounter {
+    fn default() -> Self {
+        Self {
+            storage_reads: AtomicU64::new(0),
+            storage_writes: AtomicU64::new(0),
+            events_emitted: AtomicU64::new(0),
+            checkpoints: AtomicU64::new(0),
+            restores: AtomicU64::new(0),
+            overlay_len_max: AtomicUsize::new(0),
+            undo_log_len_max: AtomicUsize::new(0),
+        }
+    }
+}
+
+impl ExecutionMetricsCounter {
+    fn snapshot(&self) -> ExecutionMetrics {
+        ExecutionMetrics {
+            storage_reads: self.storage_reads.load(Ordering::Relaxed),
+            storage_writes: self.storage_writes.load(Ordering::Relaxed),
+            events_emitted: self.events_emitted.load(Ordering::Relaxed),
+            checkpoints: self.checkpoints.load(Ordering::Relaxed),
+            restores: self.restores.load(Ordering::Relaxed),
+            overlay_len_max: self.overlay_len_max.load(Ordering::Relaxed),
+            undo_log_len_max: self.undo_log_len_max.load(Ordering::Relaxed),
+        }
+    }
+
+    fn inc_storage_reads(&self) {
+        self.storage_reads.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_storage_writes(&self) {
+        self.storage_writes.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_events(&self) {
+        self.events_emitted.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_checkpoints(&self) {
+        self.checkpoints.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn inc_restores(&self) {
+        self.restores.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn update_overlay_max(&self, value: usize) {
+        update_max_usize(&self.overlay_len_max, value);
+    }
+
+    fn update_undo_log_max(&self, value: usize) {
+        update_max_usize(&self.undo_log_len_max, value);
+    }
+}
+
+fn update_max_usize(target: &AtomicUsize, value: usize) {
+    let mut current = target.load(Ordering::Relaxed);
+    while value > current {
+        match target.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(previous) => current = previous,
+        }
+    }
+}
 
 impl<'a, S> ExecutionState<'a, S> {
     pub fn new(base_storage: &'a S) -> Self {
@@ -118,6 +225,7 @@ impl<'a, S> ExecutionState<'a, S> {
             undo_log: Vec::with_capacity(INITIAL_UNDO_LOG_CAPACITY),
             events: Vec::with_capacity(INITIAL_EVENTS_CAPACITY),
             unique_objects: 0,
+            metrics: ExecutionMetricsCounter::default(),
         }
     }
 
@@ -127,6 +235,7 @@ impl<'a, S> ExecutionState<'a, S> {
             return Err(ERR_TOO_MANY_EVENTS);
         }
         self.events.push(event);
+        self.metrics.inc_events();
         Ok(())
     }
 
@@ -144,6 +253,10 @@ impl<'a, S> ExecutionState<'a, S> {
     /// Reports the number of objects created during this execution.
     pub fn created_unique_objects(&self) -> u64 {
         self.unique_objects
+    }
+
+    pub fn metrics_snapshot(&self) -> ExecutionMetrics {
+        self.metrics.snapshot()
     }
 
     pub fn into_changes(self) -> SdkResult<Vec<CoreStateChange>> {
@@ -189,6 +302,8 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
     ///  1) If overlay has key => check if it's Some(...) or None.
     ///  2) Else fallback to the underlying store.
     pub fn get(&self, key: &[u8]) -> Result<Option<Message>, ErrorCode> {
+        // Track reads
+        self.metrics.inc_storage_reads();
         // Check overlay first - avoid cloning by returning reference when possible
         match self.overlay.get(key) {
             Some(Some(msg)) => Ok(Some(msg.clone())),
@@ -239,6 +354,9 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
 
         // Actually set in overlay (Some(...) => not removed).
         self.overlay.insert(key.to_vec(), Some(value));
+        self.metrics.inc_storage_writes();
+        self.metrics.update_undo_log_max(self.undo_log.len());
+        self.metrics.update_overlay_max(self.overlay.len());
         Ok(())
     }
 
@@ -270,11 +388,15 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
 
         // Insert a "tombstone" => explicitly removed.
         self.overlay.insert(key.to_vec(), None);
+        self.metrics.inc_storage_writes();
+        self.metrics.update_undo_log_max(self.undo_log.len());
+        self.metrics.update_overlay_max(self.overlay.len());
         Ok(())
     }
 
     /// Returns a checkpoint ID (just an index in the undo log).
     pub fn checkpoint(&self) -> Checkpoint {
+        self.metrics.inc_checkpoints();
         Checkpoint {
             undo_log_index: self.undo_log.len(),
             events_index: self.events.len(),
@@ -302,6 +424,7 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
         // restore to previous unique object.
         self.unique_objects = checkpoint.unique_objects_created;
 
+        self.metrics.inc_restores();
         Ok(())
     }
 
@@ -358,6 +481,7 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
 
                     // Apply change
                     self.overlay.insert(op.key, Some(value));
+                    self.metrics.inc_storage_writes();
                 }
                 BatchOp::Remove => {
                     // Record undo information efficiently (delta-based)
@@ -377,10 +501,13 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
 
                     // Apply change
                     self.overlay.insert(op.key, None);
+                    self.metrics.inc_storage_writes();
                 }
             }
         }
 
+        self.metrics.update_undo_log_max(self.undo_log.len());
+        self.metrics.update_overlay_max(self.overlay.len());
         Ok(())
     }
 }
@@ -396,7 +523,70 @@ mod tests {
     use super::*;
     // bring in the Checkpoint and StateChange
     use evolve_core::{ErrorCode, Message, ReadonlyKV};
-    use hashbrown::HashMap;
+    use proptest::prelude::*;
+    use std::collections::HashMap;
+
+    const MAX_OPS: usize = 64;
+    const MAX_KEYS: u8 = 16;
+    const DEFAULT_CASES: u32 = 128;
+    const CI_CASES: u32 = 32;
+
+    fn proptest_cases() -> u32 {
+        if let Ok(value) = std::env::var("EVOLVE_PROPTEST_CASES") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                if parsed > 0 {
+                    return parsed;
+                }
+            }
+        }
+
+        if std::env::var("EVOLVE_CI").is_ok() || std::env::var("CI").is_ok() {
+            return CI_CASES;
+        }
+
+        DEFAULT_CASES
+    }
+
+    fn proptest_config() -> proptest::test_runner::Config {
+        proptest::test_runner::Config {
+            cases: proptest_cases(),
+            ..Default::default()
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    enum Op {
+        Set(u8, Vec<u8>),
+        Remove(u8),
+        Get(u8),
+        Checkpoint,
+        RestoreLast,
+    }
+
+    fn op_strategy() -> impl Strategy<Value = Vec<Op>> {
+        let key = 0u8..MAX_KEYS;
+        let value = proptest::collection::vec(any::<u8>(), 0..=16);
+        let op = prop_oneof![
+            4 => (key.clone(), value).prop_map(|(k, v)| Op::Set(k, v)),
+            2 => key.clone().prop_map(Op::Remove),
+            2 => key.prop_map(Op::Get),
+            1 => Just(Op::Checkpoint),
+            1 => Just(Op::RestoreLast),
+        ];
+
+        proptest::collection::vec(op, 0..=MAX_OPS)
+    }
+
+    fn model_get(
+        base: &HashMap<u8, Vec<u8>>,
+        overlay: &HashMap<u8, Option<Vec<u8>>>,
+        key: u8,
+    ) -> Option<Vec<u8>> {
+        if let Some(entry) = overlay.get(&key) {
+            return entry.clone();
+        }
+        base.get(&key).cloned()
+    }
 
     /// A simple in-memory mock that implements `ReadonlyKV`.
     /// It is strictly read-only for our demonstration, meaning you can
@@ -427,6 +617,64 @@ mod tests {
     impl ReadonlyKV for MockReadonlyKV {
         fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
             Ok(self.data.get(key).cloned())
+        }
+    }
+
+    proptest! {
+        #![proptest_config(proptest_config())]
+
+        #[test]
+        fn prop_execution_state_model(
+            base in proptest::collection::hash_map(0u8..MAX_KEYS, proptest::collection::vec(any::<u8>(), 0..=16), 0..=MAX_KEYS as usize),
+            ops in op_strategy()
+        ) {
+            let mut base_data: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+            for (k, v) in &base {
+                base_data.insert(vec![*k], v.clone());
+            }
+            let storage = MockReadonlyKV { data: base_data };
+            let mut exec = ExecutionState::new(&storage);
+
+            let mut overlay: HashMap<u8, Option<Vec<u8>>> = HashMap::new();
+            let mut checkpoints: Vec<HashMap<u8, Option<Vec<u8>>>> = Vec::new();
+            let mut checkpoint_handles: Vec<Checkpoint> = Vec::new();
+
+            for op in ops {
+                match op {
+                    Op::Set(k, v) => {
+                        exec.set(&[k], Message::from_bytes(v.clone())).unwrap();
+                        overlay.insert(k, Some(v));
+                    }
+                    Op::Remove(k) => {
+                        exec.remove(&[k]).unwrap();
+                        overlay.insert(k, None);
+                    }
+                    Op::Get(k) => {
+                        let expected = model_get(&base, &overlay, k);
+                        let actual = exec.get(&[k]).unwrap().map(|m| m.into_bytes().unwrap());
+                        prop_assert_eq!(actual, expected);
+                    }
+                    Op::Checkpoint => {
+                        let cp = exec.checkpoint();
+                        checkpoints.push(overlay.clone());
+                        checkpoint_handles.push(cp);
+                    }
+                    Op::RestoreLast => {
+                        if let (Some(model_overlay), Some(handle)) =
+                            (checkpoints.pop(), checkpoint_handles.pop())
+                        {
+                            exec.restore(handle).unwrap();
+                            overlay = model_overlay;
+                        }
+                    }
+                }
+            }
+
+            for key in 0..MAX_KEYS {
+                let expected = model_get(&base, &overlay, key);
+                let actual = exec.get(&[key]).unwrap().map(|m| m.into_bytes().unwrap());
+                prop_assert_eq!(actual, expected);
+            }
         }
     }
 

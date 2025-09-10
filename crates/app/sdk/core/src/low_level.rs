@@ -3,7 +3,8 @@ use crate::runtime_api::{
     CreateAccountRequest, CreateAccountResponse, MigrateRequest, RUNTIME_ACCOUNT_ID,
 };
 use crate::{
-    AccountId, Environment, FungibleAsset, InvokableMessage, InvokeRequest, Message, SdkResult,
+    AccountId, Environment, EnvironmentQuery, FungibleAsset, InvokableMessage, InvokeRequest,
+    Message, SdkResult,
 };
 
 pub fn create_account<Req: Encodable, Resp: Decodable>(
@@ -41,7 +42,7 @@ pub fn exec_account<Req: InvokableMessage, Resp: Decodable>(
 pub fn query_account<Req: InvokableMessage, Resp: Decodable>(
     target: AccountId,
     request: &Req,
-    env: &dyn Environment,
+    env: &mut dyn EnvironmentQuery,
 ) -> SdkResult<Resp> {
     let invoke_request = InvokeRequest::new(request)?;
     env.do_query(target, &invoke_request)?.get()

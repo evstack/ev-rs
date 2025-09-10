@@ -12,22 +12,17 @@ use std::io::{self, Read, Write};
 use std::path::Path;
 
 /// Format for serializing traces.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TraceFormat {
     /// Binary format using bincode (compact, fast).
     Binary,
     /// Compressed binary format (bincode + gzip).
+    #[default]
     BinaryCompressed,
     /// JSON format (human-readable).
     Json,
     /// Pretty-printed JSON format.
     JsonPretty,
-}
-
-impl Default for TraceFormat {
-    fn default() -> Self {
-        TraceFormat::BinaryCompressed
-    }
 }
 
 /// Error type for serialization operations.

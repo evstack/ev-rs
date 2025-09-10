@@ -303,12 +303,6 @@ mod tests {
         }
 
         #[test]
-        fn test_amount_generation(amount in arb_amount()) {
-            // Amounts should be within u128 range (always true by construction)
-            prop_assert!(amount <= u128::MAX);
-        }
-
-        #[test]
         fn test_tx_generation(tx in arb_tx(vec![AccountId::new(1), AccountId::new(2), AccountId::new(3)])) {
             prop_assert!(tx.gas_limit >= 1000);
             prop_assert!(tx.gas_limit < 1_000_000);

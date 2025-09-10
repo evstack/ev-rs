@@ -10,13 +10,13 @@ version = "0.1.0"
 evolve_core.workspace = true
 evolve_fungible_asset.workspace = true
 evolve_gas.workspace = true
-evolve_ns.workspace = true
 evolve_server_core.workspace = true
 evolve_unique.workspace = true
 hashbrown = "0.15"
 linkme = {version = "0.3", default-features = false, optional = true}
 
 [dev-dependencies]
+proptest = "1.4"
 
 [lints]
 workspace = true

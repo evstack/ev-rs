@@ -3,8 +3,8 @@ use evolve_core::storage_api::{
     STORAGE_ACCOUNT_ID,
 };
 use evolve_core::{
-    AccountId, Environment, ErrorCode, FungibleAsset, InvokableMessage, InvokeRequest,
-    InvokeResponse, Message, SdkResult,
+    AccountId, Environment, EnvironmentQuery, ErrorCode, FungibleAsset, InvokableMessage,
+    InvokeRequest, InvokeResponse, Message, SdkResult,
 };
 use std::collections::HashMap;
 
@@ -38,7 +38,7 @@ impl MockEnvironment {
     }
 }
 
-impl Environment for MockEnvironment {
+impl EnvironmentQuery for MockEnvironment {
     fn whoami(&self) -> AccountId {
         self.account_id
     }
@@ -51,7 +51,7 @@ impl Environment for MockEnvironment {
         &[]
     }
 
-    fn do_query(&self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse> {
+    fn do_query(&mut self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse> {
         if self.should_fail {
             return Err(ErrorCode::new(99));
         }
@@ -63,7 +63,9 @@ impl Environment for MockEnvironment {
         let value = self.storage.get(&request.key).cloned();
         InvokeResponse::new(&StorageGetResponse { value })
     }
+}
 
+impl Environment for MockEnvironment {
     fn do_exec(
         &mut self,
         to: AccountId,

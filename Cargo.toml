@@ -38,7 +38,6 @@ evolve_block_info = { path = "crates/app/sdk/x/block_info" }
 evolve_events = { path = "crates/app/sdk/x/events" }
 evolve_escrow = { path = "crates/app/sdk/x/escrow" }
 evolve_gas = { path = "crates/app/sdk/x/gas" }
-evolve_ns = { path = "crates/app/sdk/x/ns" }
 evolve_poa = { path = "crates/app/sdk/x/poa" }
 evolve_scheduler = { path = "crates/app/sdk/x/scheduler" }
 evolve_token = { path = "crates/app/sdk/x/token" }

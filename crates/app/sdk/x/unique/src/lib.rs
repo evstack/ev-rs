@@ -2,7 +2,7 @@ use evolve_core::account_impl;
 
 #[account_impl(Unique)]
 pub mod unique {
-    use evolve_core::{Environment, SdkResult};
+    use evolve_core::{Environment, EnvironmentQuery, SdkResult};
     use evolve_macros::{exec, query};
 
     pub type UniqueId = [u8; 32];
@@ -18,7 +18,7 @@ pub mod unique {
         }
         #[query]
         #[allow(dead_code)]
-        pub fn unique_objects_created(&self, _env: &dyn Environment) -> SdkResult<u64> {
+        pub fn unique_objects_created(&self, _env: &mut dyn EnvironmentQuery) -> SdkResult<u64> {
             Ok(Default::default())
         }
     }

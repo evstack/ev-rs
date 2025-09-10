@@ -1,4 +1,5 @@
-use evolve_testapp::{do_genesis, install_account_codes, STF};
+use evolve_stf::SystemAccounts;
+use evolve_testapp::{build_stf, do_genesis, install_account_codes, PLACEHOLDER_ACCOUNT};
 use evolve_testing::server_mocks::AccountStorageMock;
 
 fn main() {
@@ -8,7 +9,8 @@ fn main() {
     install_account_codes(&mut codes);
 
     // Run genesis
-    let state = do_genesis(&STF, &codes, &storage).expect("genesis failed");
+    let bootstrap_stf = build_stf(SystemAccounts::placeholder(), PLACEHOLDER_ACCOUNT);
+    let (state, _accounts) = do_genesis(&bootstrap_stf, &codes, &storage).expect("genesis failed");
     let _changes = state.into_changes().expect("failed to get state changes");
 
     println!("Evolve testapp initialized successfully");

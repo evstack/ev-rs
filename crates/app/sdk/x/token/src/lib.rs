@@ -3,7 +3,9 @@ use evolve_core::account_impl;
 #[account_impl(Token)]
 pub mod account {
     use evolve_collections::{item::Item, map::Map};
-    use evolve_core::{define_error, AccountId, Environment, SdkResult, ERR_UNAUTHORIZED};
+    use evolve_core::{
+        define_error, AccountId, Environment, EnvironmentQuery, SdkResult, ERR_UNAUTHORIZED,
+    };
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
 
@@ -156,7 +158,7 @@ pub mod account {
         }
 
         #[query]
-        fn metadata(&self, env: &dyn Environment) -> SdkResult<FungibleAssetMetadata> {
+        fn metadata(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<FungibleAssetMetadata> {
             Ok(self.metadata.may_get(env)?.unwrap())
         }
 
@@ -164,13 +166,13 @@ pub mod account {
         fn get_balance(
             &self,
             account: AccountId,
-            env: &dyn Environment,
+            env: &mut dyn EnvironmentQuery,
         ) -> SdkResult<Option<u128>> {
             self.balances.may_get(&account, env)
         }
 
         #[query]
-        fn total_supply(&self, env: &dyn Environment) -> SdkResult<u128> {
+        fn total_supply(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<u128> {
             self.total_supply.get(env)
         }
     }
@@ -233,23 +235,23 @@ mod tests {
     #[test]
     fn test_initialize_and_metadata() {
         // Supply manager = 42, initial holder = 10, balance = 1_000
-        let (token, env) = setup_token(42, 10, 1000);
+        let (token, mut env) = setup_token(42, 10, 1000);
 
         // Check the metadata query
-        let metadata = token.metadata(&env).expect("metadata query failed");
+        let metadata = token.metadata(&mut env).expect("metadata query failed");
         assert_eq!(metadata.name, "TestToken");
         assert_eq!(metadata.symbol, "TT");
         assert_eq!(metadata.decimals, 2);
 
         // Check the initial holder's balance
         let balance = token
-            .get_balance(AccountId::new(10), &env)
+            .get_balance(AccountId::new(10), &mut env)
             .expect("get_balance failed")
             .unwrap();
         assert_eq!(balance, 1000);
 
         // Check the supply manager
-        let supply_manager = token.supply_manager.get(&env).unwrap();
+        let supply_manager = token.supply_manager.get(&mut env).unwrap();
         assert_eq!(supply_manager, Some(AccountId::new(42)));
     }
 
@@ -260,7 +262,7 @@ mod tests {
 
         // We'll mint to holder 10 some extra tokens.
         let holder = AccountId::new(10);
-        let before_balance = token.get_balance(holder, &env).unwrap().unwrap();
+        let before_balance = token.get_balance(holder, &mut env).unwrap().unwrap();
         assert_eq!(before_balance, 500);
 
         // Authorized call: the environment's sender == supply_manager(100).
@@ -270,7 +272,7 @@ mod tests {
             "Mint should succeed under authorized manager"
         );
 
-        let after_balance = token.get_balance(holder, &env).unwrap().unwrap();
+        let after_balance = token.get_balance(holder, &mut env).unwrap().unwrap();
         assert_eq!(after_balance, 700, "Should have minted 200 more tokens");
     }
 
@@ -299,7 +301,7 @@ mod tests {
         // We'll burn from holder 10
         let holder = AccountId::new(10);
 
-        let before_balance = token.get_balance(holder, &env).unwrap().unwrap();
+        let before_balance = token.get_balance(holder, &mut env).unwrap().unwrap();
         assert_eq!(before_balance, 1000);
 
         // environment's sender is supply_manager=42 -> authorized
@@ -309,7 +311,7 @@ mod tests {
             "Burn should succeed under authorized manager"
         );
 
-        let after_balance = token.get_balance(holder, &env).unwrap().unwrap();
+        let after_balance = token.get_balance(holder, &mut env).unwrap().unwrap();
         assert_eq!(
             after_balance, 700,
             "Should have burned 300 tokens from holder"
@@ -350,7 +352,7 @@ mod tests {
         );
 
         let from_balance = token
-            .get_balance(AccountId::new(50), &env)
+            .get_balance(AccountId::new(50), &mut env)
             .unwrap()
             .unwrap();
         assert_eq!(
@@ -358,7 +360,7 @@ mod tests {
             "Should have subtracted 300 tokens from sender"
         );
 
-        let to_balance = token.get_balance(recipient, &env).unwrap().unwrap();
+        let to_balance = token.get_balance(recipient, &mut env).unwrap().unwrap();
         assert_eq!(to_balance, 300, "Should have added 300 tokens to recipient");
     }
 
@@ -379,11 +381,11 @@ mod tests {
     #[test]
     fn test_get_balance_not_set_yet() {
         // supply_manager=2, initial_holder=10, initial_balance=100
-        let (token, env) = setup_token(2, 10, 100);
+        let (token, mut env) = setup_token(2, 10, 100);
 
         // Query an account that wasn't given an initial balance
         let balance = token
-            .get_balance(AccountId::new(999), &env)
+            .get_balance(AccountId::new(999), &mut env)
             .expect("call failed");
         assert_eq!(balance, None, "Account 999 should not have a balance yet");
     }

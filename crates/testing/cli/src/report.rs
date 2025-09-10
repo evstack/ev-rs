@@ -314,7 +314,7 @@ fn format_csv(report: &ReportData) -> String {
 
     // Per-block if available
     if let Some(ref per_block) = report.per_block {
-        output.push_str("\n");
+        output.push('\n');
         output.push_str("block_height,tx_count,state_changes,errors\n");
         for block in per_block {
             output.push_str(&format!(

@@ -17,3 +17,6 @@ workspace = true
 [features]
 default = []
 error-decode = ["linkme", "evolve_core/error-decode"]
+
+[dev-dependencies]
+proptest = "1.4"

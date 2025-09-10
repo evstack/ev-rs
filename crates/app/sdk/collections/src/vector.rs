@@ -1,7 +1,7 @@
 use crate::item::Item;
 use crate::map::Map;
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{Environment, SdkResult};
+use evolve_core::{Environment, EnvironmentQuery, SdkResult};
 
 pub struct Vector<V> {
     index: Item<u64>,
@@ -21,11 +21,11 @@ impl<V> Vector<V>
 where
     V: Encodable + Decodable,
 {
-    pub fn may_get(&self, index: u64, backend: &dyn Environment) -> SdkResult<Option<V>> {
+    pub fn may_get(&self, index: u64, backend: &mut dyn EnvironmentQuery) -> SdkResult<Option<V>> {
         self.elems.may_get(&index, backend)
     }
 
-    pub fn get(&self, index: u64, backend: &dyn Environment) -> SdkResult<V> {
+    pub fn get(&self, index: u64, backend: &mut dyn EnvironmentQuery) -> SdkResult<V> {
         self.elems.get(&index, backend)
     }
 
@@ -66,7 +66,7 @@ where
 
     /// Returns the current length of the `Vector`,
     /// which is how many items have been pushed so far (minus pops).
-    pub fn len(&self, env: &dyn Environment) -> SdkResult<u64> {
+    pub fn len(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<u64> {
         // `Item::may_get(env)` returns an `Option<u64>`:
         //   - `Some(n)` if we have a stored count,
         //   - `None` if no count is stored (meaning zero).
@@ -75,7 +75,7 @@ where
 
     /// Returns an iterator over the elements in this `Vector`.
     /// Each `next()` call does a storage read to fetch the item at the current index.
-    pub fn iter<'a>(&'a self, env: &'a dyn Environment) -> SdkResult<VectorIter<'a, V>> {
+    pub fn iter<'a>(&'a self, env: &'a mut dyn EnvironmentQuery) -> SdkResult<VectorIter<'a, V>> {
         let length = self.len(env)?;
         Ok(VectorIter {
             vector: self,
@@ -90,7 +90,7 @@ where
 /// Each `next()` will yield a `SdkResult<V>`, since storage reads can fail.
 pub struct VectorIter<'a, V> {
     vector: &'a Vector<V>,
-    env: &'a dyn Environment,
+    env: &'a mut dyn EnvironmentQuery,
     index: u64,
     length: u64,
 }
@@ -141,10 +141,10 @@ mod vector_tests {
     fn test_may_get_nonexistent() {
         // Vector is empty -> any index should return None
         let vec: Vector<TestData> = Vector::new(10, 20);
-        let env = MockEnvironment::new(1, 2);
+        let mut env = MockEnvironment::new(1, 2);
 
-        assert_eq!(vec.may_get(0, &env).unwrap(), None);
-        assert_eq!(vec.may_get(5, &env).unwrap(), None);
+        assert_eq!(vec.may_get(0, &mut env).unwrap(), None);
+        assert_eq!(vec.may_get(5, &mut env).unwrap(), None);
     }
 
     #[test]
@@ -166,11 +166,11 @@ mod vector_tests {
         vec.push(&item2, &mut env).unwrap();
 
         // may_get should find them at indices 0 and 1 (assuming push sets them in ascending order)
-        assert_eq!(vec.may_get(0, &env).unwrap(), Some(item1.clone()));
-        assert_eq!(vec.may_get(1, &env).unwrap(), Some(item2.clone()));
+        assert_eq!(vec.may_get(0, &mut env).unwrap(), Some(item1.clone()));
+        assert_eq!(vec.may_get(1, &mut env).unwrap(), Some(item2.clone()));
 
         // Index 2 is beyond the last pushed item
-        assert_eq!(vec.may_get(2, &env).unwrap(), None);
+        assert_eq!(vec.may_get(2, &mut env).unwrap(), None);
     }
 
     #[test]
@@ -187,11 +187,11 @@ mod vector_tests {
         vec.push(&item, &mut env).unwrap();
 
         // get(0) should succeed
-        let retrieved = vec.get(0, &env).unwrap();
+        let retrieved = vec.get(0, &mut env).unwrap();
         assert_eq!(retrieved, item);
 
         // get(1) should fail (not found)
-        let err = vec.get(1, &env).err().unwrap();
+        let err = vec.get(1, &mut env).err().unwrap();
         // Adjust if you have a custom "Not Found" error code
         assert_eq!(err.code(), crate::ERR_NOT_FOUND.code());
     }
@@ -286,10 +286,10 @@ mod vector_tests {
         vec.extend(items.into_iter(), &mut env).unwrap();
 
         // Check we can retrieve them at indices 0..2
-        assert_eq!(vec.get(0, &env).unwrap(), item1);
-        assert_eq!(vec.get(1, &env).unwrap(), item2);
-        assert_eq!(vec.get(2, &env).unwrap(), item3);
-        assert!(vec.may_get(3, &env).unwrap().is_none());
+        assert_eq!(vec.get(0, &mut env).unwrap(), item1);
+        assert_eq!(vec.get(1, &mut env).unwrap(), item2);
+        assert_eq!(vec.get(2, &mut env).unwrap(), item3);
+        assert!(vec.may_get(3, &mut env).unwrap().is_none());
     }
 
     #[test]
@@ -320,10 +320,10 @@ mod vector_tests {
     #[test]
     fn test_get_environment_error() {
         let vec: Vector<TestData> = Vector::new(10, 20);
-        let env = MockEnvironment::with_failure();
+        let mut env = MockEnvironment::with_failure();
 
         // Attempting to get(0) should fail
-        let err = vec.get(0, &env).err().unwrap();
+        let err = vec.get(0, &mut env).err().unwrap();
         assert_eq!(err.code(), 99);
     }
 
@@ -347,8 +347,8 @@ mod vector_tests {
         vec2.push(&item2, &mut env).unwrap();
 
         // Ensure they do not clash
-        assert_eq!(vec1.may_get(0, &env).unwrap(), Some(item1));
-        assert_eq!(vec2.may_get(0, &env).unwrap(), Some(item2));
+        assert_eq!(vec1.may_get(0, &mut env).unwrap(), Some(item1));
+        assert_eq!(vec2.may_get(0, &mut env).unwrap(), Some(item2));
     }
 
     #[test]
@@ -374,8 +374,8 @@ mod vector_tests {
         vec.push(&data2, &mut env2).unwrap();
 
         // Each environment's storage is separate
-        assert_eq!(vec.may_get(0, &env1).unwrap(), Some(data1));
-        assert_eq!(vec.may_get(0, &env2).unwrap(), Some(data2));
+        assert_eq!(vec.may_get(0, &mut env1).unwrap(), Some(data1));
+        assert_eq!(vec.may_get(0, &mut env2).unwrap(), Some(data2));
     }
 
     #[test]
@@ -407,7 +407,7 @@ mod vector_tests {
         )?;
 
         // Use the iter() method
-        let mut iter = vec.iter(&env)?;
+        let mut iter = vec.iter(&mut env)?;
 
         // Because `next()` returns `Option<SdkResult<V>>`,
         // we handle it accordingly:

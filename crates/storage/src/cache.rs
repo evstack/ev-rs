@@ -498,8 +498,8 @@ mod tests {
         let cache = ShardedDbCache::with_defaults();
 
         // Insert keys into different shards
-        for i in 0..10 {
-            let mut key = vec![i as u8]; // First byte determines shard
+        for i in 0u8..10 {
+            let mut key = vec![i]; // First byte determines shard
             key.extend_from_slice(b"_suffix");
             cache.insert_present(key, vec![i]);
         }
@@ -514,8 +514,8 @@ mod tests {
         let cache = ShardedDbCache::with_defaults();
 
         // Insert keys into different shards
-        for i in 0..10 {
-            let mut key = vec![i as u8];
+        for i in 0u8..10 {
+            let mut key = vec![i];
             key.extend_from_slice(b"_key");
             cache.insert_present(key, vec![i]);
         }

@@ -258,9 +258,11 @@ impl StateSummary {
 }
 
 /// Query builder for searching traces.
+type TraceFilters<'a> = Vec<Box<dyn Fn(&TraceEvent) -> bool + 'a>>;
+
 pub struct TraceQuery<'a> {
     trace: &'a ExecutionTrace,
-    filters: Vec<Box<dyn Fn(&TraceEvent) -> bool + 'a>>,
+    filters: TraceFilters<'a>,
 }
 
 impl<'a> TraceQuery<'a> {
