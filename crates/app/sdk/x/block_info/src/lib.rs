@@ -17,25 +17,15 @@ pub mod account {
         pub time_unix_ms: u64,
     }
 
+    #[derive(evolve_core::AccountState)]
     pub struct BlockInfo {
+        #[storage(0)]
         pub time_unix_ms: Item<u64>,
+        #[storage(1)]
         pub height: Item<u64>,
     }
 
-    impl Default for BlockInfo {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
     impl BlockInfo {
-        pub const fn new() -> Self {
-            Self {
-                time_unix_ms: Item::new(0),
-                height: Item::new(1),
-            }
-        }
-
         /// Initialize the contract with block height and time.
         #[init]
         pub fn initialize(

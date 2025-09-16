@@ -1,0 +1,13 @@
+error: Duplicate storage prefix 0. Field `field_a` already uses this prefix. Each field must have a unique storage prefix to prevent state corruption.
+  --> tests/fail/duplicate_storage_prefix.rs:30:9
+   |
+30 |     pub field_b: Item<u64>,
+   |         ^^^^^^^
+
+warning: unused import: `Map`
+  --> tests/fail/duplicate_storage_prefix.rs:22:30
+   |
+22 | use mock_collections::{Item, Map};
+   |                              ^^^
+   |
+   = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default

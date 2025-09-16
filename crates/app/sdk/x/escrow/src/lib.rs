@@ -21,27 +21,17 @@ pub mod escrow {
         pub unlock_height: u64,
         pub funds: Vec<FungibleAsset>,
     }
+    #[derive(evolve_core::AccountState)]
     pub struct Escrow {
+        #[storage(0)]
         pub locks: Map<UniqueId, Lock>,
-
+        #[storage(1)]
         pub unique: Item<UniqueRef>,
+        #[storage(2)]
         pub block_info: Item<BlockInfoRef>,
     }
 
-    impl Default for Escrow {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
     impl Escrow {
-        pub fn new() -> Self {
-            Self {
-                locks: Map::new(0),
-                unique: Item::new(1),
-                block_info: Item::new(2),
-            }
-        }
         #[init]
         pub fn initialize(
             &self,

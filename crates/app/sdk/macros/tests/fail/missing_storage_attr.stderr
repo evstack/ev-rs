@@ -1,0 +1,5 @@
+error: Field `field_b` is missing #[storage(n)] attribute. All fields must have explicit storage prefixes. Use #[skip_storage] for stateless helper types.
+  --> tests/fail/missing_storage_attr.rs:22:9
+   |
+22 |     pub field_b: Item<u64>,  // ERROR: missing #[storage] attribute
+   |         ^^^^^^^

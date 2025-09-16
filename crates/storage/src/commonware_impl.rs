@@ -380,4 +380,477 @@ mod tests {
             }
         })
     }
+
+    #[test]
+    fn test_key_size_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = CommonwareStorage::new(context, config).await.unwrap();
+
+            // Key exactly at limit (256 bytes) should work
+            let max_key = vec![b'k'; crate::types::MAX_KEY_SIZE];
+            storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: max_key.clone(),
+                    value: b"value".to_vec(),
+                }])
+                .await
+                .unwrap();
+
+            let retrieved = storage.get(&max_key).unwrap();
+            assert_eq!(retrieved, Some(b"value".to_vec()));
+
+            // Key exceeding limit should fail
+            let oversized_key = vec![b'k'; crate::types::MAX_KEY_SIZE + 1];
+            let result = storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: oversized_key,
+                    value: b"value".to_vec(),
+                }])
+                .await;
+
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                StorageError::Key(code) => {
+                    assert_eq!(code, crate::types::ERR_KEY_TOO_LARGE);
+                }
+                _ => panic!("Expected ERR_KEY_TOO_LARGE"),
+            }
+        })
+    }
+
+    #[test]
+    fn test_value_size_limit() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = CommonwareStorage::new(context, config).await.unwrap();
+
+            // Value exactly at STORAGE_VALUE_SIZE limit should work
+            let max_value = vec![b'v'; crate::types::STORAGE_VALUE_SIZE];
+            storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: b"key".to_vec(),
+                    value: max_value.clone(),
+                }])
+                .await
+                .unwrap();
+
+            let retrieved = storage.get(b"key").unwrap();
+            assert_eq!(retrieved, Some(max_value));
+
+            // Value exceeding STORAGE_VALUE_SIZE should fail
+            let oversized_value = vec![b'v'; crate::types::STORAGE_VALUE_SIZE + 1];
+            let result = storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: b"key2".to_vec(),
+                    value: oversized_value,
+                }])
+                .await;
+
+            assert!(result.is_err());
+            match result.unwrap_err() {
+                StorageError::ValueTooLarge { size, max } => {
+                    assert_eq!(size, crate::types::STORAGE_VALUE_SIZE + 1);
+                    assert_eq!(max, crate::types::STORAGE_VALUE_SIZE);
+                }
+                e => panic!("Expected ValueTooLarge, got {:?}", e),
+            }
+        })
+    }
+
+    #[test]
+    fn test_commit_produces_valid_hash() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = CommonwareStorage::new(context, config).await.unwrap();
+
+            // Apply some operations
+            storage
+                .apply_batch(vec![
+                    crate::types::Operation::Set {
+                        key: b"key1".to_vec(),
+                        value: b"value1".to_vec(),
+                    },
+                    crate::types::Operation::Set {
+                        key: b"key2".to_vec(),
+                        value: b"value2".to_vec(),
+                    },
+                ])
+                .await
+                .unwrap();
+
+            // Commit and get hash - should be a valid 32-byte hash
+            let hash1 = storage.commit_state().await.unwrap();
+            assert_eq!(hash1.as_bytes().len(), 32);
+
+            // Commit hash should not be all zeros
+            assert!(!hash1.as_bytes().iter().all(|&b| b == 0));
+
+            // Add more data and commit - should produce a different hash
+            storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: b"key3".to_vec(),
+                    value: b"value3".to_vec(),
+                }])
+                .await
+                .unwrap();
+
+            let hash2 = storage.commit_state().await.unwrap();
+            assert_eq!(hash2.as_bytes().len(), 32);
+
+            // Hashes should be different after state change
+            assert_ne!(hash1.as_bytes(), hash2.as_bytes());
+        })
+    }
+
+    #[test]
+    fn test_cache_invalidation_on_write() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = CommonwareStorage::new(context, config).await.unwrap();
+
+            // Set a value
+            storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: b"key".to_vec(),
+                    value: b"value1".to_vec(),
+                }])
+                .await
+                .unwrap();
+
+            // Read to populate cache
+            let v1 = storage.get(b"key").unwrap();
+            assert_eq!(v1, Some(b"value1".to_vec()));
+
+            // Update the value
+            storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: b"key".to_vec(),
+                    value: b"value2".to_vec(),
+                }])
+                .await
+                .unwrap();
+
+            // Read again - should get new value (cache was invalidated)
+            let v2 = storage.get(b"key").unwrap();
+            assert_eq!(v2, Some(b"value2".to_vec()));
+        })
+    }
+
+    #[test]
+    fn test_remove_invalidates_cache() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = CommonwareStorage::new(context, config).await.unwrap();
+
+            // Set a value
+            storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: b"key".to_vec(),
+                    value: b"value".to_vec(),
+                }])
+                .await
+                .unwrap();
+
+            // Read to populate cache
+            assert_eq!(storage.get(b"key").unwrap(), Some(b"value".to_vec()));
+
+            // Remove the key
+            storage
+                .apply_batch(vec![crate::types::Operation::Remove {
+                    key: b"key".to_vec(),
+                }])
+                .await
+                .unwrap();
+
+            // Read again - should get None (cache was invalidated)
+            assert_eq!(storage.get(b"key").unwrap(), None);
+        })
+    }
+
+    #[test]
+    fn test_batch_multiple_operations() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = CommonwareStorage::new(context, config).await.unwrap();
+
+            // Apply a batch with multiple operations
+            storage
+                .apply_batch(vec![
+                    crate::types::Operation::Set {
+                        key: b"key1".to_vec(),
+                        value: b"value1".to_vec(),
+                    },
+                    crate::types::Operation::Set {
+                        key: b"key2".to_vec(),
+                        value: b"value2".to_vec(),
+                    },
+                    crate::types::Operation::Set {
+                        key: b"key3".to_vec(),
+                        value: b"value3".to_vec(),
+                    },
+                ])
+                .await
+                .unwrap();
+
+            // Verify all values
+            assert_eq!(storage.get(b"key1").unwrap(), Some(b"value1".to_vec()));
+            assert_eq!(storage.get(b"key2").unwrap(), Some(b"value2".to_vec()));
+            assert_eq!(storage.get(b"key3").unwrap(), Some(b"value3".to_vec()));
+
+            // Now remove one and update another in a batch
+            storage
+                .apply_batch(vec![
+                    crate::types::Operation::Remove {
+                        key: b"key2".to_vec(),
+                    },
+                    crate::types::Operation::Set {
+                        key: b"key1".to_vec(),
+                        value: b"updated".to_vec(),
+                    },
+                ])
+                .await
+                .unwrap();
+
+            assert_eq!(storage.get(b"key1").unwrap(), Some(b"updated".to_vec()));
+            assert_eq!(storage.get(b"key2").unwrap(), None);
+            assert_eq!(storage.get(b"key3").unwrap(), Some(b"value3".to_vec()));
+        })
+    }
+
+    #[test]
+    fn test_empty_batch() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = CommonwareStorage::new(context, config).await.unwrap();
+
+            // Empty batch should succeed
+            storage.apply_batch(vec![]).await.unwrap();
+        })
+    }
+
+    #[test]
+    fn test_get_nonexistent_key() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = CommonwareStorage::new(context, config).await.unwrap();
+
+            // Get a key that was never set
+            let result = storage.get(b"nonexistent").unwrap();
+            assert_eq!(result, None);
+
+            // Second read should hit cache (negative cache)
+            let result2 = storage.get(b"nonexistent").unwrap();
+            assert_eq!(result2, None);
+        })
+    }
+
+    #[test]
+    fn test_empty_value() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = CommonwareStorage::new(context, config).await.unwrap();
+
+            // Empty values are treated as removed (since we use all-zeros to signal removal)
+            // This is a known limitation
+            storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: b"empty".to_vec(),
+                    value: vec![],
+                }])
+                .await
+                .unwrap();
+
+            // Empty value should be treated as None (due to removal semantics)
+            let result = storage.get(b"empty").unwrap();
+            assert_eq!(result, None);
+        })
+    }
+
+    #[test]
+    fn test_storage_trait_impl() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = CommonwareStorage::new(context, config).await.unwrap();
+
+            // Test via the Storage trait
+            use crate::Storage as StorageTrait;
+
+            storage
+                .batch(vec![crate::types::Operation::Set {
+                    key: b"trait_key".to_vec(),
+                    value: b"trait_value".to_vec(),
+                }])
+                .await
+                .unwrap();
+
+            let hash = storage.commit().await.unwrap();
+            assert_eq!(hash.as_bytes().len(), 32);
+
+            // Verify the write worked
+            assert_eq!(
+                storage.get(b"trait_key").unwrap(),
+                Some(b"trait_value".to_vec())
+            );
+        })
+    }
+
+    #[test]
+    fn test_readonly_kv_ext() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = CommonwareStorage::new(context, config).await.unwrap();
+
+            // Test ReadonlyKVExt methods
+            use crate::ReadonlyKVExt;
+
+            // exists() on non-existent key
+            assert!(!storage.exists(b"nope").unwrap());
+
+            // Set a value
+            storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: b"exists_key".to_vec(),
+                    value: b"exists_value".to_vec(),
+                }])
+                .await
+                .unwrap();
+
+            // exists() on existing key
+            assert!(storage.exists(b"exists_key").unwrap());
+
+            // get_or_default() on non-existent key
+            let default = storage
+                .get_or_default(b"missing", b"default".to_vec())
+                .unwrap();
+            assert_eq!(default, b"default");
+
+            // get_or_default() on existing key
+            let existing = storage
+                .get_or_default(b"exists_key", b"default".to_vec())
+                .unwrap();
+            assert_eq!(existing, b"exists_value");
+        })
+    }
 }

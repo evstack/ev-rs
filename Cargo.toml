@@ -1,6 +1,9 @@
 [workspace]
 members = [
-    "crates/rpc",
+    "crates/rpc/types",
+    "crates/rpc/eth-jsonrpc",
+    "crates/rpc/chain-index",
+    "crates/app/operations",
     "crates/app/stf",
     "crates/app/sdk/collections",
     "crates/app/sdk/core",
@@ -44,6 +47,11 @@ evolve_token = { path = "crates/app/sdk/x/token" }
 evolve_unique = { path = "crates/app/sdk/x/unique" }
 
 evolve_stf = { path = "crates/app/stf" }
+evolve_operations = { path = "crates/app/operations" }
+
+evolve_rpc_types = { path = "crates/rpc/types" }
+evolve_eth_jsonrpc = { path = "crates/rpc/eth-jsonrpc" }
+evolve_chain_index = { path = "crates/rpc/chain-index" }
 
 evolve_testing = { path = "crates/app/sdk/testing" }
 
@@ -71,6 +79,10 @@ sha2 = { version = "0.10.8" }
 async-trait = "0.1"
 [workspace.lints.rust]
 # missing_docs = "deny"
+
+[workspace.lints.clippy]
+# Determinism lints - catch common sources of non-determinism
+disallowed_types = "warn"
 
 [workspace.lints.rustdoc]
 # broken_intra_doc_links = "deny"

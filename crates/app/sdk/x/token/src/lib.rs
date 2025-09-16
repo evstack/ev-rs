@@ -12,28 +12,19 @@ pub mod account {
     define_error!(ERR_NOT_ENOUGH_BALANCE, 0x1, "not enough balance");
     define_error!(ERR_UNDERFLOW, 0x2, "arithmetic underflow");
 
+    #[derive(evolve_core::AccountState)]
     pub struct Token {
+        #[storage(0)]
         pub metadata: Item<FungibleAssetMetadata>,
+        #[storage(1)]
         pub balances: Map<AccountId, u128>,
+        #[storage(2)]
         pub total_supply: Item<u128>,
+        #[storage(3)]
         pub supply_manager: Item<Option<AccountId>>,
     }
 
-    impl Default for Token {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
     impl Token {
-        pub const fn new() -> Self {
-            Self {
-                metadata: Item::new(0),
-                balances: Map::new(1),
-                total_supply: Item::new(2),
-                supply_manager: Item::new(3),
-            }
-        }
         #[init]
         pub fn initialize(
             &self,

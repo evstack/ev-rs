@@ -15,32 +15,21 @@ pub mod share {
     define_error!(ERR_NOT_ENOUGH_BALANCE, 0x2, "not enough balance");
     define_error!(ERR_OVERFLOW, 0x3, "arithmetic overflow");
 
+    #[derive(evolve_core::AccountState)]
     pub struct Share {
+        #[storage(0)]
         metadata: Item<FungibleAssetMetadata>,
+        #[storage(1)]
         balances: Map<AccountId, u128>,
+        #[storage(2)]
         total_supply: Item<u128>,
-
+        #[storage(3)]
         pub(crate) manager: Item<AccountId>,
+        #[storage(4)]
         pub(crate) coin_deposited: Item<FungibleAsset>,
     }
 
-    impl Default for Share {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
     impl Share {
-        pub const fn new() -> Self {
-            Self {
-                metadata: Item::new(0),
-                balances: Map::new(1),
-                total_supply: Item::new(2),
-                manager: Item::new(3),
-                coin_deposited: Item::new(4),
-            }
-        }
-
         // -------------------------------------------------------------------------
         //                  1) Share Logic (Custom Implementation)
         // -------------------------------------------------------------------------

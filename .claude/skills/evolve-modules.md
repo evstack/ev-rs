@@ -7,15 +7,19 @@ triggers:
   - "account_impl"
   - "module development"
   - "new module"
+  - "AccountState"
+  - "storage prefix"
 ---
 
 # Writing Evolve Modules
 
 Modules in Evolve are stateless code executors that implement the `AccountCode` trait. They interact with blockchain state through the `Environment` interface and are composed via the `#[account_impl]` macro.
 
+**Full documentation:** `docs/module-system/`
+
 ## Module Structure
 
-A minimal module:
+A minimal module using `#[derive(AccountState)]` for compile-time storage validation:
 
 ```rust
 use evolve_core::account_impl;
@@ -26,25 +30,15 @@ pub mod account {
     use evolve_core::{AccountId, Environment, EnvironmentQuery, SdkResult};
     use evolve_macros::{exec, init, query};
 
+    #[derive(evolve_core::AccountState)]
     pub struct MyModule {
+        #[storage(0)]
         pub owner: Item<AccountId>,
+        #[storage(1)]
         pub data: Map<AccountId, u64>,
     }
 
-    impl Default for MyModule {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
     impl MyModule {
-        pub const fn new() -> Self {
-            Self {
-                owner: Item::new(0),  // prefix 0
-                data: Map::new(1),    // prefix 1
-            }
-        }
-
         #[init]
         pub fn initialize(
             &self,
@@ -78,6 +72,11 @@ pub mod account {
 }
 ```
 
+The `#[derive(AccountState)]` macro:
+- Validates unique storage prefixes at compile time
+- Generates `new()` and `Default` implementations automatically
+- Prevents storage collisions that cause state corruption
+
 ## Function Markers
 
 | Marker | Environment | Purpose | Generated Message |
@@ -89,16 +88,51 @@ pub mod account {
 
 ## Storage Collections
 
-Use unique prefix bytes to avoid key collisions:
+Use `#[storage(n)]` to assign unique prefix bytes (validated at compile time):
 
 ```rust
-use evolve_collections::{item::Item, map::Map, vector::Vector, queue::Queue};
+use evolve_collections::{item::Item, map::Map};
 
+#[derive(evolve_core::AccountState)]
 pub struct MyModule {
-    pub config: Item<Config>,           // prefix 0, single value
-    pub balances: Map<AccountId, u128>, // prefix 1, key-value
-    pub history: Vector<Event>,         // prefix 2, indexed list
-    pub pending: Queue<Task>,           // prefix 3, FIFO queue
+    #[storage(0)]
+    pub config: Item<Config>,           // single value
+    #[storage(1)]
+    pub balances: Map<AccountId, u128>, // key-value
+}
+```
+
+### Multi-Prefix Collections
+
+`Vector` and `UnorderedMap` require multiple prefixes. Use manual initialization:
+
+```rust
+pub struct ComplexModule {
+    history: Vector<Event>,              // needs 2 prefixes
+    validators: UnorderedMap<AccountId, Validator>, // needs 4 prefixes
+}
+
+impl ComplexModule {
+    pub const fn new() -> Self {
+        Self {
+            history: Vector::new(0, 1),
+            validators: UnorderedMap::new(2, 3, 4, 5),
+        }
+    }
+}
+```
+
+### Stateless Helper Fields
+
+Use `#[skip_storage]` for fields that don't need storage prefixes:
+
+```rust
+#[derive(evolve_core::AccountState)]
+pub struct MyModule {
+    #[storage(0)]
+    pub data: Item<Data>,
+    #[skip_storage]
+    pub events: EventsEmitter,  // Initialized with Type::new()
 }
 ```
 
@@ -325,20 +359,37 @@ fn test_with_full_stf() {
 }
 ```
 
+## Determinism Requirements
+
+All module code must be deterministic. **These patterns are banned:**
+
+| Pattern | Why | Alternative |
+|---------|-----|-------------|
+| `HashMap`, `HashSet` | Non-deterministic iteration | `BTreeMap` or `evolve_collections` |
+| `std::time` | Varies between nodes | `BlockInfo` module |
+| `rand` | Non-deterministic | Derive from chain state |
+| `f32`, `f64` | Platform-dependent | `evolve_math::FixedPoint` |
+
+The workspace has clippy lints configured (`.clippy.toml`) to warn on these.
+
+See `docs/module-system/determinism.md` for full details.
+
 ## Checklist for New Modules
 
-1. **Unique storage prefixes** - Each field gets unique byte prefix
-2. **Implement Default** - Required for code registration
+1. **Use `#[derive(AccountState)]`** - Compile-time storage prefix validation
+2. **Unique `#[storage(n)]` values** - Each field gets unique byte prefix
 3. **Authorization on exec functions** - Check `env.sender()` appropriately
 4. **Use checked arithmetic** - `checked_add`, `checked_sub` to prevent overflow
-5. **Handle missing values** - Use `may_get()` and handle `None`
-6. **Write unit tests** - Test with MockEnv for fast iteration
-7. **Write integration tests** - Test with TestApp for full STF coverage
+5. **Handle missing values** - Use `may_get()?.ok_or(ERR_...)?` not `unwrap()`
+6. **No non-deterministic code** - No HashMap, std::time, rand, floats
+7. **Write unit tests** - Test with MockEnv for fast iteration
+8. **Write integration tests** - Test with TestApp for full STF coverage
 
 ## Files
 
-- `crates/app/sdk/macros/src/lib.rs` - The `#[account_impl]` macro
+- `crates/app/sdk/macros/src/lib.rs` - `#[account_impl]` and `#[derive(AccountState)]` macros
 - `crates/app/sdk/core/src/lib.rs` - Core traits (`AccountCode`, `Environment`)
 - `crates/app/sdk/collections/src/` - Storage collections
 - `crates/app/sdk/x/token/src/lib.rs` - Reference implementation (Token)
 - `crates/app/sdk/x/escrow/src/lib.rs` - Another example (Escrow)
+- `docs/module-system/` - Full documentation (architecture, storage, errors, testing, determinism)

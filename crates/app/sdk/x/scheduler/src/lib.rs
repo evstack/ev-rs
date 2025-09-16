@@ -33,25 +33,15 @@ pub mod scheduler_account {
     use evolve_core::{AccountId, Environment, SdkResult, ERR_UNAUTHORIZED};
     use evolve_macros::{exec, init};
 
+    #[derive(evolve_core::AccountState)]
     pub struct Scheduler {
+        #[storage(0)]
         pub begin_block_accounts: Item<Vec<BeginBlockAccountInterfaceRef>>,
+        #[storage(1)]
         pub end_block_accounts: Item<Vec<EndBlockAccountInterfaceRef>>,
     }
 
-    impl Default for Scheduler {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
     impl Scheduler {
-        pub const fn new() -> Scheduler {
-            Scheduler {
-                begin_block_accounts: Item::new(0),
-                end_block_accounts: Item::new(1),
-            }
-        }
-
         #[init]
         pub fn initialize(
             &self,

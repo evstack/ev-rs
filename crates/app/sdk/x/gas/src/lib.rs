@@ -18,23 +18,13 @@ pub mod account {
         pub storage_remove_charge: u64,
     }
 
+    #[derive(evolve_core::AccountState)]
     pub struct GasService {
+        #[storage(0)]
         pub storage_gas_config: Item<StorageGasConfig>,
     }
 
-    impl Default for GasService {
-        fn default() -> Self {
-            Self::new()
-        }
-    }
-
     impl GasService {
-        /// Inits gas.
-        pub const fn new() -> Self {
-            Self {
-                storage_gas_config: Item::new(0),
-            }
-        }
         /// Only runtime can init this.
         #[init]
         pub fn initialize(

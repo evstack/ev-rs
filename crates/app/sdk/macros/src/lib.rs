@@ -896,6 +896,258 @@ pub fn query(_attr: TokenStream, item: TokenStream) -> TokenStream {
     item
 }
 
+/// Marker attribute for storage prefix assignment.
+/// Used by `#[derive(AccountState)]` to assign storage prefixes to fields.
+///
+/// # Example
+/// ```ignore
+/// #[derive(AccountState)]
+/// pub struct Token {
+///     #[storage(0)]
+///     pub metadata: Item<FungibleAssetMetadata>,
+///     #[storage(1)]
+///     pub balances: Map<AccountId, u128>,
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn storage(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
+/// Marker attribute for fields that should be skipped by `#[derive(AccountState)]`.
+/// These fields will be initialized with `Type::new()` without any storage prefix.
+///
+/// Use this for stateless helper types like `EventsEmitter` that don't need storage.
+///
+/// # Example
+/// ```ignore
+/// #[derive(AccountState)]
+/// pub struct MyModule {
+///     #[storage(0)]
+///     pub data: Item<Data>,
+///     #[skip_storage]
+///     pub events: EventsEmitter,
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn skip_storage(_attr: TokenStream, item: TokenStream) -> TokenStream {
+    item
+}
+
+/// Derive macro for account state structs that validates storage prefixes
+/// and generates `new()` and `Default` implementations.
+///
+/// Each field must have a `#[storage(n)]` attribute where `n` is a unique `u8` prefix.
+/// The macro will fail at compile time if:
+/// - Any field is missing a `#[storage]` attribute
+/// - Two fields have the same storage prefix
+///
+/// # Example
+/// ```ignore
+/// use evolve_macros::AccountState;
+/// use evolve_collections::{item::Item, map::Map};
+///
+/// #[derive(AccountState)]
+/// pub struct Token {
+///     #[storage(0)]
+///     pub metadata: Item<FungibleAssetMetadata>,
+///     #[storage(1)]
+///     pub balances: Map<AccountId, u128>,
+///     #[storage(2)]
+///     pub total_supply: Item<u128>,
+/// }
+///
+/// // Generates:
+/// // impl Token {
+/// //     pub const fn new() -> Self {
+/// //         Self {
+/// //             metadata: Item::new(0),
+/// //             balances: Map::new(1),
+/// //             total_supply: Item::new(2),
+/// //         }
+/// //     }
+/// // }
+/// //
+/// // impl Default for Token {
+/// //     fn default() -> Self {
+/// //         Self::new()
+/// //     }
+/// // }
+/// ```
+#[proc_macro_derive(AccountState, attributes(storage, skip_storage))]
+pub fn derive_account_state(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as syn::DeriveInput);
+
+    match derive_account_state_impl(input) {
+        Ok(tokens) => tokens.into(),
+        Err(err) => err.to_compile_error().into(),
+    }
+}
+
+fn derive_account_state_impl(
+    input: syn::DeriveInput,
+) -> Result<proc_macro2::TokenStream, syn::Error> {
+    let struct_name = &input.ident;
+
+    // Extract struct fields
+    let fields = match &input.data {
+        syn::Data::Struct(data) => match &data.fields {
+            syn::Fields::Named(fields) => &fields.named,
+            _ => {
+                return Err(syn::Error::new(
+                    input.ident.span(),
+                    "AccountState can only be derived for structs with named fields",
+                ))
+            }
+        },
+        _ => {
+            return Err(syn::Error::new(
+                input.ident.span(),
+                "AccountState can only be derived for structs",
+            ))
+        }
+    };
+
+    // Collect storage prefixes and validate
+    let mut prefix_map: std::collections::BTreeMap<u8, syn::Ident> =
+        std::collections::BTreeMap::new();
+    let mut field_initializers = Vec::new();
+
+    for field in fields {
+        let field_name = field
+            .ident
+            .as_ref()
+            .ok_or_else(|| syn::Error::new(field.ty.span(), "Field must have a name"))?;
+
+        // Check for #[skip_storage] attribute - these fields are initialized with Type::new()
+        let skip_storage = field
+            .attrs
+            .iter()
+            .any(|attr| attr.path().is_ident("skip_storage"));
+
+        if skip_storage {
+            // For skipped fields, just call Type::new() with no arguments
+            let field_type = &field.ty;
+            let type_name = extract_type_name(field_type)?;
+            field_initializers.push(quote! {
+                #field_name: #type_name::new()
+            });
+            continue;
+        }
+
+        // Find #[storage(n)] attribute
+        let storage_attr = field
+            .attrs
+            .iter()
+            .find(|attr| attr.path().is_ident("storage"));
+
+        let prefix: u8 = match storage_attr {
+            Some(attr) => {
+                // Parse the prefix value from #[storage(n)]
+                let nested: syn::LitInt = attr.parse_args()?;
+                let value: u8 = nested.base10_parse().map_err(|_| {
+                    syn::Error::new(nested.span(), "Storage prefix must be a u8 value (0-255)")
+                })?;
+                value
+            }
+            None => {
+                return Err(syn::Error::new(
+                    field_name.span(),
+                    format!(
+                        "Field `{}` is missing #[storage(n)] attribute. \
+                        All fields must have explicit storage prefixes. \
+                        Use #[skip_storage] for stateless helper types.",
+                        field_name
+                    ),
+                ))
+            }
+        };
+
+        // Check for duplicate prefixes
+        if let Some(existing_field) = prefix_map.get(&prefix) {
+            return Err(syn::Error::new(
+                field_name.span(),
+                format!(
+                    "Duplicate storage prefix {}. Field `{}` already uses this prefix. \
+                    Each field must have a unique storage prefix to prevent state corruption.",
+                    prefix, existing_field
+                ),
+            ));
+        }
+
+        prefix_map.insert(prefix, field_name.clone());
+
+        // Extract the collection type (Item, Map, etc.) to generate the initializer
+        let field_type = &field.ty;
+        let type_name = extract_collection_type_name(field_type)?;
+
+        field_initializers.push(quote! {
+            #field_name: #type_name::new(#prefix)
+        });
+    }
+
+    // Generate the implementation
+    Ok(quote! {
+        impl #struct_name {
+            pub const fn new() -> Self {
+                Self {
+                    #(#field_initializers),*
+                }
+            }
+        }
+
+        impl ::core::default::Default for #struct_name {
+            fn default() -> Self {
+                Self::new()
+            }
+        }
+    })
+}
+
+/// Extracts just the type name from a type path (for #[skip_storage] fields).
+fn extract_type_name(ty: &syn::Type) -> Result<syn::Ident, syn::Error> {
+    match ty {
+        syn::Type::Path(type_path) => {
+            if let Some(segment) = type_path.path.segments.last() {
+                Ok(segment.ident.clone())
+            } else {
+                Err(syn::Error::new(ty.span(), "Could not extract type name"))
+            }
+        }
+        _ => Err(syn::Error::new(ty.span(), "Could not extract type name")),
+    }
+}
+
+/// Extracts the collection type name (Item, Map, Vector, Queue, UnorderedMap) from a type.
+fn extract_collection_type_name(ty: &syn::Type) -> Result<syn::Ident, syn::Error> {
+    match ty {
+        syn::Type::Path(type_path) => {
+            if let Some(segment) = type_path.path.segments.last() {
+                let name = segment.ident.to_string();
+                // Validate it's a known collection type
+                match name.as_str() {
+                    "Item" | "Map" | "Vector" | "Queue" | "UnorderedMap" => {
+                        Ok(segment.ident.clone())
+                    }
+                    _ => Err(syn::Error::new(
+                        segment.ident.span(),
+                        format!(
+                            "Unknown collection type `{}`. Expected one of: Item, Map, Vector, Queue, UnorderedMap",
+                            name
+                        ),
+                    )),
+                }
+            } else {
+                Err(syn::Error::new(ty.span(), "Could not extract type name"))
+            }
+        }
+        _ => Err(syn::Error::new(
+            ty.span(),
+            "Field type must be a collection type (Item, Map, Vector, Queue, UnorderedMap)",
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

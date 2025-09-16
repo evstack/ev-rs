@@ -1,0 +1,13 @@
+# Clippy configuration for the Evolve SDK
+# These lints help catch common sources of non-determinism
+
+# Disallow types that cause non-deterministic behavior
+disallowed-types = [
+    # Non-deterministic iteration order
+    { path = "std::collections::HashMap", reason = "Non-deterministic iteration order. Use BTreeMap or evolve_collections::Map instead." },
+    { path = "std::collections::HashSet", reason = "Non-deterministic iteration order. Use BTreeSet or evolve_collections instead." },
+    
+    # System time is non-deterministic
+    { path = "std::time::Instant", reason = "Non-deterministic. Use BlockInfo module for time-based logic." },
+    { path = "std::time::SystemTime", reason = "Non-deterministic. Use BlockInfo module for time-based logic." },
+]

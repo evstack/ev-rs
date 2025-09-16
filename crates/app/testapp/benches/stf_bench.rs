@@ -172,5 +172,4 @@ criterion_group!(
     bench_apply_block_with_trace,
     bench_apply_block_hot_cold
 );
-criterion_group!(benches, bench_apply_block);
 criterion_main!(benches);
