@@ -1,6 +1,7 @@
 use crate::encoding::{Decodable, Encodable};
 use crate::{InvokableMessage, SdkResult};
 use borsh::{BorshDeserialize, BorshSerialize};
+use std::borrow::Cow;
 use std::io::{Read, Write};
 
 #[derive(Debug, Clone)]
@@ -108,9 +109,9 @@ impl BorshDeserialize for Message {
     }
 }
 
-#[derive(Debug, BorshSerialize, BorshDeserialize, Clone)]
+#[derive(Debug, Clone)]
 pub struct InvokeRequest {
-    human_name: String,
+    human_name: Cow<'static, str>,
     function: u64,
     message: Message,
 }
@@ -118,14 +119,14 @@ pub struct InvokeRequest {
 impl InvokeRequest {
     pub fn new<M: InvokableMessage>(msg: &M) -> SdkResult<Self> {
         Ok(Self {
-            human_name: M::FUNCTION_IDENTIFIER_NAME.to_string(),
+            human_name: Cow::Borrowed(M::FUNCTION_IDENTIFIER_NAME),
             function: M::FUNCTION_IDENTIFIER,
             message: Message::new(msg)?,
         })
     }
     pub fn new_from_message(human_name: &'static str, function: u64, message: Message) -> Self {
         Self {
-            human_name: human_name.to_string(),
+            human_name: Cow::Borrowed(human_name),
             function,
             message,
         }
@@ -136,7 +137,7 @@ impl InvokeRequest {
     }
 
     pub fn human_name(&self) -> &str {
-        &self.human_name
+        self.human_name.as_ref()
     }
 
     pub fn get<T: Decodable>(&self) -> SdkResult<T> {
@@ -144,7 +145,39 @@ impl InvokeRequest {
     }
 }
 
-#[derive(BorshSerialize, BorshDeserialize, Debug)]
+impl BorshSerialize for InvokeRequest {
+    fn serialize<W: Write>(&self, writer: &mut W) -> std::io::Result<()> {
+        let name_bytes = self.human_name.as_ref().as_bytes();
+        let len: u32 = name_bytes
+            .len()
+            .try_into()
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "name too long"))?;
+        writer.write_all(&len.to_le_bytes())?;
+        writer.write_all(name_bytes)?;
+        self.function.serialize(writer)?;
+        self.message.serialize(writer)?;
+        Ok(())
+    }
+}
+
+impl BorshDeserialize for InvokeRequest {
+    fn deserialize_reader<R: Read>(reader: &mut R) -> std::io::Result<Self> {
+        let len = u32::deserialize_reader(reader)? as usize;
+        let mut buf = vec![0u8; len];
+        reader.read_exact(&mut buf)?;
+        let name = String::from_utf8(buf)
+            .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid utf-8"))?;
+        let function = u64::deserialize_reader(reader)?;
+        let message = Message::deserialize_reader(reader)?;
+        Ok(Self {
+            human_name: Cow::Owned(name),
+            function,
+            message,
+        })
+    }
+}
+
+#[derive(BorshSerialize, BorshDeserialize, Debug, Clone)]
 pub struct InvokeResponse {
     message: Message,
 }

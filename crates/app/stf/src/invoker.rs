@@ -13,8 +13,15 @@ use evolve_core::{
 };
 use evolve_server_core::{AccountsCodeStorage, Transaction};
 
-use crate::errors::{ERR_ACCOUNT_DOES_NOT_EXIST, ERR_CODE_NOT_FOUND, ERR_FUNDS_TO_SYSTEM_ACCOUNT};
+use crate::errors::{
+    ERR_ACCOUNT_DOES_NOT_EXIST, ERR_CALL_DEPTH_EXCEEDED, ERR_CODE_NOT_FOUND,
+    ERR_FUNDS_TO_SYSTEM_ACCOUNT,
+};
 use crate::runtime_api_impl;
+
+/// Maximum call depth to prevent stack overflow from deeply nested inter-account calls.
+/// This is a conservative limit - typical call chains are much shorter.
+const MAX_CALL_DEPTH: u16 = 64;
 
 /// Execution context for account operations and transaction processing.
 ///
@@ -30,6 +37,8 @@ pub struct Invoker<'s, 'a, S, A> {
     pub(crate) storage: &'a mut ExecutionState<'s, S>,
     pub(crate) gas_counter: &'a mut GasCounter,
     pub(crate) scope: ExecutionScope,
+    /// Current call depth for detecting excessive nesting.
+    pub(crate) call_depth: u16,
 }
 
 impl<S: ReadonlyKV, A: AccountsCodeStorage> EnvironmentQuery for Invoker<'_, '_, S, A> {
@@ -72,6 +81,11 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, '_, S, A
         data: &InvokeRequest,
         funds: Vec<FungibleAsset>,
     ) -> SdkResult<InvokeResponse> {
+        // Check call depth to prevent stack overflow
+        if self.call_depth >= MAX_CALL_DEPTH {
+            return Err(ERR_CALL_DEPTH_EXCEEDED);
+        }
+
         // Take checkpoint before ANY state changes
         let checkpoint = self.storage.checkpoint();
 
@@ -116,6 +130,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             storage,
             gas_counter,
             scope: ExecutionScope::EndBlock(block_height),
+            call_depth: 0,
         }
     }
 
@@ -133,6 +148,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             storage,
             gas_counter,
             scope: ExecutionScope::BeginBlock(block_height),
+            call_depth: 0,
         }
     }
 
@@ -150,6 +166,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             storage,
             gas_counter,
             scope: ExecutionScope::Query,
+            call_depth: 0,
         }
     }
 
@@ -167,6 +184,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             storage,
             gas_counter,
             scope: ExecutionScope::Transaction(tx.compute_identifier()),
+            call_depth: 0,
         }
     }
 
@@ -179,6 +197,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             storage: self.storage,
             gas_counter: self.gas_counter,
             scope: self.scope,
+            call_depth: self.call_depth.saturating_add(1),
         }
     }
 
@@ -195,6 +214,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             storage: self.storage,
             gas_counter: self.gas_counter,
             scope: self.scope,
+            call_depth: self.call_depth.saturating_add(1),
         }
     }
 
@@ -238,6 +258,8 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
         if funds.is_empty() {
             return Ok(());
         }
+
+        self.storage.reserve_writes(funds.len().saturating_mul(2));
 
         // Validate recipient is not a system account that shouldn't receive funds
         if to == STORAGE_ACCOUNT_ID
@@ -303,5 +325,10 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
         let mut env = self.branch_query(account_id);
         let code = T::default();
         handle(&code, &mut env)
+    }
+
+    /// Returns the current gas consumed.
+    pub fn gas_used(&self) -> u64 {
+        self.gas_counter.gas_used()
     }
 }

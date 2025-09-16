@@ -30,3 +30,4 @@ define_error!(
     0x13,
     "checkpoint does not belong to this execution state"
 );
+define_error!(ERR_CALL_DEPTH_EXCEEDED, 0x14, "maximum call depth exceeded");

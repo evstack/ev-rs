@@ -224,6 +224,93 @@ if let Err(failure) = result {
 4. **Save failing seeds**: Always capture seeds for reproduction
 5. **Run many iterations**: Property tests find edge cases with volume
 
+## Environment-Based Configuration
+
+Configure test iterations via environment variables:
+
+```rust
+fn get_proptest_cases() -> u32 {
+    if std::env::var("CI").is_ok() {
+        1000  // More cases in CI
+    } else if let Ok(cases) = std::env::var("EVOLVE_PROPTEST_CASES") {
+        cases.parse().unwrap_or(100)
+    } else {
+        100  // Default for local development
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(get_proptest_cases()))]
+    #[test]
+    fn my_property_test(input in arb_input()) {
+        // ...
+    }
+}
+```
+
+## Model-Based Testing
+
+Test implementation against a simplified model:
+
+```rust
+use std::collections::HashMap;
+
+struct TokenModel {
+    balances: HashMap<AccountId, u128>,
+    total_supply: u128,
+}
+
+impl TokenModel {
+    fn transfer(&mut self, from: AccountId, to: AccountId, amount: u128) -> bool {
+        if let Some(balance) = self.balances.get_mut(&from) {
+            if *balance >= amount {
+                *balance -= amount;
+                *self.balances.entry(to).or_insert(0) += amount;
+                return true;
+            }
+        }
+        false
+    }
+}
+
+proptest! {
+    #[test]
+    fn token_matches_model(ops in prop::collection::vec(arb_transfer_op(), 0..100)) {
+        let mut model = TokenModel::new();
+        let mut app = TestApp::new();
+
+        for op in ops {
+            let model_result = model.transfer(op.from, op.to, op.amount);
+            let impl_result = app.system_exec_as(op.from, |env| {
+                TokenRef::from(token).transfer(op.to, op.amount, env)
+            });
+
+            prop_assert_eq!(model_result, impl_result.is_ok());
+        }
+
+        // Verify final state matches
+        for (account, expected_balance) in model.balances {
+            let actual = app.system_exec_as(account, |env| {
+                TokenRef::from(token).get_balance(account, env)
+            }).unwrap();
+            prop_assert_eq!(actual, Some(expected_balance));
+        }
+    }
+}
+```
+
+## Token-Specific Invariants
+
+```rust
+let runner = PropertyTestRunner::new()
+    .with_token_invariants(asset_id, initial_supply);
+
+// This adds:
+// - BalanceConservation: sum(balances) == total_supply
+// - NonNegativeBalances: all balances >= 0
+// - TotalSupplyMatch: total_supply storage == sum(balances)
+```
+
 ## Integration with Simulator
 
 ```rust

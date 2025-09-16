@@ -69,6 +69,809 @@ pub struct Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx> {
     _phantoms: PhantomData<(Tx, Block)>,
 }
 
+#[cfg(test)]
+mod model_tests {
+    use super::*;
+    use borsh::{BorshDeserialize, BorshSerialize};
+    use evolve_core::runtime_api::ACCOUNT_IDENTIFIER_PREFIX;
+    use evolve_core::storage_api::{StorageSetRequest, STORAGE_ACCOUNT_ID};
+    use evolve_core::{ErrorCode, FungibleAsset, Message};
+    use evolve_server_core::{
+        AccountsCodeStorage, BeginBlocker as BeginBlockerTrait, Block as BlockTrait, EndBlocker,
+        PostTxExecution, Transaction, TxValidator, WritableKV,
+    };
+    use hashbrown::HashMap;
+    use proptest::prelude::*;
+
+    const DEFAULT_CASES: u32 = 32;
+    const CI_CASES: u32 = 8;
+    const MAX_TXS: usize = 16;
+
+    fn proptest_cases() -> u32 {
+        if let Ok(value) = std::env::var("EVOLVE_PROPTEST_CASES") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                if parsed > 0 {
+                    return parsed;
+                }
+            }
+        }
+        if std::env::var("EVOLVE_CI").is_ok() || std::env::var("CI").is_ok() {
+            return CI_CASES;
+        }
+        DEFAULT_CASES
+    }
+
+    fn proptest_config() -> proptest::test_runner::Config {
+        proptest::test_runner::Config {
+            cases: proptest_cases(),
+            ..Default::default()
+        }
+    }
+
+    #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
+    struct TestMsg {
+        key: Vec<u8>,
+        value: Vec<u8>,
+        fail_after_write: bool,
+    }
+
+    impl InvokableMessage for TestMsg {
+        const FUNCTION_IDENTIFIER: u64 = 1;
+        const FUNCTION_IDENTIFIER_NAME: &'static str = "test_exec";
+    }
+
+    #[derive(Clone, Debug)]
+    struct TestTx {
+        sender: AccountId,
+        recipient: AccountId,
+        request: InvokeRequest,
+        gas_limit: u64,
+        funds: Vec<FungibleAsset>,
+        fail_validate: bool,
+    }
+
+    impl Transaction for TestTx {
+        fn sender(&self) -> AccountId {
+            self.sender
+        }
+
+        fn recipient(&self) -> AccountId {
+            self.recipient
+        }
+
+        fn request(&self) -> &InvokeRequest {
+            &self.request
+        }
+
+        fn gas_limit(&self) -> u64 {
+            self.gas_limit
+        }
+
+        fn funds(&self) -> &[FungibleAsset] {
+            self.funds.as_slice()
+        }
+
+        fn compute_identifier(&self) -> [u8; 32] {
+            [0u8; 32]
+        }
+    }
+
+    #[derive(Clone)]
+    struct TestBlock {
+        height: u64,
+        txs: Vec<TestTx>,
+    }
+
+    impl BlockTrait<TestTx> for TestBlock {
+        fn height(&self) -> u64 {
+            self.height
+        }
+
+        fn txs(&self) -> &[TestTx] {
+            &self.txs
+        }
+    }
+
+    #[derive(Default)]
+    struct NoopBegin;
+
+    impl BeginBlockerTrait<TestBlock> for NoopBegin {
+        fn begin_block(&self, _block: &TestBlock, _env: &mut dyn Environment) {}
+    }
+
+    #[derive(Default)]
+    struct NoopEnd;
+
+    impl EndBlocker for NoopEnd {
+        fn end_block(&self, _env: &mut dyn Environment) {}
+    }
+
+    #[derive(Default)]
+    struct Validator;
+
+    impl TxValidator<TestTx> for Validator {
+        fn validate_tx(&self, tx: &TestTx, _env: &mut dyn Environment) -> SdkResult<()> {
+            if tx.fail_validate {
+                return Err(ErrorCode::new(100));
+            }
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct NoopPostTx;
+
+    impl PostTxExecution<TestTx> for NoopPostTx {
+        fn after_tx_executed(
+            _tx: &TestTx,
+            _gas_consumed: u64,
+            _tx_result: SdkResult<InvokeResponse>,
+            _env: &mut dyn Environment,
+        ) -> SdkResult<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct TestAccount;
+
+    impl AccountCode for TestAccount {
+        fn identifier(&self) -> String {
+            "test_account".to_string()
+        }
+
+        fn init(
+            &self,
+            _env: &mut dyn Environment,
+            _request: &InvokeRequest,
+        ) -> SdkResult<InvokeResponse> {
+            InvokeResponse::new(&())
+        }
+
+        fn execute(
+            &self,
+            env: &mut dyn Environment,
+            request: &InvokeRequest,
+        ) -> SdkResult<InvokeResponse> {
+            let msg: TestMsg = request.get()?;
+
+            let set = StorageSetRequest {
+                key: msg.key.clone(),
+                value: Message::from_bytes(msg.value.clone()),
+            };
+            env.do_exec(STORAGE_ACCOUNT_ID, &InvokeRequest::new(&set)?, vec![])?;
+
+            if msg.fail_after_write {
+                return Err(ErrorCode::new(200));
+            }
+
+            InvokeResponse::new(&())
+        }
+
+        fn query(
+            &self,
+            _env: &mut dyn EnvironmentQuery,
+            _request: &InvokeRequest,
+        ) -> SdkResult<InvokeResponse> {
+            InvokeResponse::new(&())
+        }
+    }
+
+    struct CodeStore {
+        codes: HashMap<String, Box<dyn AccountCode>>,
+    }
+
+    impl CodeStore {
+        fn new() -> Self {
+            Self {
+                codes: HashMap::new(),
+            }
+        }
+
+        fn add_code(&mut self, code: impl AccountCode + 'static) {
+            self.codes.insert(code.identifier(), Box::new(code));
+        }
+    }
+
+    impl AccountsCodeStorage for CodeStore {
+        fn with_code<F, R>(&self, identifier: &str, f: F) -> Result<R, ErrorCode>
+        where
+            F: FnOnce(Option<&dyn AccountCode>) -> R,
+        {
+            Ok(f(self.codes.get(identifier).map(|c| c.as_ref())))
+        }
+    }
+
+    #[derive(Default)]
+    struct InMemoryStorage {
+        data: HashMap<Vec<u8>, Vec<u8>>,
+    }
+
+    impl ReadonlyKV for InMemoryStorage {
+        fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
+            Ok(self.data.get(key).cloned())
+        }
+    }
+
+    impl evolve_server_core::WritableKV for InMemoryStorage {
+        fn apply_changes(
+            &mut self,
+            changes: Vec<evolve_server_core::StateChange>,
+        ) -> Result<(), ErrorCode> {
+            for change in changes {
+                match change {
+                    evolve_server_core::StateChange::Set { key, value } => {
+                        self.data.insert(key, value);
+                    }
+                    evolve_server_core::StateChange::Remove { key } => {
+                        self.data.remove(&key);
+                    }
+                }
+            }
+            Ok(())
+        }
+    }
+
+    fn account_storage_key(account: AccountId, key: &[u8]) -> Vec<u8> {
+        let mut out = account.as_bytes();
+        out.extend_from_slice(key);
+        out
+    }
+
+    fn account_code_key(account: AccountId) -> Vec<u8> {
+        let mut out = vec![ACCOUNT_IDENTIFIER_PREFIX];
+        out.extend_from_slice(&account.as_bytes());
+        out
+    }
+
+    proptest! {
+        #![proptest_config(proptest_config())]
+
+        #[test]
+        fn prop_apply_block_failure_invariance(
+            txs in proptest::collection::vec(
+                (
+                    proptest::collection::vec(any::<u8>(), 0..=16),
+                    proptest::collection::vec(any::<u8>(), 0..=32),
+                    0u64..=200,
+                    any::<bool>(),
+                    any::<bool>(),
+                ),
+                0..=MAX_TXS
+            )
+        ) {
+            let gas_service = AccountId::new(10);
+            let test_account = AccountId::new(100);
+            let sender = AccountId::new(200);
+
+            let mut storage = InMemoryStorage::default();
+            let mut codes = CodeStore::new();
+            codes.add_code(TestAccount);
+
+            let gas_config = StorageGasConfig {
+                storage_get_charge: 3,
+                storage_set_charge: 3,
+                storage_remove_charge: 3,
+            };
+            let gas_key = {
+                let mut key = gas_service.as_bytes();
+                key.push(0);
+                key
+            };
+            storage.data.insert(
+                gas_key,
+                Message::new(&gas_config).unwrap().into_bytes().unwrap(),
+            );
+
+            let code_id = "test_account".to_string();
+            storage.data.insert(
+                account_code_key(test_account),
+                Message::new(&code_id).unwrap().into_bytes().unwrap(),
+            );
+
+            let stf = Stf::new(
+                NoopBegin,
+                NoopEnd,
+                Validator,
+                NoopPostTx,
+                SystemAccounts::new(gas_service),
+            );
+
+            let mut model: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
+            let mut block_txs: Vec<TestTx> = Vec::new();
+
+            for (key, value, gas_limit, fail_validate, fail_after_write) in txs {
+                let msg = TestMsg {
+                    key: key.clone(),
+                    value: value.clone(),
+                    fail_after_write,
+                };
+                let req = InvokeRequest::new(&msg).unwrap();
+                block_txs.push(TestTx {
+                    sender,
+                    recipient: test_account,
+                    request: req,
+                    gas_limit,
+                    funds: vec![],
+                    fail_validate,
+                });
+
+                let storage_key = account_storage_key(test_account, &key);
+                let gas_needed = gas_config.storage_get_charge.saturating_mul(
+                    (storage_key.len() as u64)
+                        .saturating_add(1)
+                        .saturating_add(value.len() as u64)
+                        .saturating_add(1),
+                );
+                let out_of_gas = gas_needed > gas_limit;
+
+                if !fail_validate && !fail_after_write && !out_of_gas {
+                    model.insert(storage_key, value);
+                }
+            }
+
+            let block = TestBlock { height: 1, txs: block_txs };
+            let (result, state) = stf.apply_block(&storage, &codes, &block);
+            let changes = state.into_changes().unwrap();
+            storage.apply_changes(changes).unwrap();
+
+            for (idx, tx_result) in result.tx_results.iter().enumerate() {
+                let tx = &block.txs[idx];
+                let msg: TestMsg = tx.request.get().unwrap();
+                let storage_key = account_storage_key(tx.recipient, &msg.key);
+                let gas_needed = gas_config.storage_get_charge.saturating_mul(
+                    (storage_key.len() as u64)
+                        .saturating_add(1)
+                        .saturating_add(msg.value.len() as u64)
+                        .saturating_add(1),
+                );
+                let out_of_gas = gas_needed > tx.gas_limit;
+
+                if tx.fail_validate {
+                    prop_assert!(tx_result.response.is_err());
+                } else if out_of_gas {
+                    match &tx_result.response {
+                        Ok(_) => prop_assert!(false, "expected out of gas"),
+                        Err(err) => prop_assert_eq!(*err, evolve_gas::account::ERR_OUT_OF_GAS),
+                    }
+                } else if msg.fail_after_write {
+                    prop_assert!(tx_result.response.is_err());
+                } else {
+                    prop_assert!(tx_result.response.is_ok());
+                }
+            }
+
+            for (key, value) in model {
+                let actual = storage.get(&key).unwrap();
+                prop_assert_eq!(actual, Some(value));
+            }
+        }
+
+        /// Test determinism: same block on same state produces identical results
+        #[test]
+        fn prop_determinism(
+            txs in proptest::collection::vec(
+                (
+                    proptest::collection::vec(any::<u8>(), 1..=8),
+                    proptest::collection::vec(any::<u8>(), 1..=16),
+                ),
+                1..=8
+            )
+        ) {
+            let gas_service = AccountId::new(10);
+            let test_account = AccountId::new(100);
+            let sender = AccountId::new(200);
+
+            // Setup storage with gas config and account code
+            let mut storage1 = InMemoryStorage::default();
+            let gas_config = StorageGasConfig {
+                storage_get_charge: 1,
+                storage_set_charge: 1,
+                storage_remove_charge: 1,
+            };
+            let gas_key = {
+                let mut key = gas_service.as_bytes();
+                key.push(0);
+                key
+            };
+            storage1.data.insert(
+                gas_key.clone(),
+                Message::new(&gas_config).unwrap().into_bytes().unwrap(),
+            );
+            let code_id = "test_account".to_string();
+            storage1.data.insert(
+                account_code_key(test_account),
+                Message::new(&code_id).unwrap().into_bytes().unwrap(),
+            );
+
+            // Clone storage for second run
+            let storage2 = InMemoryStorage {
+                data: storage1.data.clone(),
+            };
+
+            let mut codes = CodeStore::new();
+            codes.add_code(TestAccount);
+
+            let stf = Stf::new(
+                NoopBegin,
+                NoopEnd,
+                Validator,
+                NoopPostTx,
+                SystemAccounts::new(gas_service),
+            );
+
+            // Build block
+            let block_txs: Vec<TestTx> = txs.iter().map(|(key, value)| {
+                let msg = TestMsg {
+                    key: key.clone(),
+                    value: value.clone(),
+                    fail_after_write: false,
+                };
+                TestTx {
+                    sender,
+                    recipient: test_account,
+                    request: InvokeRequest::new(&msg).unwrap(),
+                    gas_limit: 10000,
+                    funds: vec![],
+                    fail_validate: false,
+                }
+            }).collect();
+
+            let block = TestBlock { height: 1, txs: block_txs };
+
+            // Run 1
+            let (result1, state1) = stf.apply_block(&storage1, &codes, &block);
+            let changes1 = state1.into_changes().unwrap();
+
+            // Run 2
+            let (result2, state2) = stf.apply_block(&storage2, &codes, &block);
+            let changes2 = state2.into_changes().unwrap();
+
+            // Verify identical results
+            prop_assert_eq!(result1.tx_results.len(), result2.tx_results.len());
+            for (r1, r2) in result1.tx_results.iter().zip(result2.tx_results.iter()) {
+                prop_assert_eq!(r1.gas_used, r2.gas_used);
+                prop_assert_eq!(r1.response.is_ok(), r2.response.is_ok());
+                prop_assert_eq!(r1.events.len(), r2.events.len());
+            }
+
+            // Sort changes for comparison (HashMap iteration order is non-deterministic)
+            let mut sorted1: Vec<_> = changes1.iter().map(|c| match c {
+                evolve_server_core::StateChange::Set { key, value } => (key.clone(), Some(value.clone())),
+                evolve_server_core::StateChange::Remove { key } => (key.clone(), None),
+            }).collect();
+            sorted1.sort_by(|a, b| a.0.cmp(&b.0));
+
+            let mut sorted2: Vec<_> = changes2.iter().map(|c| match c {
+                evolve_server_core::StateChange::Set { key, value } => (key.clone(), Some(value.clone())),
+                evolve_server_core::StateChange::Remove { key } => (key.clone(), None),
+            }).collect();
+            sorted2.sort_by(|a, b| a.0.cmp(&b.0));
+
+            prop_assert_eq!(sorted1, sorted2, "State changes must be identical");
+        }
+    }
+
+    // ========== Non-proptest tests for specific scenarios ==========
+
+    /// Test that call depth limit is enforced
+    #[test]
+    fn test_call_depth_exhaustion() {
+        use crate::errors::ERR_CALL_DEPTH_EXCEEDED;
+
+        let gas_service = AccountId::new(10);
+        let recursive_account = AccountId::new(100);
+        let sender = AccountId::new(200);
+
+        let mut storage = InMemoryStorage::default();
+        let gas_config = StorageGasConfig {
+            storage_get_charge: 1,
+            storage_set_charge: 1,
+            storage_remove_charge: 1,
+        };
+        let gas_key = {
+            let mut key = gas_service.as_bytes();
+            key.push(0);
+            key
+        };
+        storage.data.insert(
+            gas_key,
+            Message::new(&gas_config).unwrap().into_bytes().unwrap(),
+        );
+
+        // RecursiveAccount calls itself until depth limit
+        struct RecursiveAccount;
+
+        #[derive(Clone, BorshSerialize, BorshDeserialize)]
+        struct RecurseMsg {
+            depth: u16,
+        }
+
+        impl InvokableMessage for RecurseMsg {
+            const FUNCTION_IDENTIFIER: u64 = 1;
+            const FUNCTION_IDENTIFIER_NAME: &'static str = "recurse";
+        }
+
+        impl AccountCode for RecursiveAccount {
+            fn identifier(&self) -> String {
+                "recursive".to_string()
+            }
+
+            fn init(
+                &self,
+                _env: &mut dyn Environment,
+                _req: &InvokeRequest,
+            ) -> SdkResult<InvokeResponse> {
+                InvokeResponse::new(&())
+            }
+
+            fn execute(
+                &self,
+                env: &mut dyn Environment,
+                req: &InvokeRequest,
+            ) -> SdkResult<InvokeResponse> {
+                let msg: RecurseMsg = req.get()?;
+                // Call self recursively
+                let next_msg = RecurseMsg {
+                    depth: msg.depth + 1,
+                };
+                env.do_exec(env.whoami(), &InvokeRequest::new(&next_msg)?, vec![])?;
+                InvokeResponse::new(&msg.depth)
+            }
+
+            fn query(
+                &self,
+                _env: &mut dyn EnvironmentQuery,
+                _req: &InvokeRequest,
+            ) -> SdkResult<InvokeResponse> {
+                InvokeResponse::new(&())
+            }
+        }
+
+        let code_id = "recursive".to_string();
+        storage.data.insert(
+            account_code_key(recursive_account),
+            Message::new(&code_id).unwrap().into_bytes().unwrap(),
+        );
+
+        let mut codes = CodeStore::new();
+        codes.add_code(RecursiveAccount);
+
+        let stf = Stf::new(
+            NoopBegin,
+            NoopEnd,
+            Validator,
+            NoopPostTx,
+            SystemAccounts::new(gas_service),
+        );
+
+        let msg = RecurseMsg { depth: 0 };
+        let tx = TestTx {
+            sender,
+            recipient: recursive_account,
+            request: InvokeRequest::new(&msg).unwrap(),
+            gas_limit: 1_000_000, // High gas limit to ensure we hit depth, not gas
+            funds: vec![],
+            fail_validate: false,
+        };
+
+        let block = TestBlock {
+            height: 1,
+            txs: vec![tx],
+        };
+        let (result, _state) = stf.apply_block(&storage, &codes, &block);
+
+        assert_eq!(result.tx_results.len(), 1);
+        let tx_result = &result.tx_results[0];
+        assert!(tx_result.response.is_err(), "Expected call depth error");
+        assert_eq!(
+            tx_result.response.as_ref().unwrap_err(),
+            &ERR_CALL_DEPTH_EXCEEDED,
+            "Expected ERR_CALL_DEPTH_EXCEEDED"
+        );
+    }
+
+    /// Test that post-tx handler can reject transactions
+    #[test]
+    fn test_post_tx_handler_rejection() {
+        let gas_service = AccountId::new(10);
+        let test_account = AccountId::new(100);
+
+        let mut storage = InMemoryStorage::default();
+        let gas_config = StorageGasConfig {
+            storage_get_charge: 10, // Higher charge to make gas difference more visible
+            storage_set_charge: 10,
+            storage_remove_charge: 10,
+        };
+        let gas_key = {
+            let mut key = gas_service.as_bytes();
+            key.push(0);
+            key
+        };
+        storage.data.insert(
+            gas_key,
+            Message::new(&gas_config).unwrap().into_bytes().unwrap(),
+        );
+        let code_id = "test_account".to_string();
+        storage.data.insert(
+            account_code_key(test_account),
+            Message::new(&code_id).unwrap().into_bytes().unwrap(),
+        );
+
+        let mut codes = CodeStore::new();
+        codes.add_code(TestAccount);
+
+        // Post-tx handler that rejects based on a marker in the tx
+        struct RejectMarkedPostTx;
+        const ERR_REJECTED_BY_POST_TX: ErrorCode = ErrorCode::new(999);
+
+        impl PostTxExecution<TestTx> for RejectMarkedPostTx {
+            fn after_tx_executed(
+                tx: &TestTx,
+                _gas_consumed: u64,
+                tx_result: SdkResult<InvokeResponse>,
+                _env: &mut dyn Environment,
+            ) -> SdkResult<()> {
+                // Reject successful txs where sender has a specific pattern
+                // (Using sender ID as a marker for simplicity)
+                if tx_result.is_ok() && tx.sender == AccountId::new(201) {
+                    return Err(ERR_REJECTED_BY_POST_TX);
+                }
+                Ok(())
+            }
+        }
+
+        let stf = Stf::new(
+            NoopBegin,
+            NoopEnd,
+            Validator,
+            RejectMarkedPostTx,
+            SystemAccounts::new(gas_service),
+        );
+
+        let msg = TestMsg {
+            key: vec![1],
+            value: vec![1],
+            fail_after_write: false,
+        };
+
+        // Tx from sender 200 should succeed
+        let tx_normal = TestTx {
+            sender: AccountId::new(200),
+            recipient: test_account,
+            request: InvokeRequest::new(&msg).unwrap(),
+            gas_limit: 10000,
+            funds: vec![],
+            fail_validate: false,
+        };
+
+        // Tx from sender 201 should be rejected by post-tx handler
+        let tx_marked = TestTx {
+            sender: AccountId::new(201),
+            recipient: test_account,
+            request: InvokeRequest::new(&msg).unwrap(),
+            gas_limit: 10000,
+            funds: vec![],
+            fail_validate: false,
+        };
+
+        let block = TestBlock {
+            height: 1,
+            txs: vec![tx_normal, tx_marked],
+        };
+        let (result, _state) = stf.apply_block(&storage, &codes, &block);
+
+        assert_eq!(result.tx_results.len(), 2);
+
+        // Normal tx should succeed
+        assert!(
+            result.tx_results[0].response.is_ok(),
+            "Normal tx should succeed"
+        );
+
+        // Marked tx should be rejected by post-tx handler
+        assert!(
+            result.tx_results[1].response.is_err(),
+            "Marked tx should be rejected by post-tx handler"
+        );
+        assert_eq!(
+            result.tx_results[1].response.as_ref().unwrap_err(),
+            &ERR_REJECTED_BY_POST_TX,
+            "Expected ERR_REJECTED_BY_POST_TX from post-tx handler"
+        );
+    }
+
+    /// Test that state changes are collected correctly (verifies into_changes works)
+    #[test]
+    fn test_state_changes_collection() {
+        let gas_service = AccountId::new(10);
+        let test_account = AccountId::new(100);
+        let sender = AccountId::new(200);
+
+        let mut storage = InMemoryStorage::default();
+        let gas_config = StorageGasConfig {
+            storage_get_charge: 1,
+            storage_set_charge: 1,
+            storage_remove_charge: 1,
+        };
+        let gas_key = {
+            let mut key = gas_service.as_bytes();
+            key.push(0);
+            key
+        };
+        storage.data.insert(
+            gas_key,
+            Message::new(&gas_config).unwrap().into_bytes().unwrap(),
+        );
+        let code_id = "test_account".to_string();
+        storage.data.insert(
+            account_code_key(test_account),
+            Message::new(&code_id).unwrap().into_bytes().unwrap(),
+        );
+
+        let mut codes = CodeStore::new();
+        codes.add_code(TestAccount);
+
+        let stf = Stf::new(
+            NoopBegin,
+            NoopEnd,
+            Validator,
+            NoopPostTx,
+            SystemAccounts::new(gas_service),
+        );
+
+        // Create 3 transactions writing to different keys
+        let txs: Vec<TestTx> = (0..3)
+            .map(|i| {
+                let msg = TestMsg {
+                    key: vec![i as u8],
+                    value: vec![i as u8 + 100],
+                    fail_after_write: false,
+                };
+                TestTx {
+                    sender,
+                    recipient: test_account,
+                    request: InvokeRequest::new(&msg).unwrap(),
+                    gas_limit: 10000,
+                    funds: vec![],
+                    fail_validate: false,
+                }
+            })
+            .collect();
+
+        let block = TestBlock { height: 1, txs };
+        let (result, state) = stf.apply_block(&storage, &codes, &block);
+
+        // All txs should succeed
+        for tx_result in &result.tx_results {
+            assert!(tx_result.response.is_ok());
+        }
+
+        // Collect and verify changes
+        let changes = state.into_changes().unwrap();
+
+        // Should have 3 state changes (one per tx)
+        let set_changes: Vec<_> = changes
+            .iter()
+            .filter_map(|c| match c {
+                evolve_server_core::StateChange::Set { key, value: _ } => Some(key.clone()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(set_changes.len(), 3, "Expected 3 state changes");
+
+        // Verify each expected key exists (order may vary due to HashMap)
+        for i in 0..3u8 {
+            let expected_key = account_storage_key(test_account, &[i]);
+            assert!(
+                set_changes.contains(&expected_key),
+                "Expected to find state change for key {}",
+                i
+            );
+        }
+    }
+}
 #[derive(Clone, Copy, Debug)]
 pub struct SystemAccounts {
     pub gas_service: AccountId,
@@ -408,16 +1211,26 @@ where
 
         let response = ctx.do_exec(tx.recipient(), tx.request(), tx.funds().to_vec());
 
+        // Run post-tx handler (e.g., for fee collection, logging, etc.)
+        // The handler can observe the result and make additional state changes
+        let post_tx_result =
+            PostTx::after_tx_executed(tx, ctx.gas_used(), response.clone(), &mut ctx);
+
         drop(ctx);
         let gas_used = gas_counter.gas_used();
         let events = state.pop_events();
 
-        // TODO do post tx validation
+        // If post-tx handler fails, the tx response becomes the error
+        // This allows the handler to reject transactions after execution
+        let final_response = match post_tx_result {
+            Ok(()) => response,
+            Err(post_tx_err) => Err(post_tx_err),
+        };
 
         TxResult {
             events,
             gas_used,
-            response,
+            response: final_response,
         }
     }
 

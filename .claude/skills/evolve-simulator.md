@@ -165,6 +165,70 @@ fn property_test() {
 }
 ```
 
+## SimStorageAdapter
+
+Bridge simulator storage to STF's `ReadonlyKV` interface:
+
+```rust
+use evolve_simulator::SimStorageAdapter;
+
+let adapter = SimStorageAdapter::new(sim.storage());
+let (result, state) = stf.apply_block(&adapter, &codes, &block);
+
+// Apply changes back to simulator
+sim.apply_state_changes(state.into_changes()?)?;
+```
+
+## Preset Configurations
+
+```rust
+// Normal operation (default)
+let config = SimConfig::default();
+
+// Stress testing with fault injection
+let config = SimConfig::stress_test();
+// - read_fault_prob: 0.05
+// - write_fault_prob: 0.05
+// - stop_on_error: false
+
+// Replay mode (deterministic, no faults)
+let config = SimConfig::replay();
+// - read_fault_prob: 0.0
+// - write_fault_prob: 0.0
+```
+
+## Storage Statistics
+
+```rust
+let stats = sim.storage().stats();
+println!("Reads: {}", stats.reads);
+println!("Writes: {}", stats.writes);
+println!("Read faults: {}", stats.read_faults);
+println!("Write faults: {}", stats.write_faults);
+println!("Bytes read: {}", stats.bytes_read);
+println!("Bytes written: {}", stats.bytes_written);
+```
+
+## Integration with SimTestApp
+
+The recommended way to use the simulator is through `SimTestApp`:
+
+```rust
+use testapp::SimTestApp;
+use evolve_simulator::SimConfig;
+
+let mut app = SimTestApp::with_config(SimConfig::default(), 42);
+
+// Access simulator directly when needed
+let height = app.simulator().time().block_height();
+let random = app.simulator_mut().rng().gen_range(0..100);
+
+// Run blocks with generated transactions
+let results = app.run_blocks_with(100, |height, sim| {
+    vec![generate_tx(height, sim)]
+});
+```
+
 ## Files
 
 - `crates/testing/simulator/src/lib.rs` - Main Simulator struct

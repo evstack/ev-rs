@@ -232,6 +232,79 @@ mod tests {
     use super::*;
     use evolve_core::Message;
     use evolve_gas::account::{StorageGasConfig, ERR_OUT_OF_GAS};
+    use proptest::prelude::*;
+
+    const MAX_OPS: usize = 64;
+    const DEFAULT_CASES: u32 = 128;
+    const CI_CASES: u32 = 32;
+
+    fn proptest_cases() -> u32 {
+        if let Ok(value) = std::env::var("EVOLVE_PROPTEST_CASES") {
+            if let Ok(parsed) = value.parse::<u32>() {
+                if parsed > 0 {
+                    return parsed;
+                }
+            }
+        }
+
+        if std::env::var("EVOLVE_CI").is_ok() || std::env::var("CI").is_ok() {
+            return CI_CASES;
+        }
+
+        DEFAULT_CASES
+    }
+
+    fn proptest_config() -> proptest::test_runner::Config {
+        proptest::test_runner::Config {
+            cases: proptest_cases(),
+            ..Default::default()
+        }
+    }
+
+    #[derive(Clone, Debug)]
+    enum Op {
+        Consume(u64),
+        Get(Vec<u8>, Option<Vec<u8>>),
+        Set(Vec<u8>, Vec<u8>),
+        Remove(Vec<u8>),
+    }
+
+    fn op_strategy() -> impl Strategy<Value = Vec<Op>> {
+        let key = proptest::collection::vec(any::<u8>(), 0..=16);
+        let value = proptest::collection::vec(any::<u8>(), 0..=16);
+        let opt_value = prop_oneof![Just(None), value.clone().prop_map(Some)];
+        let op = prop_oneof![
+            3 => any::<u64>().prop_map(Op::Consume),
+            3 => (key.clone(), opt_value).prop_map(|(k, v)| Op::Get(k, v)),
+            3 => (key.clone(), value.clone()).prop_map(|(k, v)| Op::Set(k, v)),
+            2 => key.prop_map(Op::Remove),
+        ];
+
+        proptest::collection::vec(op, 0..=MAX_OPS)
+    }
+
+    fn get_gas(config: &StorageGasConfig, key: &[u8], value: &Option<Vec<u8>>) -> u64 {
+        let key_len = key.len() as u64;
+        let value_len = match value {
+            None => 1u64,
+            Some(value) => (value.len() as u64).saturating_add(1),
+        };
+        let total_size = key_len.saturating_add(1).saturating_add(value_len);
+        config.storage_get_charge.saturating_mul(total_size)
+    }
+
+    fn set_gas(config: &StorageGasConfig, key: &[u8], value: &[u8]) -> u64 {
+        let total_size = (key.len() as u64)
+            .saturating_add(1)
+            .saturating_add(value.len() as u64)
+            .saturating_add(1);
+        config.storage_get_charge.saturating_mul(total_size)
+    }
+
+    fn remove_gas(config: &StorageGasConfig, key: &[u8]) -> u64 {
+        let total_size = (key.len() as u64).saturating_add(1);
+        config.storage_get_charge.saturating_mul(total_size)
+    }
 
     #[test]
     fn test_infinite_mode() {
@@ -421,5 +494,83 @@ mod tests {
         // key=2 bytes: (2+1) = 3 * 2 = 6
         gc.consume_remove_gas(b"hi").unwrap();
         assert_eq!(gc.gas_used(), 50); // 44 + 6
+    }
+
+    proptest! {
+        #![proptest_config(proptest_config())]
+
+        #[test]
+        fn prop_gas_counter_model(
+            gas_limit in 0u64..=2_000,
+            storage_get_charge in 0u64..=50,
+            storage_set_charge in 0u64..=50,
+            storage_remove_charge in 0u64..=50,
+            ops in op_strategy(),
+        ) {
+            let config = StorageGasConfig {
+                storage_get_charge,
+                storage_set_charge,
+                storage_remove_charge,
+            };
+            let mut gc = GasCounter::finite(gas_limit, config.clone());
+            let mut expected_used = 0u64;
+
+            for op in ops {
+                match op {
+                    Op::Consume(gas) => {
+                        let expected_next = expected_used.saturating_add(gas);
+                        let result = gc.consume_gas(gas);
+                        if expected_next > gas_limit {
+                            prop_assert_eq!(result.unwrap_err(), ERR_OUT_OF_GAS);
+                            prop_assert_eq!(gc.gas_used(), expected_used);
+                        } else {
+                            result.unwrap();
+                            expected_used = expected_next;
+                            prop_assert_eq!(gc.gas_used(), expected_used);
+                        }
+                    }
+                    Op::Get(key, value) => {
+                        let gas = get_gas(&config, &key, &value);
+                        let expected_next = expected_used.saturating_add(gas);
+                        let msg = value.clone().map(Message::from_bytes);
+                        let result = gc.consume_get_gas(&key, &msg);
+                        if expected_next > gas_limit {
+                            prop_assert_eq!(result.unwrap_err(), ERR_OUT_OF_GAS);
+                            prop_assert_eq!(gc.gas_used(), expected_used);
+                        } else {
+                            result.unwrap();
+                            expected_used = expected_next;
+                            prop_assert_eq!(gc.gas_used(), expected_used);
+                        }
+                    }
+                    Op::Set(key, value) => {
+                        let gas = set_gas(&config, &key, &value);
+                        let expected_next = expected_used.saturating_add(gas);
+                        let result = gc.consume_set_gas(&key, &Message::from_bytes(value));
+                        if expected_next > gas_limit {
+                            prop_assert_eq!(result.unwrap_err(), ERR_OUT_OF_GAS);
+                            prop_assert_eq!(gc.gas_used(), expected_used);
+                        } else {
+                            result.unwrap();
+                            expected_used = expected_next;
+                            prop_assert_eq!(gc.gas_used(), expected_used);
+                        }
+                    }
+                    Op::Remove(key) => {
+                        let gas = remove_gas(&config, &key);
+                        let expected_next = expected_used.saturating_add(gas);
+                        let result = gc.consume_remove_gas(&key);
+                        if expected_next > gas_limit {
+                            prop_assert_eq!(result.unwrap_err(), ERR_OUT_OF_GAS);
+                            prop_assert_eq!(gc.gas_used(), expected_used);
+                        } else {
+                            result.unwrap();
+                            expected_used = expected_next;
+                            prop_assert_eq!(gc.gas_used(), expected_used);
+                        }
+                    }
+                }
+            }
+        }
     }
 }

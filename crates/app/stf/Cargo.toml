@@ -13,10 +13,12 @@ evolve_gas.workspace = true
 evolve_server_core.workspace = true
 evolve_unique.workspace = true
 hashbrown = "0.15"
+ahash = { version = "0.8.11", optional = true }
 linkme = {version = "0.3", default-features = false, optional = true}
 
 [dev-dependencies]
 proptest = "1.4"
+borsh = { workspace = true, features = ["derive"] }
 
 [lints]
 workspace = true
@@ -24,4 +26,5 @@ workspace = true
 [features]
 default = []
 error-decode = ["linkme", "evolve_core/error-decode", "evolve_gas/error-decode"]
+fast-overlay-hash = ["ahash"]
 testing = []

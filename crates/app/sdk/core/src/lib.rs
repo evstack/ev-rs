@@ -95,7 +95,7 @@ pub trait AccountCode: Send + Sync {
     ) -> SdkResult<InvokeResponse>;
 }
 
-pub trait ReadonlyKV: Send + Sync {
+pub trait ReadonlyKV {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode>;
 }
 

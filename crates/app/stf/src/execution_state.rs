@@ -5,8 +5,14 @@ use crate::errors::{
 use evolve_core::events_api::Event;
 use evolve_core::{ErrorCode, Message, ReadonlyKV, SdkResult};
 use evolve_server_core::StateChange as CoreStateChange;
+use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::cell::Cell;
+
+#[cfg(feature = "fast-overlay-hash")]
+type OverlayMap<K, V> = HashMap<K, V, ahash::RandomState>;
+#[cfg(not(feature = "fast-overlay-hash"))]
+type OverlayMap<K, V> = HashMap<K, V>;
 
 // Security limits to prevent memory exhaustion attacks
 const MAX_OVERLAY_ENTRIES: usize = 100_000; // Maximum number of keys in overlay
@@ -66,7 +72,7 @@ enum StateChange {
 impl StateChange {
     /// Undo this change by reverting the overlay to its prior state.
     /// Uses delta information to efficiently restore previous state.
-    fn revert(self, overlay: &mut HashMap<Vec<u8>, Option<Message>>) {
+    fn revert(self, overlay: &mut OverlayMap<Vec<u8>, Option<Message>>) {
         match self {
             StateChange::Set {
                 key,
@@ -123,7 +129,7 @@ pub struct ExecutionState<'a, S> {
     /// The underlying store to fall back to.
     pub(crate) base_storage: &'a S,
     /// The in-memory overlay that records changes.
-    overlay: HashMap<Vec<u8>, Option<Message>>,
+    overlay: OverlayMap<Vec<u8>, Option<Message>>,
     /// The log of state changes (undo log) used for checkpoint restore.
     undo_log: Vec<StateChange>,
     /// Events emitted.
@@ -140,79 +146,74 @@ const INITIAL_OVERLAY_CAPACITY: usize = 256;
 const INITIAL_UNDO_LOG_CAPACITY: usize = 128;
 const INITIAL_EVENTS_CAPACITY: usize = 64;
 
-#[derive(Debug)]
-struct ExecutionMetricsCounter {
-    storage_reads: AtomicU64,
-    storage_writes: AtomicU64,
-    events_emitted: AtomicU64,
-    checkpoints: AtomicU64,
-    restores: AtomicU64,
-    overlay_len_max: AtomicUsize,
-    undo_log_len_max: AtomicUsize,
+fn overlay_with_capacity(capacity: usize) -> OverlayMap<Vec<u8>, Option<Message>> {
+    #[cfg(feature = "fast-overlay-hash")]
+    {
+        HashMap::with_capacity_and_hasher(capacity, ahash::RandomState::new())
+    }
+    #[cfg(not(feature = "fast-overlay-hash"))]
+    {
+        HashMap::with_capacity(capacity)
+    }
 }
 
-impl Default for ExecutionMetricsCounter {
-    fn default() -> Self {
-        Self {
-            storage_reads: AtomicU64::new(0),
-            storage_writes: AtomicU64::new(0),
-            events_emitted: AtomicU64::new(0),
-            checkpoints: AtomicU64::new(0),
-            restores: AtomicU64::new(0),
-            overlay_len_max: AtomicUsize::new(0),
-            undo_log_len_max: AtomicUsize::new(0),
-        }
-    }
+/// Metrics counter for execution state operations.
+/// Uses Cell for interior mutability - safe because STF execution is single-threaded.
+#[derive(Debug, Default)]
+struct ExecutionMetricsCounter {
+    storage_reads: Cell<u64>,
+    storage_writes: Cell<u64>,
+    events_emitted: Cell<u64>,
+    checkpoints: Cell<u64>,
+    restores: Cell<u64>,
+    overlay_len_max: Cell<usize>,
+    undo_log_len_max: Cell<usize>,
 }
 
 impl ExecutionMetricsCounter {
     fn snapshot(&self) -> ExecutionMetrics {
         ExecutionMetrics {
-            storage_reads: self.storage_reads.load(Ordering::Relaxed),
-            storage_writes: self.storage_writes.load(Ordering::Relaxed),
-            events_emitted: self.events_emitted.load(Ordering::Relaxed),
-            checkpoints: self.checkpoints.load(Ordering::Relaxed),
-            restores: self.restores.load(Ordering::Relaxed),
-            overlay_len_max: self.overlay_len_max.load(Ordering::Relaxed),
-            undo_log_len_max: self.undo_log_len_max.load(Ordering::Relaxed),
+            storage_reads: self.storage_reads.get(),
+            storage_writes: self.storage_writes.get(),
+            events_emitted: self.events_emitted.get(),
+            checkpoints: self.checkpoints.get(),
+            restores: self.restores.get(),
+            overlay_len_max: self.overlay_len_max.get(),
+            undo_log_len_max: self.undo_log_len_max.get(),
         }
     }
 
     fn inc_storage_reads(&self) {
-        self.storage_reads.fetch_add(1, Ordering::Relaxed);
+        self.storage_reads.set(self.storage_reads.get() + 1);
     }
 
     fn inc_storage_writes(&self) {
-        self.storage_writes.fetch_add(1, Ordering::Relaxed);
+        self.storage_writes.set(self.storage_writes.get() + 1);
     }
 
     fn inc_events(&self) {
-        self.events_emitted.fetch_add(1, Ordering::Relaxed);
+        self.events_emitted.set(self.events_emitted.get() + 1);
     }
 
     fn inc_checkpoints(&self) {
-        self.checkpoints.fetch_add(1, Ordering::Relaxed);
+        self.checkpoints.set(self.checkpoints.get() + 1);
     }
 
     fn inc_restores(&self) {
-        self.restores.fetch_add(1, Ordering::Relaxed);
+        self.restores.set(self.restores.get() + 1);
     }
 
     fn update_overlay_max(&self, value: usize) {
-        update_max_usize(&self.overlay_len_max, value);
+        let current = self.overlay_len_max.get();
+        if value > current {
+            self.overlay_len_max.set(value);
+        }
     }
 
     fn update_undo_log_max(&self, value: usize) {
-        update_max_usize(&self.undo_log_len_max, value);
-    }
-}
-
-fn update_max_usize(target: &AtomicUsize, value: usize) {
-    let mut current = target.load(Ordering::Relaxed);
-    while value > current {
-        match target.compare_exchange_weak(current, value, Ordering::Relaxed, Ordering::Relaxed) {
-            Ok(_) => return,
-            Err(previous) => current = previous,
+        let current = self.undo_log_len_max.get();
+        if value > current {
+            self.undo_log_len_max.set(value);
         }
     }
 }
@@ -221,7 +222,7 @@ impl<'a, S> ExecutionState<'a, S> {
     pub fn new(base_storage: &'a S) -> Self {
         Self {
             base_storage,
-            overlay: HashMap::with_capacity(INITIAL_OVERLAY_CAPACITY),
+            overlay: overlay_with_capacity(INITIAL_OVERLAY_CAPACITY),
             undo_log: Vec::with_capacity(INITIAL_UNDO_LOG_CAPACITY),
             events: Vec::with_capacity(INITIAL_EVENTS_CAPACITY),
             unique_objects: 0,
@@ -241,13 +242,26 @@ impl<'a, S> ExecutionState<'a, S> {
 
     /// Pops the events
     pub fn pop_events(&mut self) -> Vec<Event> {
-        std::mem::take(&mut self.events)
+        if self.events.is_empty() {
+            return Vec::new();
+        }
+        let mut out = Vec::with_capacity(self.events.len());
+        out.append(&mut self.events);
+        out
     }
 
     /// Creates a new unique object id.
     pub fn next_unique_object_id(&mut self) -> u64 {
         self.unique_objects += 1;
         self.unique_objects
+    }
+
+    pub fn reserve_writes(&mut self, additional: usize) {
+        if additional == 0 {
+            return;
+        }
+        self.overlay.reserve(additional);
+        self.undo_log.reserve(additional);
     }
 
     /// Reports the number of objects created during this execution.
@@ -329,31 +343,34 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
             return Err(ERR_VALUE_TOO_LARGE);
         }
 
-        // Check if this is a new key to the overlay
-        let is_new_key = !self.overlay.contains_key(key);
+        let key_vec = key.to_vec();
+        let overlay_len = self.overlay.len();
 
-        // Check overlay size limit only if this is a new key
-        if is_new_key && self.overlay.len() >= MAX_OVERLAY_ENTRIES {
-            return Err(ERR_OVERLAY_SIZE_EXCEEDED);
-        }
-
-        // Record undo information efficiently (delta-based)
-        let had_overlay_entry = !is_new_key;
-        let previous_overlay_value = if had_overlay_entry {
-            self.overlay.get(key).cloned()
-        } else {
-            None
-        };
+        let (had_overlay_entry, previous_overlay_value, undo_key) =
+            match self.overlay.entry(key_vec) {
+                Entry::Occupied(mut entry) => {
+                    let previous = entry.get().clone();
+                    let undo_key = entry.key().clone();
+                    entry.insert(Some(value));
+                    (true, Some(previous), undo_key)
+                }
+                Entry::Vacant(entry) => {
+                    if overlay_len >= MAX_OVERLAY_ENTRIES {
+                        return Err(ERR_OVERLAY_SIZE_EXCEEDED);
+                    }
+                    let undo_key = entry.key().clone();
+                    entry.insert(Some(value));
+                    (false, None, undo_key)
+                }
+            };
 
         // Record that we changed the value using delta information
         self.undo_log.push(StateChange::Set {
-            key: key.to_vec(),
+            key: undo_key,
             had_overlay_entry,
             previous_overlay_value,
         });
 
-        // Actually set in overlay (Some(...) => not removed).
-        self.overlay.insert(key.to_vec(), Some(value));
         self.metrics.inc_storage_writes();
         self.metrics.update_undo_log_max(self.undo_log.len());
         self.metrics.update_overlay_max(self.overlay.len());
@@ -367,21 +384,29 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
             return Err(ERR_KEY_TOO_LARGE);
         }
 
-        // Check overlay size limit only if this is a new key
-        if !self.overlay.contains_key(key) && self.overlay.len() >= MAX_OVERLAY_ENTRIES {
-            return Err(ERR_OVERLAY_SIZE_EXCEEDED);
-        }
+        let key_vec = key.to_vec();
+        let overlay_len = self.overlay.len();
 
-        // Record undo information efficiently (delta-based)
-        let had_overlay_entry = self.overlay.contains_key(key);
-        let previous_overlay_value = if had_overlay_entry {
-            self.overlay.get(key).cloned()
-        } else {
-            None
-        };
+        let (had_overlay_entry, previous_overlay_value, undo_key) =
+            match self.overlay.entry(key_vec) {
+                Entry::Occupied(mut entry) => {
+                    let previous = entry.get().clone();
+                    let undo_key = entry.key().clone();
+                    entry.insert(None);
+                    (true, Some(previous), undo_key)
+                }
+                Entry::Vacant(entry) => {
+                    if overlay_len >= MAX_OVERLAY_ENTRIES {
+                        return Err(ERR_OVERLAY_SIZE_EXCEEDED);
+                    }
+                    let undo_key = entry.key().clone();
+                    entry.insert(None);
+                    (false, None, undo_key)
+                }
+            };
 
         self.undo_log.push(StateChange::Remove {
-            key: key.to_vec(),
+            key: undo_key,
             had_overlay_entry,
             previous_overlay_value,
         });

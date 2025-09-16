@@ -59,7 +59,7 @@ impl<Tx> KeyPredictor<Tx> for NoOpKeyPredictor {
 /// * `P` - The key predictor type
 pub fn warm_cache<Tx, S, P>(cache: &ShardedDbCache, storage: &S, txs: &[Tx], predictor: &P)
 where
-    S: ReadonlyKV,
+    S: ReadonlyKV + Sync,
     P: KeyPredictor<Tx>,
 {
     // Collect all predicted keys
