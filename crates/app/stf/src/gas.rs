@@ -1,5 +1,58 @@
-use evolve_core::{Message, SdkResult};
-use evolve_gas::account::{StorageGasConfig, ERR_OUT_OF_GAS};
+use borsh::{BorshDeserialize, BorshSerialize};
+use evolve_core::{define_error, Message, SdkResult};
+
+// Gas-related error codes
+define_error!(ERR_OUT_OF_GAS, 0x1, "out of gas");
+
+/// Configuration for storage operation gas charges.
+///
+/// This struct defines the gas costs for different storage operations.
+/// Gas is charged based on the size of keys and values being operated on.
+///
+/// # Configuring Gas Charges
+///
+/// Gas configuration is passed to the STF at construction time. To customize
+/// gas charges for your application:
+///
+/// ```ignore
+/// use evolve_stf::{Stf, StorageGasConfig};
+///
+/// let gas_config = StorageGasConfig {
+///     storage_get_charge: 10,  // Cost per byte for read operations
+///     storage_set_charge: 20,  // Cost per byte for write operations
+///     storage_remove_charge: 5, // Cost per byte for delete operations
+/// };
+///
+/// let stf = Stf::new(
+///     begin_blocker,
+///     end_blocker,
+///     tx_validator,
+///     post_tx_handler,
+///     gas_config,
+/// );
+/// ```
+///
+/// For production deployments, gas configuration can be specified in the
+/// node's config file under the `chain.gas` section.
+#[derive(BorshSerialize, BorshDeserialize, Clone, Debug, PartialEq, Eq)]
+pub struct StorageGasConfig {
+    /// Gas charged per byte for storage read (get) operations.
+    pub storage_get_charge: u64,
+    /// Gas charged per byte for storage write (set) operations.
+    pub storage_set_charge: u64,
+    /// Gas charged per byte for storage delete (remove) operations.
+    pub storage_remove_charge: u64,
+}
+
+impl Default for StorageGasConfig {
+    fn default() -> Self {
+        Self {
+            storage_get_charge: 10,
+            storage_set_charge: 10,
+            storage_remove_charge: 10,
+        }
+    }
+}
 
 /// Represents how gas is tracked and consumed.
 ///
@@ -9,16 +62,13 @@ use evolve_gas::account::{StorageGasConfig, ERR_OUT_OF_GAS};
 /// # Examples
 ///
 /// ```
-/// use evolve_core::SdkResult;
-/// use evolve_gas::account::StorageGasConfig;
-/// use evolve_stf::gas::GasCounter;
+/// use evolve_stf::gas::{GasCounter, StorageGasConfig};
 ///
-/// // Assume you have a StorageGasConfig instance.
-/// // In a real scenario, this would be defined or passed in.
+/// // Create a gas configuration.
 /// let config = StorageGasConfig {
 ///     storage_get_charge: 10,
-///     storage_set_charge: 0,
-///     storage_remove_charge: 0
+///     storage_set_charge: 10,
+///     storage_remove_charge: 10,
 /// };
 ///
 /// // Create a finite gas counter.
@@ -151,7 +201,7 @@ impl GasCounter {
     ///
     /// The amount of gas consumed is based on:
     ///
-    /// - `storage_gas_config.storage_get_charge`
+    /// - `storage_gas_config.storage_set_charge`
     /// - The length of both key and value, plus overhead.
     ///
     /// # Errors
@@ -169,7 +219,7 @@ impl GasCounter {
                     .saturating_add(value.len() as u64)
                     .saturating_add(1);
                 let gas = storage_gas_config
-                    .storage_get_charge
+                    .storage_set_charge
                     .saturating_mul(total_size);
 
                 self.consume_gas(gas)
@@ -181,7 +231,7 @@ impl GasCounter {
     ///
     /// The amount of gas consumed is based on:
     ///
-    /// - `storage_gas_config.storage_get_charge`
+    /// - `storage_gas_config.storage_remove_charge`
     /// - The length of the key, plus overhead.
     ///
     /// # Errors
@@ -196,7 +246,7 @@ impl GasCounter {
                 // Calculate total size with overflow protection
                 let total_size = (key.len() as u64).saturating_add(1);
                 let gas = storage_gas_config
-                    .storage_get_charge
+                    .storage_remove_charge
                     .saturating_mul(total_size);
 
                 self.consume_gas(gas)
@@ -211,10 +261,8 @@ impl GasCounter {
     /// # Examples
     ///
     /// ```
-    /// # use evolve_core::SdkResult;
-    /// # use evolve_gas::account::StorageGasConfig;
-    /// # use evolve_stf::gas::GasCounter;
-    /// # let config = StorageGasConfig { storage_get_charge: 5, storage_set_charge: 10,storage_remove_charge: 10};
+    /// # use evolve_stf::gas::{GasCounter, StorageGasConfig};
+    /// # let config = StorageGasConfig { storage_get_charge: 5, storage_set_charge: 10, storage_remove_charge: 10 };
     /// # let mut gc = GasCounter::finite(100, config);
     /// gc.consume_gas(10).unwrap();
     /// assert_eq!(gc.gas_used(), 10);
@@ -231,7 +279,6 @@ impl GasCounter {
 mod tests {
     use super::*;
     use evolve_core::Message;
-    use evolve_gas::account::{StorageGasConfig, ERR_OUT_OF_GAS};
     use proptest::prelude::*;
 
     const MAX_OPS: usize = 64;
@@ -298,12 +345,12 @@ mod tests {
             .saturating_add(1)
             .saturating_add(value.len() as u64)
             .saturating_add(1);
-        config.storage_get_charge.saturating_mul(total_size)
+        config.storage_set_charge.saturating_mul(total_size)
     }
 
     fn remove_gas(config: &StorageGasConfig, key: &[u8]) -> u64 {
         let total_size = (key.len() as u64).saturating_add(1);
-        config.storage_get_charge.saturating_mul(total_size)
+        config.storage_remove_charge.saturating_mul(total_size)
     }
 
     #[test]
@@ -478,22 +525,22 @@ mod tests {
         };
         let mut gc = GasCounter::finite(1000, config);
 
-        // Test get gas calculation
+        // Test get gas calculation (uses storage_get_charge)
         // key=3 bytes, value=5 bytes: (3+1) + (5+1) = 10 * 2 = 20
         gc.consume_get_gas(b"abc", &Some(Message::from_bytes(b"hello".to_vec())))
             .unwrap();
         assert_eq!(gc.gas_used(), 20);
 
-        // Test set gas calculation (using storage_get_charge as per implementation)
-        // key=4 bytes, value=6 bytes: (4+1) + (6+1) = 12 * 2 = 24
+        // Test set gas calculation (uses storage_set_charge)
+        // key=4 bytes, value=6 bytes: (4+1) + (6+1) = 12 * 3 = 36
         gc.consume_set_gas(b"test", &Message::from_bytes(b"world!".to_vec()))
             .unwrap();
-        assert_eq!(gc.gas_used(), 44); // 20 + 24
+        assert_eq!(gc.gas_used(), 56); // 20 + 36
 
-        // Test remove gas calculation
-        // key=2 bytes: (2+1) = 3 * 2 = 6
+        // Test remove gas calculation (uses storage_remove_charge)
+        // key=2 bytes: (2+1) = 3 * 1 = 3
         gc.consume_remove_gas(b"hi").unwrap();
-        assert_eq!(gc.gas_used(), 50); // 44 + 6
+        assert_eq!(gc.gas_used(), 59); // 56 + 3
     }
 
     proptest! {

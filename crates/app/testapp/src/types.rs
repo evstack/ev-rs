@@ -1,6 +1,6 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use evolve_core::{AccountId, FungibleAsset, InvokeRequest};
-use evolve_server_core::Transaction;
+use evolve_stf_traits::Transaction;
 use sha2::Digest;
 
 #[derive(BorshSerialize, BorshDeserialize, Clone)]

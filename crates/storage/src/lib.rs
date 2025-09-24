@@ -1,10 +1,12 @@
 pub mod cache;
-pub mod commonware_impl;
+pub mod metrics;
+pub mod qmdb_impl;
 pub mod types;
 pub mod warming;
 
 pub use cache::{CachedStorage, CachedValue, DbCache, ShardedDbCache};
-pub use commonware_impl::CommonwareStorage;
+pub use metrics::{OptionalMetrics, StorageMetrics};
+pub use qmdb_impl::QmdbStorage;
 pub use types::*;
 pub use warming::{warm_cache, warm_cache_async, KeyPredictor, NoOpKeyPredictor};
 

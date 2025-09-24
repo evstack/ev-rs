@@ -7,12 +7,16 @@ use std::sync::Arc;
 
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
 use async_trait::async_trait;
+use jsonrpsee::core::SubscriptionResult;
 use jsonrpsee::server::{Server, ServerHandle};
 use jsonrpsee::types::ErrorObjectOwned;
-use jsonrpsee::RpcModule;
+use jsonrpsee::{PendingSubscriptionSink, RpcModule, SubscriptionMessage, SubscriptionSink};
 
-use crate::api::{EthApiServer, NetApiServer, Web3ApiServer};
+use crate::api::{EthApiServer, EthPubSubApiServer, NetApiServer, Web3ApiServer};
 use crate::error::RpcError;
+use crate::subscriptions::{
+    LogSubscriptionParams, SharedSubscriptionManager, SubscriptionKind, SubscriptionManager,
+};
 use evolve_rpc_types::{
     BlockNumberOrTag, CallRequest, FeeHistory, LogFilter, RpcBlock, RpcLog, RpcReceipt,
     RpcTransaction, SyncStatus,
@@ -196,6 +200,7 @@ impl StateProvider for NoopStateProvider {
 pub struct EthRpcServer<S: StateProvider> {
     config: RpcServerConfig,
     state: Arc<S>,
+    subscriptions: SharedSubscriptionManager,
 }
 
 impl<S: StateProvider> EthRpcServer<S> {
@@ -204,7 +209,30 @@ impl<S: StateProvider> EthRpcServer<S> {
         Self {
             config,
             state: Arc::new(state),
+            subscriptions: Arc::new(SubscriptionManager::new()),
         }
+    }
+
+    /// Create a new RPC server with a shared subscription manager.
+    ///
+    /// Use this when you need to publish events from outside the RPC server.
+    pub fn with_subscription_manager(
+        config: RpcServerConfig,
+        state: S,
+        subscriptions: SharedSubscriptionManager,
+    ) -> Self {
+        Self {
+            config,
+            state: Arc::new(state),
+            subscriptions,
+        }
+    }
+
+    /// Get a reference to the subscription manager.
+    ///
+    /// Use this to publish events (new blocks, logs, etc.) to subscribers.
+    pub fn subscription_manager(&self) -> &SharedSubscriptionManager {
+        &self.subscriptions
     }
 
     /// Resolve a block number or tag to an actual block number.
@@ -488,6 +516,211 @@ impl<S: StateProvider> NetApiServer for EthRpcServer<S> {
     }
 }
 
+#[async_trait]
+impl<S: StateProvider> EthPubSubApiServer for EthRpcServer<S> {
+    async fn subscribe(
+        &self,
+        pending: PendingSubscriptionSink,
+        kind: String,
+        params: Option<serde_json::Value>,
+    ) -> SubscriptionResult {
+        // Parse the subscription kind
+        let subscription_kind = match kind.as_str() {
+            "newHeads" => SubscriptionKind::NewHeads,
+            "logs" => SubscriptionKind::Logs,
+            "newPendingTransactions" => SubscriptionKind::NewPendingTransactions,
+            "syncing" => SubscriptionKind::Syncing,
+            _ => {
+                // Reject unknown subscription types
+                pending
+                    .reject(jsonrpsee::types::ErrorObject::owned(
+                        -32602,
+                        format!("Unknown subscription type: {}", kind),
+                        None::<()>,
+                    ))
+                    .await;
+                return Ok(());
+            }
+        };
+
+        // Parse log filter params if this is a logs subscription
+        let log_params = if subscription_kind == SubscriptionKind::Logs {
+            params
+                .map(serde_json::from_value::<LogSubscriptionParams>)
+                .transpose()
+                .map_err(|e| {
+                    jsonrpsee::types::ErrorObject::owned(
+                        -32602,
+                        format!("Invalid log filter params: {}", e),
+                        None::<()>,
+                    )
+                })?
+        } else {
+            None
+        };
+
+        // Register the subscription
+        let sub_id = self
+            .subscriptions
+            .subscribe(subscription_kind.clone(), log_params.clone());
+
+        // Accept the subscription
+        let sink = pending.accept().await?;
+
+        // Spawn a task to stream events to the subscriber
+        let subscriptions = Arc::clone(&self.subscriptions);
+        tokio::spawn(async move {
+            match subscription_kind {
+                SubscriptionKind::NewHeads => {
+                    Self::stream_new_heads(sink, subscriptions).await;
+                }
+                SubscriptionKind::Logs => {
+                    Self::stream_logs(sink, subscriptions, log_params).await;
+                }
+                SubscriptionKind::NewPendingTransactions => {
+                    Self::stream_pending_transactions(sink, subscriptions).await;
+                }
+                SubscriptionKind::Syncing => {
+                    Self::stream_sync_status(sink, subscriptions).await;
+                }
+            }
+        });
+
+        log::debug!("Created subscription {} for {}", sub_id, kind);
+        Ok(())
+    }
+}
+
+impl<S: StateProvider> EthRpcServer<S> {
+    /// Stream new block headers to a subscriber.
+    async fn stream_new_heads(sink: SubscriptionSink, subscriptions: SharedSubscriptionManager) {
+        let mut rx = subscriptions.subscribe_new_heads();
+
+        loop {
+            tokio::select! {
+                _ = sink.closed() => {
+                    log::debug!("Subscription closed by client");
+                    break;
+                }
+                result = rx.recv() => {
+                    match result {
+                        Ok(block) => {
+                            let msg = SubscriptionMessage::from_json(&*block).unwrap();
+                            if sink.send(msg).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            log::warn!("Subscription lagged by {} messages", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Stream logs to a subscriber.
+    async fn stream_logs(
+        sink: SubscriptionSink,
+        subscriptions: SharedSubscriptionManager,
+        filter: Option<LogSubscriptionParams>,
+    ) {
+        let mut rx = subscriptions.subscribe_logs();
+
+        loop {
+            tokio::select! {
+                _ = sink.closed() => {
+                    break;
+                }
+                result = rx.recv() => {
+                    match result {
+                        Ok(log) => {
+                            // Check if log matches filter
+                            if !SubscriptionManager::log_matches_filter(&log, &filter) {
+                                continue;
+                            }
+                            let msg = SubscriptionMessage::from_json(&*log).unwrap();
+                            if sink.send(msg).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            log::warn!("Log subscription lagged by {} messages", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Stream pending transaction hashes to a subscriber.
+    async fn stream_pending_transactions(
+        sink: SubscriptionSink,
+        subscriptions: SharedSubscriptionManager,
+    ) {
+        let mut rx = subscriptions.subscribe_pending_transactions();
+
+        loop {
+            tokio::select! {
+                _ = sink.closed() => {
+                    break;
+                }
+                result = rx.recv() => {
+                    match result {
+                        Ok(hash) => {
+                            let msg = SubscriptionMessage::from_json(&hash).unwrap();
+                            if sink.send(msg).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            log::warn!("Pending tx subscription lagged by {} messages", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Stream sync status to a subscriber.
+    async fn stream_sync_status(sink: SubscriptionSink, subscriptions: SharedSubscriptionManager) {
+        let mut rx = subscriptions.subscribe_sync();
+
+        loop {
+            tokio::select! {
+                _ = sink.closed() => {
+                    break;
+                }
+                result = rx.recv() => {
+                    match result {
+                        Ok(status) => {
+                            let msg = SubscriptionMessage::from_json(&status).unwrap();
+                            if sink.send(msg).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            log::warn!("Sync subscription lagged by {} messages", n);
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Start the RPC server.
 pub async fn start_server<S: StateProvider>(
     config: RpcServerConfig,
@@ -500,7 +733,8 @@ pub async fn start_server<S: StateProvider>(
 
     module.merge(EthApiServer::into_rpc(eth_rpc.clone()))?;
     module.merge(Web3ApiServer::into_rpc(eth_rpc.clone()))?;
-    module.merge(NetApiServer::into_rpc(eth_rpc))?;
+    module.merge(NetApiServer::into_rpc(eth_rpc.clone()))?;
+    module.merge(EthPubSubApiServer::into_rpc(eth_rpc))?;
 
     let handle = server.start(module);
     Ok(handle)
@@ -512,6 +746,7 @@ impl<S: StateProvider> Clone for EthRpcServer<S> {
         Self {
             config: self.config.clone(),
             state: Arc::clone(&self.state),
+            subscriptions: Arc::clone(&self.subscriptions),
         }
     }
 }

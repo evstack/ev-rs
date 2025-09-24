@@ -2,16 +2,16 @@ use crate::execution_scope::ExecutionScope;
 use crate::execution_state::ExecutionState;
 use crate::gas::GasCounter;
 use crate::handlers;
-use crate::validation::validate_code_id;
-use evolve_core::events_api::EVENT_HANDLER_ACCOUNT_ID;
+use crate::validation::{validate_code_id, validate_event};
+use evolve_core::events_api::Event;
 use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
 use evolve_core::storage_api::STORAGE_ACCOUNT_ID;
 use evolve_core::unique_api::UNIQUE_HANDLER_ACCOUNT_ID;
 use evolve_core::{
-    AccountCode, AccountId, Environment, EnvironmentQuery, FungibleAsset, InvokeRequest,
-    InvokeResponse, Message, ReadonlyKV, SdkResult,
+    AccountCode, AccountId, BlockContext, Environment, EnvironmentQuery, FungibleAsset,
+    InvokeRequest, InvokeResponse, Message, ReadonlyKV, SdkResult,
 };
-use evolve_server_core::{AccountsCodeStorage, Transaction};
+use evolve_stf_traits::{AccountsCodeStorage, Transaction};
 
 use crate::errors::{
     ERR_ACCOUNT_DOES_NOT_EXIST, ERR_CALL_DEPTH_EXCEEDED, ERR_CODE_NOT_FOUND,
@@ -39,6 +39,8 @@ pub struct Invoker<'s, 'a, S, A> {
     pub(crate) scope: ExecutionScope,
     /// Current call depth for detecting excessive nesting.
     pub(crate) call_depth: u16,
+    /// Block context (height, time, etc.).
+    pub(crate) block: BlockContext,
 }
 
 impl<S: ReadonlyKV, A: AccountsCodeStorage> EnvironmentQuery for Invoker<'_, '_, S, A> {
@@ -52,6 +54,10 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> EnvironmentQuery for Invoker<'_, '_,
 
     fn funds(&self) -> &[FungibleAsset] {
         &self.funds
+    }
+
+    fn block(&self) -> BlockContext {
+        self.block
     }
 
     fn do_query(&mut self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse> {
@@ -113,6 +119,17 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, '_, S, A
         }
         resp
     }
+
+    fn emit_event(&mut self, name: &str, data: &[u8]) -> SdkResult<()> {
+        validate_event(name, data)?;
+        let event = Event {
+            source: self.whoami,
+            name: name.to_string(),
+            contents: Message::from_bytes(data.to_vec()),
+        };
+        self.storage.emit_event(event)?;
+        Ok(())
+    }
 }
 
 impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
@@ -120,7 +137,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
         storage: &'a mut ExecutionState<'s, S>,
         account_codes: &'a A,
         gas_counter: &'a mut GasCounter,
-        block_height: u64,
+        block: BlockContext,
     ) -> Self {
         Self {
             whoami: RUNTIME_ACCOUNT_ID,
@@ -129,8 +146,9 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             account_codes,
             storage,
             gas_counter,
-            scope: ExecutionScope::EndBlock(block_height),
+            scope: ExecutionScope::EndBlock(block.height),
             call_depth: 0,
+            block,
         }
     }
 
@@ -138,7 +156,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
         storage: &'a mut ExecutionState<'s, S>,
         account_codes: &'a A,
         gas_counter: &'a mut GasCounter,
-        block_height: u64,
+        block: BlockContext,
     ) -> Self {
         Self {
             whoami: RUNTIME_ACCOUNT_ID,
@@ -147,8 +165,9 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             account_codes,
             storage,
             gas_counter,
-            scope: ExecutionScope::BeginBlock(block_height),
+            scope: ExecutionScope::BeginBlock(block.height),
             call_depth: 0,
+            block,
         }
     }
 
@@ -167,6 +186,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             gas_counter,
             scope: ExecutionScope::Query,
             call_depth: 0,
+            block: BlockContext::default(),
         }
     }
 
@@ -175,6 +195,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
         account_codes: &'a A,
         gas_counter: &'a mut GasCounter,
         tx: &impl Transaction,
+        block: BlockContext,
     ) -> Self {
         Self {
             whoami: AccountId::invalid(), // whoami is invalid because no one is receiving anything as of now.
@@ -185,6 +206,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             gas_counter,
             scope: ExecutionScope::Transaction(tx.compute_identifier()),
             call_depth: 0,
+            block,
         }
     }
 
@@ -198,6 +220,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             gas_counter: self.gas_counter,
             scope: self.scope,
             call_depth: self.call_depth.saturating_add(1),
+            block: self.block,
         }
     }
 
@@ -215,6 +238,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             gas_counter: self.gas_counter,
             scope: self.scope,
             call_depth: self.call_depth.saturating_add(1),
+            block: self.block,
         }
     }
 
@@ -236,7 +260,6 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             RUNTIME_ACCOUNT_ID => handlers::handle_system_exec(self, data, funds),
             // check if storage
             STORAGE_ACCOUNT_ID => handlers::handle_storage_exec(self, data),
-            EVENT_HANDLER_ACCOUNT_ID => handlers::handle_event_handler_exec(self, data),
             UNIQUE_HANDLER_ACCOUNT_ID => handlers::handle_unique_exec(self, data),
             // other account
             _ => {
@@ -262,10 +285,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
         self.storage.reserve_writes(funds.len().saturating_mul(2));
 
         // Validate recipient is not a system account that shouldn't receive funds
-        if to == STORAGE_ACCOUNT_ID
-            || to == EVENT_HANDLER_ACCOUNT_ID
-            || to == UNIQUE_HANDLER_ACCOUNT_ID
-        {
+        if to == STORAGE_ACCOUNT_ID || to == UNIQUE_HANDLER_ACCOUNT_ID {
             return Err(ERR_FUNDS_TO_SYSTEM_ACCOUNT);
         }
 
@@ -317,6 +337,12 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
         Ok((new_account_id, init_resp.into_inner()))
     }
 
+    /// Executes a closure with access to a specific account's code and environment.
+    ///
+    /// This utility method allows reading from an account's state without going through
+    /// the full message dispatch flow. Useful for system-level operations that need to
+    /// inspect account state directly.
+    #[allow(dead_code)]
     pub fn run_as<T: AccountCode + Default, R>(
         &mut self,
         account_id: AccountId,

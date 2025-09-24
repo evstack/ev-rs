@@ -1,0 +1,34 @@
+[package]
+name = "evolve_grpc"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+# Workspace dependencies
+evolve_rpc_types.workspace = true
+evolve_eth_jsonrpc.workspace = true
+
+# External dependencies
+tonic = { version = "0.12", features = ["gzip"] }
+prost = "0.13"
+tokio = { workspace = true, features = ["sync", "rt-multi-thread"] }
+tokio-stream = "0.1"
+async-trait.workspace = true
+futures.workspace = true
+log.workspace = true
+thiserror = "2"
+
+# For alloy types
+alloy-primitives = "0.8"
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
+[lints]
+workspace = true

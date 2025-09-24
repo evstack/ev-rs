@@ -1,0 +1,189 @@
+syntax = "proto3";
+
+package evolve.v1;
+
+import "evolve/v1/types.proto";
+
+// ExecutionService provides unary RPC methods for querying chain state.
+// These mirror the Ethereum JSON-RPC API but use binary protobuf encoding.
+service ExecutionService {
+  // Chain information
+  rpc GetChainId(GetChainIdRequest) returns (GetChainIdResponse);
+  rpc GetBlockNumber(GetBlockNumberRequest) returns (GetBlockNumberResponse);
+  rpc GetSyncing(GetSyncingRequest) returns (GetSyncingResponse);
+
+  // Block queries
+  rpc GetBlockByNumber(GetBlockByNumberRequest) returns (GetBlockByNumberResponse);
+  rpc GetBlockByHash(GetBlockByHashRequest) returns (GetBlockByHashResponse);
+  rpc GetBlockTransactionCountByNumber(GetBlockTransactionCountByNumberRequest) returns (GetBlockTransactionCountResponse);
+  rpc GetBlockTransactionCountByHash(GetBlockTransactionCountByHashRequest) returns (GetBlockTransactionCountResponse);
+
+  // Transaction queries
+  rpc GetTransactionByHash(GetTransactionByHashRequest) returns (GetTransactionByHashResponse);
+  rpc GetTransactionReceipt(GetTransactionReceiptRequest) returns (GetTransactionReceiptResponse);
+  rpc GetTransactionCount(GetTransactionCountRequest) returns (GetTransactionCountResponse);
+
+  // Account state
+  rpc GetBalance(GetBalanceRequest) returns (GetBalanceResponse);
+  rpc GetCode(GetCodeRequest) returns (GetCodeResponse);
+  rpc GetStorageAt(GetStorageAtRequest) returns (GetStorageAtResponse);
+
+  // Execution
+  rpc Call(ExecuteCallRequest) returns (CallResponse);
+  rpc EstimateGas(EstimateGasRequest) returns (EstimateGasResponse);
+
+  // Logs
+  rpc GetLogs(GetLogsRequest) returns (GetLogsResponse);
+
+  // Transaction submission
+  rpc SendRawTransaction(SendRawTransactionRequest) returns (SendRawTransactionResponse);
+}
+
+// Chain information requests/responses
+
+message GetChainIdRequest {}
+
+message GetChainIdResponse {
+  uint64 chain_id = 1;
+}
+
+message GetBlockNumberRequest {}
+
+message GetBlockNumberResponse {
+  uint64 block_number = 1;
+}
+
+message GetSyncingRequest {}
+
+message GetSyncingResponse {
+  SyncStatus status = 1;
+}
+
+// Block queries
+
+message GetBlockByNumberRequest {
+  BlockId block = 1;
+  bool full_transactions = 2;
+}
+
+message GetBlockByNumberResponse {
+  optional Block block = 1;
+}
+
+message GetBlockByHashRequest {
+  H256 hash = 1;
+  bool full_transactions = 2;
+}
+
+message GetBlockByHashResponse {
+  optional Block block = 1;
+}
+
+message GetBlockTransactionCountByNumberRequest {
+  BlockId block = 1;
+}
+
+message GetBlockTransactionCountByHashRequest {
+  H256 hash = 1;
+}
+
+message GetBlockTransactionCountResponse {
+  optional uint64 count = 1;
+}
+
+// Transaction queries
+
+message GetTransactionByHashRequest {
+  H256 hash = 1;
+}
+
+message GetTransactionByHashResponse {
+  optional Transaction transaction = 1;
+}
+
+message GetTransactionReceiptRequest {
+  H256 hash = 1;
+}
+
+message GetTransactionReceiptResponse {
+  optional Receipt receipt = 1;
+}
+
+message GetTransactionCountRequest {
+  Address address = 1;
+  optional BlockId block = 2;
+}
+
+message GetTransactionCountResponse {
+  uint64 count = 1;
+}
+
+// Account state queries
+
+message GetBalanceRequest {
+  Address address = 1;
+  optional BlockId block = 2;
+}
+
+message GetBalanceResponse {
+  U256 balance = 1;
+}
+
+message GetCodeRequest {
+  Address address = 1;
+  optional BlockId block = 2;
+}
+
+message GetCodeResponse {
+  bytes code = 1;
+}
+
+message GetStorageAtRequest {
+  Address address = 1;
+  U256 position = 2;
+  optional BlockId block = 3;
+}
+
+message GetStorageAtResponse {
+  H256 value = 1;
+}
+
+// Execution requests/responses
+
+message ExecuteCallRequest {
+  CallRequest request = 1;
+  optional BlockId block = 2;
+}
+
+message CallResponse {
+  bytes result = 1;
+}
+
+message EstimateGasRequest {
+  CallRequest request = 1;
+  optional BlockId block = 2;
+}
+
+message EstimateGasResponse {
+  uint64 gas = 1;
+}
+
+// Logs
+
+message GetLogsRequest {
+  LogFilter filter = 1;
+}
+
+message GetLogsResponse {
+  repeated Log logs = 1;
+}
+
+// Transaction submission
+
+message SendRawTransactionRequest {
+  bytes data = 1;
+}
+
+message SendRawTransactionResponse {
+  H256 hash = 1;
+}

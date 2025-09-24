@@ -51,7 +51,10 @@ mod tests {
     const VALID_CONFIG: &str = r#"
 chain:
   chain_id: 1
-  gas_service_account: "18446744073709551615"
+  gas:
+    storage_get_charge: 10
+    storage_set_charge: 10
+    storage_remove_charge: 10
 
 storage:
   path: "./data"
@@ -71,6 +74,7 @@ operations:
     fn test_load_valid_config() {
         let config = load_config_from_str(VALID_CONFIG, "config.yaml").unwrap();
         assert_eq!(config.chain.chain_id, 1);
+        assert_eq!(config.chain.gas.storage_get_charge, 10);
         assert_eq!(config.storage.path, "./data");
         assert!(config.rpc.enabled);
     }
@@ -80,7 +84,6 @@ operations:
         let config_with_unknown = r#"
 chain:
   chain_id: 1
-  gas_service_account: "100"
   unknown_field: "bad"
 
 storage:
@@ -99,7 +102,6 @@ storage:
         let minimal_config = r#"
 chain:
   chain_id: 1
-  gas_service_account: "100"
 
 storage:
   path: "./data"
@@ -116,6 +118,11 @@ storage:
 
         // Storage defaults
         assert_eq!(config.storage.cache_size, 1024 * 1024 * 1024);
+
+        // Gas defaults
+        assert_eq!(config.chain.gas.storage_get_charge, 10);
+        assert_eq!(config.chain.gas.storage_set_charge, 10);
+        assert_eq!(config.chain.gas.storage_remove_charge, 10);
     }
 
     #[test]
@@ -130,7 +137,6 @@ storage:
         let config_with_invalid_values = r#"
 chain:
   chain_id: 0
-  gas_service_account: "100"
 
 storage:
   path: ""

@@ -3,8 +3,8 @@ use evolve_core::storage_api::{
     STORAGE_ACCOUNT_ID,
 };
 use evolve_core::{
-    AccountId, Environment, EnvironmentQuery, ErrorCode, FungibleAsset, InvokableMessage,
-    InvokeRequest, InvokeResponse, Message, SdkResult,
+    AccountId, BlockContext, Environment, EnvironmentQuery, ErrorCode, FungibleAsset,
+    InvokableMessage, InvokeRequest, InvokeResponse, Message, SdkResult,
 };
 use std::collections::HashMap;
 
@@ -49,6 +49,10 @@ impl EnvironmentQuery for MockEnvironment {
 
     fn funds(&self) -> &[FungibleAsset] {
         &[]
+    }
+
+    fn block(&self) -> BlockContext {
+        BlockContext::default()
     }
 
     fn do_query(&mut self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse> {
@@ -96,5 +100,10 @@ impl Environment for MockEnvironment {
             }
             _ => Err(ErrorCode::new(0)),
         }
+    }
+
+    fn emit_event(&mut self, _name: &str, _data: &[u8]) -> SdkResult<()> {
+        // Mock: events are discarded in test environment
+        Ok(())
     }
 }

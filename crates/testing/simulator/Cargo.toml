@@ -9,7 +9,7 @@ description = "Deterministic simulation engine for Evolve SDK testing"
 
 [dependencies]
 evolve_core = { workspace = true }
-evolve_server_core = { workspace = true }
+evolve_stf_traits = { workspace = true }
 evolve_stf = { workspace = true, features = ["testing"] }
 evolve_testing = { workspace = true }
 

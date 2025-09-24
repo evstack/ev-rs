@@ -74,7 +74,30 @@ Check:
 - [ ] Events are truncated on restore
 - [ ] Unique object counter is restored
 
-### 4. Resource Limits
+### 4. Gas Configuration
+
+Gas metering is configured via `StorageGasConfig` passed to the STF at construction:
+
+```rust
+use evolve_stf::{Stf, StorageGasConfig};
+
+let gas_config = StorageGasConfig {
+    storage_get_charge: 10,  // gas per storage read
+    storage_set_charge: 10,  // gas per storage write
+    storage_remove_charge: 10, // gas per storage delete
+};
+
+let stf = Stf::new(begin_blocker, end_blocker, tx_validator, post_tx, gas_config);
+```
+
+Key types:
+- `StorageGasConfig` - defines gas costs for storage operations
+- `GasCounter` - tracks gas during execution (Infinite or Finite mode)
+- `ERR_OUT_OF_GAS` - returned when gas limit exceeded
+
+The gas config is stored in the STF and used in `do_begin_block` to configure gas metering for the block. This avoids the overhead of reading config from storage every block.
+
+### 5. Resource Limits
 
 Verify security limits exist:
 
@@ -86,7 +109,7 @@ Verify security limits exist:
 | Value size | ~1 MB | execution_state.rs |
 | Call depth | ~64 | invoker.rs |
 
-### 5. Test Coverage Gaps
+### 6. Test Coverage Gaps
 
 Property tests that should exist:
 
@@ -95,9 +118,13 @@ Property tests that should exist:
 #[test]
 fn prop_execution_state_model() { /* overlay + undo = correct state */ }
 
-// Gas counter model test  
+// Gas counter model test
 #[test]
 fn prop_gas_counter_model() { /* no overflow, correct tracking */ }
+
+// Gas calculation accuracy (uses correct charge per operation type)
+#[test]
+fn test_gas_calculation_accuracy() { /* set uses set_charge, remove uses remove_charge */ }
 
 // Block failure invariance
 #[test]
@@ -108,7 +135,7 @@ fn prop_apply_block_failure_invariance() { /* checkpoint/restore works */ }
 fn prop_determinism() { /* same input = same output, always */ }
 ```
 
-### 6. Simplification Opportunities
+### 7. Simplification Opportunities
 
 Look for:
 

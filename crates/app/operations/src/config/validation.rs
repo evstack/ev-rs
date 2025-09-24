@@ -4,7 +4,7 @@
 //! enabling users to fix multiple issues in a single iteration.
 
 use crate::config::types::{
-    NodeConfig, ObservabilityConfig, OperationsConfig, RpcConfig, StorageConfig,
+    GrpcConfig, NodeConfig, ObservabilityConfig, OperationsConfig, RpcConfig, StorageConfig,
 };
 use crate::errors::ConfigError;
 
@@ -33,6 +33,7 @@ pub fn validate_config(config: &NodeConfig) -> Result<(), ConfigError> {
     validate_chain_config(config, &mut errors);
     validate_storage_config(&config.storage, &mut errors);
     validate_rpc_config(&config.rpc, &mut errors);
+    validate_grpc_config(&config.grpc, &mut errors);
     validate_operations_config(&config.operations, &mut errors);
     validate_observability_config(&config.observability, &mut errors);
 
@@ -127,6 +128,47 @@ fn validate_rpc_config(config: &RpcConfig, errors: &mut Vec<String>) {
     }
 }
 
+fn validate_grpc_config(config: &GrpcConfig, errors: &mut Vec<String>) {
+    if config.enabled && config.addr.is_empty() {
+        errors.push("grpc.addr cannot be empty when gRPC is enabled".to_string());
+    }
+
+    // Basic address format validation
+    if config.enabled && !config.addr.is_empty() {
+        if !config.addr.contains(':') {
+            errors.push(format!(
+                "grpc.addr '{}' must be in host:port format",
+                config.addr
+            ));
+        } else {
+            let parts: Vec<&str> = config.addr.rsplitn(2, ':').collect();
+            if parts.len() == 2 && parts[0].parse::<u16>().is_err() {
+                errors.push(format!("grpc.addr '{}' has invalid port", config.addr));
+            }
+        }
+    }
+
+    // Validate max_message_size bounds
+    const MIN_MESSAGE_SIZE: usize = 64 * 1024; // 64KB
+    const MAX_MESSAGE_SIZE: usize = 64 * 1024 * 1024; // 64MB
+
+    if config.max_message_size < MIN_MESSAGE_SIZE {
+        errors.push(format!(
+            "grpc.max_message_size must be at least {} bytes ({} KB)",
+            MIN_MESSAGE_SIZE,
+            MIN_MESSAGE_SIZE / 1024
+        ));
+    }
+
+    if config.max_message_size > MAX_MESSAGE_SIZE {
+        errors.push(format!(
+            "grpc.max_message_size must be at most {} bytes ({} MB)",
+            MAX_MESSAGE_SIZE,
+            MAX_MESSAGE_SIZE / (1024 * 1024)
+        ));
+    }
+}
+
 fn validate_operations_config(config: &OperationsConfig, errors: &mut Vec<String>) {
     if config.shutdown_timeout_secs < MIN_SHUTDOWN_TIMEOUT {
         errors.push(format!(
@@ -166,13 +208,13 @@ fn validate_observability_config(config: &ObservabilityConfig, errors: &mut Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::types::ChainConfig;
+    use crate::config::types::{ChainConfig, GasConfig};
 
     fn valid_config() -> NodeConfig {
         NodeConfig {
             chain: ChainConfig {
                 chain_id: 1,
-                gas_service_account: u128::MAX,
+                gas: GasConfig::default(),
             },
             storage: StorageConfig {
                 path: "./data".to_string(),
@@ -181,6 +223,7 @@ mod tests {
                 partition_prefix: "evolve-state".to_string(),
             },
             rpc: RpcConfig::default(),
+            grpc: GrpcConfig::default(),
             operations: OperationsConfig::default(),
             observability: ObservabilityConfig::default(),
         }

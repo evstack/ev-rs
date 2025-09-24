@@ -5,7 +5,7 @@
 
 use crate::seed::SeededRng;
 use evolve_core::{define_error, ErrorCode, ReadonlyKV};
-use evolve_server_core::{StateChange, WritableKV};
+use evolve_stf_traits::{StateChange, WritableKV};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;

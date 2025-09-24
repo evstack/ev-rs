@@ -1,6 +1,6 @@
 use crate::scheduler_account::SchedulerRef;
 use evolve_core::{AccountId, Environment, EnvironmentQuery};
-use evolve_server_core::{BeginBlocker, EndBlocker};
+use evolve_stf_traits::{BeginBlocker, EndBlocker};
 
 #[derive(Clone)]
 pub struct SchedulerBeginBlocker {

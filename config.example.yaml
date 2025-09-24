@@ -1,0 +1,63 @@
+# Evolve Node Configuration Example
+#
+# Copy this file to config.yaml and modify as needed.
+# All fields shown with their default values unless noted.
+
+# Chain-specific configuration (required)
+chain:
+  # Unique chain identifier (required, must be > 0)
+  chain_id: 1
+  # Gas configuration for storage operations (all values are per-byte costs)
+  gas:
+    storage_get_charge: 10
+    storage_set_charge: 10
+    storage_remove_charge: 10
+
+# Storage configuration (required)
+storage:
+  # Path to the storage directory (required)
+  path: "./data"
+  # Cache size in bytes (default: 1GB, min: 16MB, max: 64GB)
+  cache_size: 1073741824
+  # Write buffer size in bytes (default: 64MB, min: 4MB, max: 1GB)
+  write_buffer_size: 67108864
+  # Partition prefix for evolve state (alphanumeric, hyphen, underscore only)
+  partition_prefix: "evolve-state"
+
+# JSON-RPC server configuration
+rpc:
+  # Whether the JSON-RPC server is enabled
+  enabled: true
+  # HTTP address to bind to (host:port format)
+  http_addr: "127.0.0.1:8545"
+  # Client version string returned by web3_clientVersion
+  client_version: "evolve/0.1.0"
+
+# gRPC server configuration
+grpc:
+  # Whether the gRPC server is enabled (disabled by default)
+  enabled: false
+  # gRPC address to bind to (host:port format)
+  addr: "127.0.0.1:9545"
+  # Enable gzip compression for requests/responses
+  enable_gzip: true
+  # Maximum message size in bytes (default: 4MB, min: 64KB, max: 64MB)
+  max_message_size: 4194304
+
+# Operations configuration
+operations:
+  # Shutdown timeout in seconds (min: 1, max: 300)
+  shutdown_timeout_secs: 30
+  # Whether to run startup checks
+  startup_checks: true
+  # Minimum required disk space in MB
+  min_disk_space_mb: 1024
+
+# Observability configuration
+observability:
+  # Log level: trace, debug, info, warn, error, critical
+  log_level: "info"
+  # Log format: json, pretty
+  log_format: "json"
+  # Whether Prometheus metrics are enabled
+  metrics_enabled: true

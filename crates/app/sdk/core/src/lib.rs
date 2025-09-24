@@ -62,10 +62,26 @@ impl AccountId {
     }
 }
 
+/// Block context available to all modules during execution.
+///
+/// Contains metadata about the current block. Accessed via `env.block()`.
+#[derive(Copy, Clone, Debug, Default)]
+pub struct BlockContext {
+    pub height: u64,
+    pub time: u64,
+}
+
+impl BlockContext {
+    pub const fn new(height: u64, time: u64) -> Self {
+        Self { height, time }
+    }
+}
+
 pub trait EnvironmentQuery {
     fn whoami(&self) -> AccountId;
     fn sender(&self) -> AccountId;
     fn funds(&self) -> &[FungibleAsset];
+    fn block(&self) -> BlockContext;
     fn do_query(&mut self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse>;
 }
 
@@ -76,6 +92,12 @@ pub trait Environment: EnvironmentQuery {
         data: &InvokeRequest,
         funds: Vec<FungibleAsset>,
     ) -> SdkResult<InvokeResponse>;
+
+    /// Emits an event with the given name and data.
+    ///
+    /// Events are diagnostic data that get included in transaction/block results.
+    /// They do not affect state and are used for indexing and observability.
+    fn emit_event(&mut self, name: &str, data: &[u8]) -> SdkResult<()>;
 }
 
 /// Defines some arbitrary code that can handle account execution logic.

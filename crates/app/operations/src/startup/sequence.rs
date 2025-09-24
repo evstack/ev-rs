@@ -116,7 +116,8 @@ pub fn run_startup_with_mkdir(config: &NodeConfig) -> Result<StartupResult, Star
 mod tests {
     use super::*;
     use crate::config::{
-        ChainConfig, ObservabilityConfig, OperationsConfig, RpcConfig, StorageConfig,
+        ChainConfig, GasConfig, GrpcConfig, ObservabilityConfig, OperationsConfig, RpcConfig,
+        StorageConfig,
     };
     use tempfile::TempDir;
 
@@ -124,7 +125,7 @@ mod tests {
         NodeConfig {
             chain: ChainConfig {
                 chain_id: 1,
-                gas_service_account: 100,
+                gas: GasConfig::default(),
             },
             storage: StorageConfig {
                 path: path.to_string(),
@@ -133,6 +134,7 @@ mod tests {
                 partition_prefix: "evolve-state".to_string(),
             },
             rpc: RpcConfig::default(),
+            grpc: GrpcConfig::default(),
             operations: OperationsConfig::default(),
             observability: ObservabilityConfig::default(),
         }

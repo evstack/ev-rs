@@ -9,6 +9,11 @@
 //! - `Invoker`: Execution context for account operations
 //! - Error handling and validation
 //! - Gas metering and resource management
+//!
+//! ## Gas Configuration
+//!
+//! Gas costs for storage operations are configured via [`StorageGasConfig`] when
+//! constructing the STF. See the [`gas`] module for details.
 
 pub mod errors;
 mod execution_scope;
@@ -22,6 +27,9 @@ mod runtime_api_impl;
 mod unique_api_impl;
 mod validation;
 
+// Re-export gas types for convenience
+pub use gas::{StorageGasConfig, ERR_OUT_OF_GAS};
+
 use crate::execution_state::ExecutionState;
 use crate::gas::GasCounter;
 use crate::invoker::Invoker;
@@ -29,11 +37,10 @@ use crate::metrics::{BlockExecutionMetrics, TxExecutionMetrics};
 use crate::results::{BlockResult, TxResult};
 use evolve_core::events_api::Event;
 use evolve_core::{
-    AccountCode, AccountId, Environment, EnvironmentQuery, InvokableMessage, InvokeRequest,
-    InvokeResponse, ReadonlyKV, SdkResult,
+    AccountCode, AccountId, BlockContext, Environment, EnvironmentQuery, InvokableMessage,
+    InvokeRequest, InvokeResponse, ReadonlyKV, SdkResult,
 };
-use evolve_gas::account::{GasService, StorageGasConfig};
-use evolve_server_core::{
+use evolve_stf_traits::{
     AccountsCodeStorage, BeginBlocker as BeginBlockerTrait, Block as BlockTrait,
     EndBlocker as EndBlockerTrait, PostTxExecution, Transaction, TxValidator as TxValidatorTrait,
 };
@@ -60,12 +67,22 @@ const MAX_EVENT_CONTENT_SIZE: usize = 64 * 1024; // 64KB
 /// * `TxValidator` - Transaction validator
 /// * `EndBlocker` - Handler for end-block logic
 /// * `PostTx` - Post-transaction execution handler
+///
+/// # Gas Configuration
+///
+/// The STF is constructed with a `StorageGasConfig` that defines gas costs for
+/// storage operations. This configuration is fixed at construction time and
+/// applies to all transactions processed by this STF instance.
+///
+/// To change gas configuration, construct a new STF instance with the desired
+/// configuration. For runtime-configurable gas, applications can implement
+/// their own governance mechanism that reconstructs the STF with new parameters.
 pub struct Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx> {
     begin_blocker: BeginBlocker,
     end_blocker: EndBlocker,
     tx_validator: TxValidator,
     post_tx_handler: PostTx,
-    system_accounts: SystemAccounts,
+    storage_gas_config: StorageGasConfig,
     _phantoms: PhantomData<(Tx, Block)>,
 }
 
@@ -76,7 +93,7 @@ mod model_tests {
     use evolve_core::runtime_api::ACCOUNT_IDENTIFIER_PREFIX;
     use evolve_core::storage_api::{StorageSetRequest, STORAGE_ACCOUNT_ID};
     use evolve_core::{ErrorCode, FungibleAsset, Message};
-    use evolve_server_core::{
+    use evolve_stf_traits::{
         AccountsCodeStorage, BeginBlocker as BeginBlockerTrait, Block as BlockTrait, EndBlocker,
         PostTxExecution, Transaction, TxValidator, WritableKV,
     };
@@ -159,12 +176,13 @@ mod model_tests {
     #[derive(Clone)]
     struct TestBlock {
         height: u64,
+        time: u64,
         txs: Vec<TestTx>,
     }
 
     impl BlockTrait<TestTx> for TestBlock {
-        fn height(&self) -> u64 {
-            self.height
+        fn context(&self) -> BlockContext {
+            BlockContext::new(self.height, self.time)
         }
 
         fn txs(&self) -> &[TestTx] {
@@ -293,17 +311,17 @@ mod model_tests {
         }
     }
 
-    impl evolve_server_core::WritableKV for InMemoryStorage {
+    impl evolve_stf_traits::WritableKV for InMemoryStorage {
         fn apply_changes(
             &mut self,
-            changes: Vec<evolve_server_core::StateChange>,
+            changes: Vec<evolve_stf_traits::StateChange>,
         ) -> Result<(), ErrorCode> {
             for change in changes {
                 match change {
-                    evolve_server_core::StateChange::Set { key, value } => {
+                    evolve_stf_traits::StateChange::Set { key, value } => {
                         self.data.insert(key, value);
                     }
-                    evolve_server_core::StateChange::Remove { key } => {
+                    evolve_stf_traits::StateChange::Remove { key } => {
                         self.data.remove(&key);
                     }
                 }
@@ -340,7 +358,6 @@ mod model_tests {
                 0..=MAX_TXS
             )
         ) {
-            let gas_service = AccountId::new(10);
             let test_account = AccountId::new(100);
             let sender = AccountId::new(200);
 
@@ -353,15 +370,6 @@ mod model_tests {
                 storage_set_charge: 3,
                 storage_remove_charge: 3,
             };
-            let gas_key = {
-                let mut key = gas_service.as_bytes();
-                key.push(0);
-                key
-            };
-            storage.data.insert(
-                gas_key,
-                Message::new(&gas_config).unwrap().into_bytes().unwrap(),
-            );
 
             let code_id = "test_account".to_string();
             storage.data.insert(
@@ -374,7 +382,7 @@ mod model_tests {
                 NoopEnd,
                 Validator,
                 NoopPostTx,
-                SystemAccounts::new(gas_service),
+                gas_config.clone(),
             );
 
             let mut model: HashMap<Vec<u8>, Vec<u8>> = HashMap::new();
@@ -397,7 +405,8 @@ mod model_tests {
                 });
 
                 let storage_key = account_storage_key(test_account, &key);
-                let gas_needed = gas_config.storage_get_charge.saturating_mul(
+                // Use storage_set_charge for set operations
+                let gas_needed = gas_config.storage_set_charge.saturating_mul(
                     (storage_key.len() as u64)
                         .saturating_add(1)
                         .saturating_add(value.len() as u64)
@@ -410,7 +419,7 @@ mod model_tests {
                 }
             }
 
-            let block = TestBlock { height: 1, txs: block_txs };
+            let block = TestBlock { height: 1, time: 0, txs: block_txs };
             let (result, state) = stf.apply_block(&storage, &codes, &block);
             let changes = state.into_changes().unwrap();
             storage.apply_changes(changes).unwrap();
@@ -419,7 +428,8 @@ mod model_tests {
                 let tx = &block.txs[idx];
                 let msg: TestMsg = tx.request.get().unwrap();
                 let storage_key = account_storage_key(tx.recipient, &msg.key);
-                let gas_needed = gas_config.storage_get_charge.saturating_mul(
+                // Use storage_set_charge for set operations
+                let gas_needed = gas_config.storage_set_charge.saturating_mul(
                     (storage_key.len() as u64)
                         .saturating_add(1)
                         .saturating_add(msg.value.len() as u64)
@@ -432,7 +442,7 @@ mod model_tests {
                 } else if out_of_gas {
                     match &tx_result.response {
                         Ok(_) => prop_assert!(false, "expected out of gas"),
-                        Err(err) => prop_assert_eq!(*err, evolve_gas::account::ERR_OUT_OF_GAS),
+                        Err(err) => prop_assert_eq!(*err, crate::gas::ERR_OUT_OF_GAS),
                     }
                 } else if msg.fail_after_write {
                     prop_assert!(tx_result.response.is_err());
@@ -458,26 +468,16 @@ mod model_tests {
                 1..=8
             )
         ) {
-            let gas_service = AccountId::new(10);
             let test_account = AccountId::new(100);
             let sender = AccountId::new(200);
 
-            // Setup storage with gas config and account code
+            // Setup storage with account code
             let mut storage1 = InMemoryStorage::default();
             let gas_config = StorageGasConfig {
                 storage_get_charge: 1,
                 storage_set_charge: 1,
                 storage_remove_charge: 1,
             };
-            let gas_key = {
-                let mut key = gas_service.as_bytes();
-                key.push(0);
-                key
-            };
-            storage1.data.insert(
-                gas_key.clone(),
-                Message::new(&gas_config).unwrap().into_bytes().unwrap(),
-            );
             let code_id = "test_account".to_string();
             storage1.data.insert(
                 account_code_key(test_account),
@@ -497,7 +497,7 @@ mod model_tests {
                 NoopEnd,
                 Validator,
                 NoopPostTx,
-                SystemAccounts::new(gas_service),
+                gas_config,
             );
 
             // Build block
@@ -517,7 +517,7 @@ mod model_tests {
                 }
             }).collect();
 
-            let block = TestBlock { height: 1, txs: block_txs };
+            let block = TestBlock { height: 1, time: 0, txs: block_txs };
 
             // Run 1
             let (result1, state1) = stf.apply_block(&storage1, &codes, &block);
@@ -537,14 +537,14 @@ mod model_tests {
 
             // Sort changes for comparison (HashMap iteration order is non-deterministic)
             let mut sorted1: Vec<_> = changes1.iter().map(|c| match c {
-                evolve_server_core::StateChange::Set { key, value } => (key.clone(), Some(value.clone())),
-                evolve_server_core::StateChange::Remove { key } => (key.clone(), None),
+                evolve_stf_traits::StateChange::Set { key, value } => (key.clone(), Some(value.clone())),
+                evolve_stf_traits::StateChange::Remove { key } => (key.clone(), None),
             }).collect();
             sorted1.sort_by(|a, b| a.0.cmp(&b.0));
 
             let mut sorted2: Vec<_> = changes2.iter().map(|c| match c {
-                evolve_server_core::StateChange::Set { key, value } => (key.clone(), Some(value.clone())),
-                evolve_server_core::StateChange::Remove { key } => (key.clone(), None),
+                evolve_stf_traits::StateChange::Set { key, value } => (key.clone(), Some(value.clone())),
+                evolve_stf_traits::StateChange::Remove { key } => (key.clone(), None),
             }).collect();
             sorted2.sort_by(|a, b| a.0.cmp(&b.0));
 
@@ -559,7 +559,6 @@ mod model_tests {
     fn test_call_depth_exhaustion() {
         use crate::errors::ERR_CALL_DEPTH_EXCEEDED;
 
-        let gas_service = AccountId::new(10);
         let recursive_account = AccountId::new(100);
         let sender = AccountId::new(200);
 
@@ -569,15 +568,6 @@ mod model_tests {
             storage_set_charge: 1,
             storage_remove_charge: 1,
         };
-        let gas_key = {
-            let mut key = gas_service.as_bytes();
-            key.push(0);
-            key
-        };
-        storage.data.insert(
-            gas_key,
-            Message::new(&gas_config).unwrap().into_bytes().unwrap(),
-        );
 
         // RecursiveAccount calls itself until depth limit
         struct RecursiveAccount;
@@ -637,13 +627,7 @@ mod model_tests {
         let mut codes = CodeStore::new();
         codes.add_code(RecursiveAccount);
 
-        let stf = Stf::new(
-            NoopBegin,
-            NoopEnd,
-            Validator,
-            NoopPostTx,
-            SystemAccounts::new(gas_service),
-        );
+        let stf = Stf::new(NoopBegin, NoopEnd, Validator, NoopPostTx, gas_config);
 
         let msg = RecurseMsg { depth: 0 };
         let tx = TestTx {
@@ -657,6 +641,7 @@ mod model_tests {
 
         let block = TestBlock {
             height: 1,
+            time: 0,
             txs: vec![tx],
         };
         let (result, _state) = stf.apply_block(&storage, &codes, &block);
@@ -674,7 +659,6 @@ mod model_tests {
     /// Test that post-tx handler can reject transactions
     #[test]
     fn test_post_tx_handler_rejection() {
-        let gas_service = AccountId::new(10);
         let test_account = AccountId::new(100);
 
         let mut storage = InMemoryStorage::default();
@@ -683,15 +667,6 @@ mod model_tests {
             storage_set_charge: 10,
             storage_remove_charge: 10,
         };
-        let gas_key = {
-            let mut key = gas_service.as_bytes();
-            key.push(0);
-            key
-        };
-        storage.data.insert(
-            gas_key,
-            Message::new(&gas_config).unwrap().into_bytes().unwrap(),
-        );
         let code_id = "test_account".to_string();
         storage.data.insert(
             account_code_key(test_account),
@@ -726,7 +701,7 @@ mod model_tests {
             NoopEnd,
             Validator,
             RejectMarkedPostTx,
-            SystemAccounts::new(gas_service),
+            gas_config,
         );
 
         let msg = TestMsg {
@@ -757,6 +732,7 @@ mod model_tests {
 
         let block = TestBlock {
             height: 1,
+            time: 0,
             txs: vec![tx_normal, tx_marked],
         };
         let (result, _state) = stf.apply_block(&storage, &codes, &block);
@@ -784,7 +760,6 @@ mod model_tests {
     /// Test that state changes are collected correctly (verifies into_changes works)
     #[test]
     fn test_state_changes_collection() {
-        let gas_service = AccountId::new(10);
         let test_account = AccountId::new(100);
         let sender = AccountId::new(200);
 
@@ -794,15 +769,6 @@ mod model_tests {
             storage_set_charge: 1,
             storage_remove_charge: 1,
         };
-        let gas_key = {
-            let mut key = gas_service.as_bytes();
-            key.push(0);
-            key
-        };
-        storage.data.insert(
-            gas_key,
-            Message::new(&gas_config).unwrap().into_bytes().unwrap(),
-        );
         let code_id = "test_account".to_string();
         storage.data.insert(
             account_code_key(test_account),
@@ -812,13 +778,7 @@ mod model_tests {
         let mut codes = CodeStore::new();
         codes.add_code(TestAccount);
 
-        let stf = Stf::new(
-            NoopBegin,
-            NoopEnd,
-            Validator,
-            NoopPostTx,
-            SystemAccounts::new(gas_service),
-        );
+        let stf = Stf::new(NoopBegin, NoopEnd, Validator, NoopPostTx, gas_config);
 
         // Create 3 transactions writing to different keys
         let txs: Vec<TestTx> = (0..3)
@@ -839,7 +799,11 @@ mod model_tests {
             })
             .collect();
 
-        let block = TestBlock { height: 1, txs };
+        let block = TestBlock {
+            height: 1,
+            time: 0,
+            txs,
+        };
         let (result, state) = stf.apply_block(&storage, &codes, &block);
 
         // All txs should succeed
@@ -854,7 +818,7 @@ mod model_tests {
         let set_changes: Vec<_> = changes
             .iter()
             .filter_map(|c| match c {
-                evolve_server_core::StateChange::Set { key, value: _ } => Some(key.clone()),
+                evolve_stf_traits::StateChange::Set { key, value: _ } => Some(key.clone()),
                 _ => None,
             })
             .collect();
@@ -869,22 +833,6 @@ mod model_tests {
                 "Expected to find state change for key {}",
                 i
             );
-        }
-    }
-}
-#[derive(Clone, Copy, Debug)]
-pub struct SystemAccounts {
-    pub gas_service: AccountId,
-}
-
-impl SystemAccounts {
-    pub const fn new(gas_service: AccountId) -> Self {
-        Self { gas_service }
-    }
-
-    pub const fn placeholder() -> Self {
-        Self {
-            gas_service: AccountId::new(u128::MAX),
         }
     }
 }
@@ -907,19 +855,34 @@ where
     /// * `end_blocker` - Handler for end-block processing
     /// * `tx_validator` - Transaction validator
     /// * `post_tx_handler` - Post-transaction execution handler
+    /// * `storage_gas_config` - Configuration for storage operation gas costs
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use evolve_stf::{Stf, StorageGasConfig};
+    ///
+    /// let stf = Stf::new(
+    ///     begin_blocker,
+    ///     end_blocker,
+    ///     tx_validator,
+    ///     post_tx_handler,
+    ///     StorageGasConfig::default(),
+    /// );
+    /// ```
     pub const fn new(
         begin_blocker: BeginBlocker,
         end_blocker: EndBlocker,
         tx_validator: TxValidator,
         post_tx_handler: PostTx,
-        system_accounts: SystemAccounts,
+        storage_gas_config: StorageGasConfig,
     ) -> Self {
         Self {
             begin_blocker,
             end_blocker,
             tx_validator,
             post_tx_handler,
-            system_accounts,
+            storage_gas_config,
             _phantoms: PhantomData,
         }
     }
@@ -941,6 +904,7 @@ where
     /// * `storage` - Read-only storage backend
     /// * `account_codes` - Account code storage
     /// * `execution_height` - Block height for execution context
+    /// * `execution_time` - Block time for execution context
     /// * `action` - Closure to execute with system privileges
     ///
     /// # Returns
@@ -950,7 +914,7 @@ where
         &self,
         storage: &'a S,
         account_codes: &'a A,
-        execution_height: u64,
+        block: BlockContext,
         action: impl Fn(&mut dyn Environment) -> SdkResult<R>,
     ) -> SdkResult<(R, ExecutionState<'a, S>)> {
         let mut execution_state = ExecutionState::new(storage);
@@ -960,7 +924,7 @@ where
                 &mut execution_state,
                 account_codes,
                 &mut gas_counter,
-                execution_height,
+                block,
             );
             action(&mut ctx)?
         };
@@ -984,6 +948,7 @@ where
     /// * `storage` - Read-only storage backend
     /// * `account_codes` - Account code storage
     /// * `execution_height` - Block height for execution context
+    /// * `execution_time` - Block time for execution context
     /// * `impersonate` - Account ID to impersonate
     /// * `action` - Closure to execute with the specified account privileges
     ///
@@ -995,7 +960,7 @@ where
         &self,
         storage: &'a S,
         account_codes: &'a A,
-        execution_height: u64,
+        block: BlockContext,
         impersonate: AccountId,
         action: impl Fn(&mut dyn Environment) -> SdkResult<R>,
     ) -> SdkResult<(R, ExecutionState<'a, S>)> {
@@ -1006,7 +971,7 @@ where
                 &mut execution_state,
                 account_codes,
                 &mut gas_counter,
-                execution_height,
+                block,
             );
             ctx.whoami = impersonate;
             action(&mut ctx)?
@@ -1037,20 +1002,25 @@ where
         let mut state = ExecutionState::new(storage);
 
         // run begin blocker.
-        let (gas_config, begin_block_events) =
-            self.do_begin_block(&mut state, account_codes, block);
+        let begin_block_events = self.do_begin_block(&mut state, account_codes, block);
 
         // apply txs.
         let txs = block.txs();
+        let block_ctx = block.context();
         let mut tx_results = Vec::with_capacity(txs.len());
         for tx in txs {
             // apply tx
-            let tx_result: TxResult =
-                self.apply_tx(&mut state, account_codes, tx, gas_config.clone());
+            let tx_result: TxResult = self.apply_tx(
+                &mut state,
+                account_codes,
+                tx,
+                self.storage_gas_config.clone(),
+                block_ctx,
+            );
             tx_results.push(tx_result);
         }
 
-        let end_block_events = self.do_end_block(&mut state, account_codes, block.height());
+        let end_block_events = self.do_end_block(&mut state, account_codes, block_ctx);
 
         (
             BlockResult {
@@ -1073,18 +1043,24 @@ where
         let block_timer = Instant::now();
 
         let begin_timer = Instant::now();
-        let (gas_config, begin_block_events) =
-            self.do_begin_block(&mut state, account_codes, block);
+        let begin_block_events = self.do_begin_block(&mut state, account_codes, block);
         let begin_block_ns = begin_timer.elapsed().as_nanos() as u64;
 
         let txs = block.txs();
+        let block_ctx = block.context();
         let mut tx_results = Vec::with_capacity(txs.len());
         let mut tx_metrics = Vec::with_capacity(txs.len());
 
         for (index, tx) in txs.iter().enumerate() {
             let tx_start_metrics = state.metrics_snapshot();
             let tx_timer = Instant::now();
-            let tx_result = self.apply_tx(&mut state, account_codes, tx, gas_config.clone());
+            let tx_result = self.apply_tx(
+                &mut state,
+                account_codes,
+                tx,
+                self.storage_gas_config.clone(),
+                block_ctx,
+            );
             let duration_ns = tx_timer.elapsed().as_nanos() as u64;
             let tx_end_metrics = state.metrics_snapshot();
             let delta = tx_end_metrics.delta(tx_start_metrics);
@@ -1098,7 +1074,7 @@ where
         }
 
         let end_timer = Instant::now();
-        let end_block_events = self.do_end_block(&mut state, account_codes, block.height());
+        let end_block_events = self.do_end_block(&mut state, account_codes, block_ctx);
         let end_block_ns = end_timer.elapsed().as_nanos() as u64;
 
         let total_ns = block_timer.elapsed().as_nanos() as u64;
@@ -1128,42 +1104,31 @@ where
         state: &mut ExecutionState<'a, S>,
         account_codes: &'a A,
         block: &Block,
-    ) -> (StorageGasConfig, Vec<Event>) {
+    ) -> Vec<Event> {
         let mut gas_counter = GasCounter::Infinite;
-        let gas_config = {
+        {
             let mut ctx = Invoker::new_for_begin_block(
                 state,
                 account_codes,
                 &mut gas_counter,
-                block.height(),
+                block.context(),
             );
 
             self.begin_blocker.begin_block(block, &mut ctx);
+        }
 
-            // get system gas config
-            ctx.run_as(
-                self.system_accounts.gas_service,
-                |account: &GasService, env: &mut dyn EnvironmentQuery| {
-                    account.storage_gas_config.may_get(env)
-                },
-            )
-            .expect("CRITICAL: Failed to run as gas service account - system configuration error")
-            .expect("CRITICAL: Gas service must have storage gas config - blockchain cannot operate without gas configuration")
-        };
-
-        let events = state.pop_events();
-        (gas_config, events)
+        state.pop_events()
     }
 
     fn do_end_block<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
         &self,
         state: &mut ExecutionState<'a, S>,
         codes: &'a A,
-        height: u64,
+        block: BlockContext,
     ) -> Vec<Event> {
         let mut gas_counter = GasCounter::Infinite;
         {
-            let mut ctx = Invoker::new_for_end_block(state, codes, &mut gas_counter, height);
+            let mut ctx = Invoker::new_for_end_block(state, codes, &mut gas_counter, block);
             self.end_blocker.end_block(&mut ctx);
         }
         state.pop_events()
@@ -1175,6 +1140,7 @@ where
         codes: &'a A,
         tx: &Tx,
         gas_config: StorageGasConfig,
+        block: BlockContext,
     ) -> TxResult {
         // NOTE: Transaction validation and execution are atomic - they share the same
         // ExecutionState throughout the process. The state cannot change between
@@ -1189,7 +1155,7 @@ where
             gas_used: 0,
             storage_gas_config: gas_config,
         };
-        let mut ctx = Invoker::new_for_validate_tx(state, codes, &mut gas_counter, tx);
+        let mut ctx = Invoker::new_for_validate_tx(state, codes, &mut gas_counter, tx, block);
         // do tx validation; we do not swap invoker
         match self.tx_validator.validate_tx(tx, &mut ctx) {
             Ok(()) => (),
@@ -1365,7 +1331,7 @@ where
             end_blocker: self.end_blocker.clone(),
             tx_validator: self.tx_validator.clone(),
             post_tx_handler: self.post_tx_handler.clone(),
-            system_accounts: self.system_accounts,
+            storage_gas_config: self.storage_gas_config.clone(),
             _phantoms: PhantomData,
         }
     }

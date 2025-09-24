@@ -1,0 +1,50 @@
+[package]
+name = "evolve_tx_fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = { version = "1", features = ["derive"] }
+
+[dependencies.evolve_tx]
+path = ".."
+
+[dependencies.alloy-primitives]
+version = "0.8"
+
+[dependencies.alloy-consensus]
+version = "0.9"
+features = ["k256"]
+
+[dependencies.alloy-rlp]
+version = "0.3"
+
+# Prevent this from interfering with workspaces
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "fuzz_decode"
+path = "fuzz_targets/fuzz_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_roundtrip"
+path = "fuzz_targets/fuzz_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_structured"
+path = "fuzz_targets/fuzz_structured.rs"
+test = false
+doc = false
+bench = false

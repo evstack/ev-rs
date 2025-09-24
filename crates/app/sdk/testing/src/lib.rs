@@ -6,8 +6,8 @@ use evolve_core::storage_api::{
     StorageSetRequest, StorageSetResponse, STORAGE_ACCOUNT_ID,
 };
 use evolve_core::{
-    AccountId, Environment, EnvironmentQuery, FungibleAsset, InvokableMessage, InvokeRequest,
-    InvokeResponse, Message, SdkResult, ERR_UNKNOWN_FUNCTION,
+    AccountId, BlockContext, Environment, EnvironmentQuery, FungibleAsset, InvokableMessage,
+    InvokeRequest, InvokeResponse, Message, SdkResult, ERR_UNKNOWN_FUNCTION,
 };
 use std::collections::HashMap;
 
@@ -22,6 +22,8 @@ pub struct MockEnv {
     state: HashMap<Vec<u8>, Vec<u8>>,
     query_handlers: HashMap<u64, QueryHandler>,
     exec_handlers: HashMap<u64, ExecHandler>,
+    block_height: u64,
+    block_time: u64,
 }
 
 impl MockEnv {
@@ -33,7 +35,20 @@ impl MockEnv {
             state: HashMap::new(),
             query_handlers: HashMap::new(),
             exec_handlers: HashMap::new(),
+            block_height: 0,
+            block_time: 0,
         }
+    }
+
+    pub fn with_block_height(self, block_height: u64) -> Self {
+        Self {
+            block_height,
+            ..self
+        }
+    }
+
+    pub fn with_block_time(self, block_time: u64) -> Self {
+        Self { block_time, ..self }
     }
 
     pub fn with_sender(self, sender: AccountId) -> Self {
@@ -139,6 +154,10 @@ impl EnvironmentQuery for MockEnv {
         self.funds.as_ref()
     }
 
+    fn block(&self) -> BlockContext {
+        BlockContext::new(self.block_height, self.block_time)
+    }
+
     fn do_query(&mut self, to: AccountId, data: &InvokeRequest) -> SdkResult<InvokeResponse> {
         if to == STORAGE_ACCOUNT_ID {
             return self.handle_storage_query(data);
@@ -172,6 +191,11 @@ impl Environment for MockEnv {
             Some(handler) => handler(to, data, funds),
             None => Err(ERR_UNKNOWN_FUNCTION),
         }
+    }
+
+    fn emit_event(&mut self, _name: &str, _data: &[u8]) -> SdkResult<()> {
+        // Mock: events are discarded in test environment
+        Ok(())
     }
 }
 

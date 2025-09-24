@@ -1,16 +1,17 @@
 use crate::eoa::eoa_account::EoaAccountRef;
 use crate::{
-    block::TestBlock, build_stf, do_genesis, install_account_codes, CustomStf, GenesisAccounts,
+    build_stf, default_gas_config, do_genesis, install_account_codes, CustomStf, GenesisAccounts,
     TestTx, MINTER, PLACEHOLDER_ACCOUNT,
 };
-use evolve_block_info::account::BlockInfoRef;
-use evolve_core::{AccountId, Environment, FungibleAsset, InvokeRequest, ReadonlyKV, SdkResult};
+use evolve_core::{
+    AccountId, BlockContext, Environment, FungibleAsset, InvokeRequest, ReadonlyKV, SdkResult,
+};
 use evolve_debugger::{ExecutionTrace, StateSnapshot, TraceBuilder};
 use evolve_fungible_asset::TransferMsg;
-use evolve_server_core::{Block, Transaction};
+use evolve_server::Block;
 use evolve_simulator::{SimConfig, SimStorageAdapter, Simulator};
 use evolve_stf::results::BlockResult;
-use evolve_stf::SystemAccounts;
+use evolve_stf_traits::{Block as BlockTrait, Transaction};
 use evolve_testing::server_mocks::AccountStorageMock;
 use evolve_token::account::TokenRef;
 
@@ -166,7 +167,8 @@ impl SimTestApp {
     }
 
     pub fn with_config(config: SimConfig, seed: u64) -> Self {
-        let bootstrap_stf = build_stf(SystemAccounts::placeholder(), PLACEHOLDER_ACCOUNT);
+        let gas_config = default_gas_config();
+        let bootstrap_stf = build_stf(gas_config.clone(), PLACEHOLDER_ACCOUNT);
         let mut codes = AccountStorageMock::default();
         install_account_codes(&mut codes);
 
@@ -176,10 +178,7 @@ impl SimTestApp {
         sim.apply_state_changes(genesis_state.into_changes().unwrap())
             .unwrap();
 
-        let stf = build_stf(
-            SystemAccounts::new(accounts.gas_service),
-            accounts.scheduler,
-        );
+        let stf = build_stf(gas_config, accounts.scheduler);
         Self {
             sim,
             codes,
@@ -194,16 +193,16 @@ impl SimTestApp {
         action: impl Fn(&mut dyn Environment) -> SdkResult<R>,
     ) -> SdkResult<R> {
         let adapter = SimStorageAdapter::new(self.sim.storage());
-        let height = self.sim.time().block_height();
+        let block = BlockContext::new(self.sim.time().block_height(), 0);
         let (resp, state) =
             self.stf
-                .system_exec_as(&adapter, &self.codes, height, impersonate, action)?;
+                .system_exec_as(&adapter, &self.codes, block, impersonate, action)?;
         let changes = state.into_changes()?;
         self.sim.apply_state_changes(changes)?;
         Ok(resp)
     }
 
-    pub fn apply_block(&mut self, block: &TestBlock<TestTx>) -> BlockResult {
+    pub fn apply_block(&mut self, block: &Block<TestTx>) -> BlockResult {
         let adapter = SimStorageAdapter::new(self.sim.storage());
         let (result, state) = self.stf.apply_block(&adapter, &self.codes, block);
         self.sim
@@ -214,10 +213,10 @@ impl SimTestApp {
 
     pub fn apply_block_with_trace(
         &mut self,
-        block: &TestBlock<TestTx>,
+        block: &Block<TestTx>,
         builder: &mut TraceBuilder,
     ) -> BlockResult {
-        let height = block.height();
+        let height = block.context().height;
         let timestamp_ms = self.sim.time().now_ms();
         builder.block_start(height, timestamp_ms);
 
@@ -231,11 +230,11 @@ impl SimTestApp {
 
         for change in &changes {
             match change {
-                evolve_server_core::StateChange::Set { key, value } => {
+                evolve_stf_traits::StateChange::Set { key, value } => {
                     let old_value = self.sim.storage().get(key).expect("storage read");
                     builder.state_change(key.clone(), old_value, Some(value.clone()));
                 }
-                evolve_server_core::StateChange::Remove { key } => {
+                evolve_stf_traits::StateChange::Remove { key } => {
                     let old_value = self.sim.storage().get(key).expect("storage read");
                     builder.state_change(key.clone(), old_value, None);
                 }
@@ -276,7 +275,7 @@ impl SimTestApp {
                 txs.truncate(max_txs);
             }
 
-            let block = TestBlock::new(height, txs);
+            let block = Block::for_testing(height, txs);
             let result = self.apply_block(&block);
             results.push(result);
             self.sim.advance_block();
@@ -296,7 +295,7 @@ impl SimTestApp {
         for _ in 0..num_blocks {
             let height = self.sim.time().block_height();
             let txs = registry.generate_block(height, &mut self.sim, max_txs);
-            let block = TestBlock::new(height, txs);
+            let block = Block::for_testing(height, txs);
             let result = self.apply_block(&block);
             results.push(result);
             self.sim.advance_block();
@@ -329,7 +328,7 @@ impl SimTestApp {
                 txs.truncate(max_txs);
             }
 
-            let block = TestBlock::new(height, txs);
+            let block = Block::for_testing(height, txs);
             let result = self.apply_block_with_trace(&block, &mut builder);
             results.push(result);
             self.sim.advance_block();
@@ -354,26 +353,14 @@ impl SimTestApp {
     pub fn go_to_height(&mut self, height: u64) {
         assert!(self.sim.time().block_height() < height);
         self.sim.set_block_height(height);
-        let adapter = SimStorageAdapter::new(self.sim.storage());
-        let state = self
-            .stf
-            .system_exec(&adapter, &self.codes, height, |env| {
-                let block_info = BlockInfoRef::from(self.accounts.block_info);
-                block_info.set_block_info(height, 0, env)
-            })
-            .unwrap()
-            .1;
-        self.sim
-            .apply_state_changes(state.into_changes().unwrap())
-            .unwrap();
     }
 
     pub fn create_eoa(&mut self) -> AccountId {
         let adapter = SimStorageAdapter::new(self.sim.storage());
-        let height = self.sim.time().block_height();
+        let block = BlockContext::new(self.sim.time().block_height(), 0);
         let (account_ref, state) = self
             .stf
-            .system_exec(&adapter, &self.codes, height, |env| {
+            .system_exec(&adapter, &self.codes, block, |env| {
                 Ok(EoaAccountRef::initialize(env)?.0)
             })
             .unwrap();

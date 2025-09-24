@@ -1,8 +1,8 @@
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use evolve_debugger::{StateSnapshot, TraceBuilder};
 use evolve_fungible_asset::TransferMsg;
+use evolve_server::Block;
 use evolve_simulator::SimConfig;
-use evolve_testapp::block::TestBlock;
 use evolve_testapp::sim_testing::SimTestApp;
 use evolve_testapp::TestTx;
 
@@ -12,7 +12,7 @@ fn make_transfer_block(
     atom_id: evolve_core::AccountId,
     alice: evolve_core::AccountId,
     bob: evolve_core::AccountId,
-) -> TestBlock<TestTx> {
+) -> Block<TestTx> {
     let mut txs = Vec::with_capacity(tx_count);
     for i in 0..tx_count {
         let (sender, recipient) = if i % 2 == 0 {
@@ -34,7 +34,7 @@ fn make_transfer_block(
         });
     }
 
-    TestBlock::new(height, txs)
+    Block::for_testing(height, txs)
 }
 
 fn make_cold_transfer_block(
@@ -42,7 +42,7 @@ fn make_cold_transfer_block(
     tx_count: usize,
     atom_id: evolve_core::AccountId,
     accounts: &[evolve_core::AccountId],
-) -> TestBlock<TestTx> {
+) -> Block<TestTx> {
     let mut txs = Vec::with_capacity(tx_count);
     let count = accounts.len();
     for i in 0..tx_count {
@@ -62,7 +62,7 @@ fn make_cold_transfer_block(
         });
     }
 
-    TestBlock::new(height, txs)
+    Block::for_testing(height, txs)
 }
 
 fn bench_apply_block(c: &mut Criterion) {

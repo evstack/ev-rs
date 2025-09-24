@@ -132,7 +132,7 @@ pub struct MyModule {
     #[storage(0)]
     pub data: Item<Data>,
     #[skip_storage]
-    pub events: EventsEmitter,  // Initialized with Type::new()
+    pub helper: MyHelper,  // Initialized with Type::new()
 }
 ```
 
@@ -158,6 +158,34 @@ vector.get(index, env)?;
 vector.len(env)?;
 vector.pop(env)?;
 ```
+
+## Emitting Events
+
+Use `env.emit_event()` to emit events from module functions:
+
+```rust
+use evolve_core::events_api::Event;
+
+#[exec]
+pub fn transfer(
+    &self,
+    to: AccountId,
+    amount: u128,
+    env: &mut dyn Environment,
+) -> SdkResult<()> {
+    // ... transfer logic ...
+
+    // Emit event with name and borsh-serializable data
+    env.emit_event("transfer", &TransferEvent {
+        from: env.sender(),
+        to,
+        amount,
+    })?;
+    Ok(())
+}
+```
+
+Events are collected during execution and included in the transaction result.
 
 ## Error Handling
 

@@ -7,8 +7,8 @@ use alloy_primitives::{Address, Bytes, B256, U256};
 use evolve_core::events_api::Event;
 use evolve_core::AccountId;
 use evolve_rpc_types::account_id_to_address;
-use evolve_server_core::{Block, Transaction};
 use evolve_stf::results::{BlockResult, TxResult};
+use evolve_stf_traits::{Block, Transaction};
 use sha2::{Digest, Sha256};
 
 use crate::types::{StoredBlock, StoredLog, StoredReceipt, StoredTransaction};
@@ -120,7 +120,7 @@ where
     B: Block<Tx>,
     Tx: Transaction,
 {
-    let block_number = block.height();
+    let block_number = block.context().height;
     let block_hash = metadata.hash;
     let txs = block.txs();
 

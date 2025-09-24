@@ -24,10 +24,12 @@ pub mod error;
 pub mod health;
 pub mod metrics_middleware;
 pub mod server;
+pub mod subscriptions;
 
 // Re-export key types for convenience
-pub use api::{EthApiServer, NetApiServer, Web3ApiServer};
+pub use api::{EthApiServer, EthPubSubApiServer, NetApiServer, Web3ApiServer};
 pub use error::{RpcError, RpcResult};
 pub use health::HealthStatus;
 pub use metrics_middleware::{encode_metrics, MetricsLayer, MetricsService};
 pub use server::{start_server, EthRpcServer, NoopStateProvider, RpcServerConfig, StateProvider};
+pub use subscriptions::{SharedSubscriptionManager, SubscriptionKind, SubscriptionManager};

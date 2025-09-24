@@ -1,5 +1,5 @@
 use evolve_core::{AccountCode, ErrorCode, ReadonlyKV};
-use evolve_server_core::{
+use evolve_stf_traits::{
     AccountsCodeStorage, StateChange, WritableAccountsCodeStorage, WritableKV,
 };
 use std::collections::HashMap;

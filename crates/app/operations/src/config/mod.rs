@@ -11,6 +11,7 @@ mod validation;
 
 pub use loader::{load_config, load_config_from_str};
 pub use types::{
-    ChainConfig, NodeConfig, ObservabilityConfig, OperationsConfig, RpcConfig, StorageConfig,
+    ChainConfig, GasConfig, GrpcConfig, NodeConfig, ObservabilityConfig, OperationsConfig,
+    RpcConfig, StorageConfig,
 };
 pub use validation::validate_config;

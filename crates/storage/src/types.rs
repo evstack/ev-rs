@@ -1,4 +1,4 @@
-use commonware_utils::array::FixedBytes;
+use commonware_utils::sequence::FixedBytes;
 use evolve_core::{define_error, ErrorCode};
 use std::fmt;
 
@@ -43,6 +43,15 @@ impl From<[u8; 32]> for CommitHash {
 pub enum Operation {
     Set { key: Vec<u8>, value: Vec<u8> },
     Remove { key: Vec<u8> },
+}
+
+impl From<evolve_stf_traits::StateChange> for Operation {
+    fn from(change: evolve_stf_traits::StateChange) -> Self {
+        match change {
+            evolve_stf_traits::StateChange::Set { key, value } => Operation::Set { key, value },
+            evolve_stf_traits::StateChange::Remove { key } => Operation::Remove { key },
+        }
+    }
 }
 
 /// Storage configuration
@@ -104,14 +113,45 @@ pub fn create_storage_key(key: &[u8]) -> Result<StorageKey, ErrorCode> {
     Ok(StorageKey::new(data))
 }
 
+/// Length prefix size for value storage (4 bytes for u32 length)
+pub const VALUE_LENGTH_PREFIX_SIZE: usize = 4;
+
+/// Maximum actual value size (chunk size minus length prefix)
+pub const MAX_VALUE_DATA_SIZE: usize = STORAGE_VALUE_SIZE - VALUE_LENGTH_PREFIX_SIZE;
+
 /// Helper function for creating storage value chunks
+///
+/// Stores value with a 4-byte length prefix to preserve exact data semantics.
+/// Format: [len_u32_le][data][padding]
 pub fn create_storage_value_chunk(value: &[u8]) -> Result<StorageValueChunk, ErrorCode> {
-    if value.len() > STORAGE_VALUE_SIZE {
+    if value.len() > MAX_VALUE_DATA_SIZE {
         return Err(ERR_VALUE_TOO_LARGE);
     }
 
     let mut data = [0u8; STORAGE_VALUE_SIZE];
-    data[..value.len()].copy_from_slice(value);
+    // Store length as 4-byte little-endian prefix
+    let len_bytes = (value.len() as u32).to_le_bytes();
+    data[..VALUE_LENGTH_PREFIX_SIZE].copy_from_slice(&len_bytes);
+    // Store actual value after length prefix
+    data[VALUE_LENGTH_PREFIX_SIZE..VALUE_LENGTH_PREFIX_SIZE + value.len()].copy_from_slice(value);
 
     Ok(StorageValueChunk::new(data))
+}
+
+/// Extract value from storage chunk by reading length prefix
+///
+/// Returns the exact bytes that were stored, preserving trailing zeros.
+pub fn extract_value_from_chunk(chunk: &StorageValueChunk) -> Option<Vec<u8>> {
+    let data = chunk.as_ref();
+    // Read length from 4-byte little-endian prefix
+    let len_bytes: [u8; 4] = data[..VALUE_LENGTH_PREFIX_SIZE].try_into().ok()?;
+    let len = u32::from_le_bytes(len_bytes) as usize;
+
+    // Validate length
+    if len > MAX_VALUE_DATA_SIZE {
+        return None;
+    }
+
+    // Extract exactly 'len' bytes of actual data
+    Some(data[VALUE_LENGTH_PREFIX_SIZE..VALUE_LENGTH_PREFIX_SIZE + len].to_vec())
 }

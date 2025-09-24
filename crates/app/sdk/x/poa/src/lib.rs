@@ -6,10 +6,10 @@ pub mod account {
     use evolve_collections::item::Item;
     use evolve_collections::unordered_map::UnorderedMap;
     use evolve_collections::vector::Vector;
+    use evolve_core::encoding::Encodable;
     use evolve_core::{
         define_error, AccountId, Environment, EnvironmentQuery, SdkResult, ERR_UNAUTHORIZED,
     };
-    use evolve_events::EventsEmitter;
     use evolve_macros::{exec, init, query};
     use evolve_scheduler::begin_block_account_interface::BeginBlockAccountInterface;
 
@@ -43,7 +43,6 @@ pub mod account {
         update_authority: Item<AccountId>,
         validators: UnorderedMap<AccountId, Validator>,
         valset_changes: Vector<ValsetChange>,
-        events: EventsEmitter,
     }
 
     impl Default for Poa {
@@ -59,7 +58,6 @@ pub mod account {
                 update_authority: Item::new(1),
                 validators: UnorderedMap::new(2, 3, 4, 5),
                 valset_changes: Vector::new(6, 7),
-                events: EventsEmitter::new(),
             }
         }
         #[init]
@@ -104,13 +102,10 @@ pub mod account {
             self.valset_changes
                 .push(&ValsetChange::Remove(validator), env)?;
 
-            self.events.emit_event(
-                "validator_removed",
-                EventValidatorRemoved {
-                    account_id: validator,
-                },
-                env,
-            )?;
+            let event_data = EventValidatorRemoved {
+                account_id: validator,
+            };
+            env.emit_event("validator_removed", &event_data.encode()?)?;
             Ok(())
         }
 

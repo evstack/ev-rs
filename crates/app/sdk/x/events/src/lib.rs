@@ -1,29 +1,12 @@
-use evolve_core::encoding::Encodable;
-use evolve_core::events_api::{EmitEventRequest, EVENT_HANDLER_ACCOUNT_ID};
-use evolve_core::{Environment, InvokeRequest, Message, SdkResult};
+//! # Events Module (Deprecated)
+//!
+//! Event emission is now built into the `Environment` trait directly.
+//! Use `env.emit_event(name, data)` instead of `EventsEmitter`.
+//!
+//! This module is kept for backwards compatibility and re-exports `Event` from core.
 
-#[derive(Default)]
-pub struct EventsEmitter;
-
-impl EventsEmitter {
-    pub const fn new() -> Self {
-        EventsEmitter
-    }
-    pub fn emit_event<T: Encodable>(
-        &self,
-        name: impl Into<String>,
-        event: T,
-        env: &mut dyn Environment,
-    ) -> SdkResult<()> {
-        let name = name.into();
-        env.do_exec(
-            EVENT_HANDLER_ACCOUNT_ID,
-            &InvokeRequest::new(&EmitEventRequest {
-                name,
-                contents: Message::new(&event)?,
-            })?,
-            vec![],
-        )?;
-        Ok(())
-    }
-}
+#[deprecated(
+    since = "0.2.0",
+    note = "Use env.emit_event(name, data) directly instead of EventsEmitter"
+)]
+pub use evolve_core::events_api::Event;

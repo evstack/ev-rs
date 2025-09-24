@@ -9,7 +9,7 @@ description = "Time-travel debugging for Evolve SDK simulations"
 
 [dependencies]
 evolve_core = { workspace = true }
-evolve_server_core = { workspace = true }
+evolve_stf_traits = { workspace = true }
 evolve_simulator = { workspace = true }
 
 # Serialization

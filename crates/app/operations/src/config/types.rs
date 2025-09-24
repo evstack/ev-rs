@@ -12,9 +12,13 @@ pub struct NodeConfig {
     /// Storage configuration.
     pub storage: StorageConfig,
 
-    /// RPC server configuration.
+    /// JSON-RPC server configuration.
     #[serde(default)]
     pub rpc: RpcConfig,
+
+    /// gRPC server configuration.
+    #[serde(default)]
+    pub grpc: GrpcConfig,
 
     /// Operations configuration.
     #[serde(default)]
@@ -32,20 +36,51 @@ pub struct ChainConfig {
     /// Unique chain identifier. Must be > 0.
     pub chain_id: u64,
 
-    /// Account ID for the gas service (as string to support u128 values).
-    #[serde(deserialize_with = "deserialize_u128_from_string")]
-    pub gas_service_account: u128,
+    /// Gas configuration for storage operations.
+    #[serde(default)]
+    pub gas: GasConfig,
 }
 
-fn deserialize_u128_from_string<'de, D>(deserializer: D) -> Result<u128, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    use serde::de::Error;
+/// Gas configuration for storage operations.
+///
+/// This configuration defines the gas costs for different storage operations.
+/// All charges are per-byte costs.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GasConfig {
+    /// Gas charged per byte for storage read operations.
+    #[serde(default = "GasConfig::default_storage_get_charge")]
+    pub storage_get_charge: u64,
+    /// Gas charged per byte for storage write operations.
+    #[serde(default = "GasConfig::default_storage_set_charge")]
+    pub storage_set_charge: u64,
+    /// Gas charged per byte for storage delete operations.
+    #[serde(default = "GasConfig::default_storage_remove_charge")]
+    pub storage_remove_charge: u64,
+}
 
-    let s = String::deserialize(deserializer)?;
-    s.parse::<u128>()
-        .map_err(|e| Error::custom(format!("invalid u128: {}", e)))
+impl Default for GasConfig {
+    fn default() -> Self {
+        Self {
+            storage_get_charge: Self::default_storage_get_charge(),
+            storage_set_charge: Self::default_storage_set_charge(),
+            storage_remove_charge: Self::default_storage_remove_charge(),
+        }
+    }
+}
+
+impl GasConfig {
+    const fn default_storage_get_charge() -> u64 {
+        10
+    }
+
+    const fn default_storage_set_charge() -> u64 {
+        10
+    }
+
+    const fn default_storage_remove_charge() -> u64 {
+        10
+    }
 }
 
 /// Storage configuration.
@@ -133,6 +168,66 @@ impl RpcConfig {
 
     fn default_client_version() -> String {
         "evolve/0.1.0".to_string()
+    }
+}
+
+/// gRPC server configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrpcConfig {
+    /// gRPC address to bind to.
+    #[serde(default = "GrpcConfig::default_addr")]
+    pub addr: String,
+
+    /// Whether the gRPC server is enabled.
+    #[serde(default = "GrpcConfig::default_enabled")]
+    pub enabled: bool,
+
+    /// Enable gzip compression.
+    #[serde(default = "GrpcConfig::default_enable_gzip")]
+    pub enable_gzip: bool,
+
+    /// Maximum message size in bytes. Default: 4MB.
+    #[serde(default = "GrpcConfig::default_max_message_size")]
+    pub max_message_size: usize,
+}
+
+impl Default for GrpcConfig {
+    fn default() -> Self {
+        Self {
+            addr: Self::default_addr(),
+            enabled: Self::default_enabled(),
+            enable_gzip: Self::default_enable_gzip(),
+            max_message_size: Self::default_max_message_size(),
+        }
+    }
+}
+
+impl GrpcConfig {
+    fn default_addr() -> String {
+        "127.0.0.1:9545".to_string()
+    }
+
+    const fn default_enabled() -> bool {
+        false // Disabled by default, opt-in
+    }
+
+    const fn default_enable_gzip() -> bool {
+        true
+    }
+
+    const fn default_max_message_size() -> usize {
+        4 * 1024 * 1024 // 4MB
+    }
+
+    /// Convert to the grpc crate's config type.
+    pub fn to_grpc_server_config(&self, chain_id: u64) -> evolve_grpc::GrpcServerConfig {
+        evolve_grpc::GrpcServerConfig {
+            addr: self.addr.parse().expect("invalid gRPC address"),
+            chain_id,
+            enable_gzip: self.enable_gzip,
+            max_message_size: self.max_message_size,
+        }
     }
 }
 
@@ -228,6 +323,15 @@ mod tests {
         assert_eq!(config.http_addr, "127.0.0.1:8545");
         assert!(config.enabled);
         assert_eq!(config.client_version, "evolve/0.1.0");
+    }
+
+    #[test]
+    fn test_default_grpc_config() {
+        let config = GrpcConfig::default();
+        assert_eq!(config.addr, "127.0.0.1:9545");
+        assert!(!config.enabled); // Disabled by default
+        assert!(config.enable_gzip);
+        assert_eq!(config.max_message_size, 4 * 1024 * 1024);
     }
 
     #[test]

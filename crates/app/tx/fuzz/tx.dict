@@ -1,0 +1,52 @@
+# Dictionary for Ethereum transaction fuzzing
+
+# Transaction type prefixes (EIP-2718)
+tx_legacy="\x00"
+tx_eip2930="\x01"
+tx_eip1559="\x02"
+tx_eip4844="\x03"
+tx_evolve_batch="\x80"
+tx_evolve_sponsored="\x81"
+tx_evolve_scheduled="\x82"
+
+# RLP encoding prefixes
+rlp_single_byte_max="\x7f"
+rlp_short_string="\x80"
+rlp_short_string_55="\xb7"
+rlp_long_string="\xb8"
+rlp_short_list="\xc0"
+rlp_short_list_max="\xf7"
+rlp_long_list="\xf8"
+rlp_long_list_2="\xf9"
+rlp_long_list_3="\xfa"
+
+# Common lengths
+len_0="\x00"
+len_20="\x14"
+len_32="\x20"
+len_55="\x37"
+len_56="\x38"
+
+# Empty values
+empty="\x80"
+zero="\x00"
+
+# Ethereum-specific
+chain_id_1="\x01"
+chain_id_mainnet="\x01"
+gas_21000="\x825208"
+one_eth="\x880de0b6b3a7640000"
+
+# Address patterns
+zero_addr="\x940000000000000000000000000000000000000000"
+all_ones_addr="\x94ffffffffffffffffffffffffffffffffffffffff"
+
+# Signature components (v values for EIP-155)
+v_27="\x1b"
+v_28="\x1c"
+v_37="\x25"
+v_38="\x26"
+
+# Common nested structures
+nested_list="\xc1\xc0"
+nested_deep="\xc2\xc1\xc0"

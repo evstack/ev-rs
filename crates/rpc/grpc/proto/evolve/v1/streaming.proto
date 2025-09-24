@@ -1,0 +1,44 @@
+syntax = "proto3";
+
+package evolve.v1;
+
+import "evolve/v1/types.proto";
+
+// StreamingService provides server-streaming RPC methods for real-time updates.
+// These mirror the eth_subscribe WebSocket API.
+service StreamingService {
+  // Subscribe to new block headers as they are produced
+  rpc SubscribeNewHeads(SubscribeNewHeadsRequest) returns (stream BlockHeader);
+
+  // Subscribe to logs matching a filter
+  rpc SubscribeLogs(SubscribeLogsRequest) returns (stream Log);
+
+  // Subscribe to new pending transaction hashes
+  rpc SubscribePendingTransactions(SubscribePendingTransactionsRequest) returns (stream H256);
+
+  // Subscribe to sync status changes
+  rpc SubscribeSyncing(SubscribeSyncingRequest) returns (stream SyncStatus);
+}
+
+// Request to subscribe to new block headers
+message SubscribeNewHeadsRequest {
+  // No parameters needed
+}
+
+// Request to subscribe to logs matching a filter
+message SubscribeLogsRequest {
+  // Address filter - empty means all addresses
+  repeated Address addresses = 1;
+  // Topic filters - outer is position (0-3), inner is OR alternatives
+  repeated TopicFilter topics = 2;
+}
+
+// Request to subscribe to pending transaction hashes
+message SubscribePendingTransactionsRequest {
+  // No parameters needed
+}
+
+// Request to subscribe to sync status changes
+message SubscribeSyncingRequest {
+  // No parameters needed
+}

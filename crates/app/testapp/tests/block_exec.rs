@@ -1,11 +1,11 @@
 use evolve_core::{AccountId, EnvironmentQuery, InvokeRequest, SdkResult};
 use evolve_fungible_asset::TransferMsg;
-use evolve_gas::account::ERR_OUT_OF_GAS;
 use evolve_poa::account::Poa;
-use evolve_server_core::WritableKV;
-use evolve_stf::SystemAccounts;
+use evolve_stf::ERR_OUT_OF_GAS;
+use evolve_stf_traits::WritableKV;
 use evolve_testapp::{
-    build_stf, do_genesis, install_account_codes, GenesisAccounts, TestTx, PLACEHOLDER_ACCOUNT,
+    build_stf, default_gas_config, do_genesis, install_account_codes, GenesisAccounts, TestTx,
+    PLACEHOLDER_ACCOUNT,
 };
 use evolve_testing::server_mocks::{AccountStorageMock, StorageMock};
 
@@ -24,16 +24,14 @@ fn setup_test_environment() -> (
 
     install_account_codes(&mut codes);
 
+    let gas_config = default_gas_config();
     // do genesis
-    let bootstrap_stf = build_stf(SystemAccounts::placeholder(), PLACEHOLDER_ACCOUNT);
+    let bootstrap_stf = build_stf(gas_config.clone(), PLACEHOLDER_ACCOUNT);
     let (state, accounts) = do_genesis(&bootstrap_stf, &codes, &storage).unwrap();
     let state_changes = state.into_changes().unwrap();
     storage.apply_changes(state_changes).unwrap();
 
-    let stf = build_stf(
-        SystemAccounts::new(accounts.gas_service),
-        accounts.scheduler,
-    );
+    let stf = build_stf(gas_config, accounts.scheduler);
     (storage, codes, stf, accounts)
 }
 
@@ -56,7 +54,7 @@ fn test_successful_transaction() {
     };
 
     // execute block with successful transaction
-    let block = evolve_testapp::block::TestBlock::make_for_testing(vec![ok_tx]);
+    let block = evolve_server::Block::for_testing(1, vec![ok_tx]);
     let (mut block_results, _new_state) = stf.apply_block(&storage, &codes, &block);
 
     // extract and verify result
@@ -83,7 +81,7 @@ fn test_out_of_gas_transaction() {
     };
 
     // execute block with out of gas transaction
-    let block = evolve_testapp::block::TestBlock::make_for_testing(vec![out_of_gas_tx]);
+    let block = evolve_server::Block::for_testing(1, vec![out_of_gas_tx]);
     let (mut block_results, _new_state) = stf.apply_block(&storage, &codes, &block);
 
     // extract and verify result

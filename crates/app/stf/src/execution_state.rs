@@ -4,7 +4,7 @@ use crate::errors::{
 };
 use evolve_core::events_api::Event;
 use evolve_core::{ErrorCode, Message, ReadonlyKV, SdkResult};
-use evolve_server_core::StateChange as CoreStateChange;
+use evolve_stf_traits::StateChange as CoreStateChange;
 use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
 use std::cell::Cell;

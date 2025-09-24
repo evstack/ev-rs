@@ -40,7 +40,7 @@ pub use storage::{SimulatedStorage, StorageConfig, StorageSnapshot, StorageStats
 pub use time::{SimulatedTime, TimeConfig, TimeSnapshot};
 
 use evolve_core::{define_error, ErrorCode, ReadonlyKV};
-use evolve_server_core::{StateChange, WritableKV};
+use evolve_stf_traits::{StateChange, WritableKV};
 use metrics::BlockMetricsBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

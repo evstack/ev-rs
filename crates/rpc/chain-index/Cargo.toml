@@ -14,7 +14,7 @@ archive = []
 
 [dependencies]
 evolve_core.workspace = true
-evolve_server_core.workspace = true
+evolve_stf_traits.workspace = true
 evolve_stf.workspace = true
 evolve_storage.workspace = true
 evolve_rpc_types.workspace = true

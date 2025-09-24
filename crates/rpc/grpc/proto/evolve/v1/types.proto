@@ -1,0 +1,179 @@
+syntax = "proto3";
+
+package evolve.v1;
+
+// 32-byte hash (block hash, tx hash, etc.)
+message H256 {
+  bytes data = 1; // exactly 32 bytes
+}
+
+// 20-byte Ethereum address
+message Address {
+  bytes data = 1; // exactly 20 bytes
+}
+
+// 256-bit unsigned integer
+message U256 {
+  bytes data = 1; // big-endian, up to 32 bytes (leading zeros may be omitted)
+}
+
+// Block identifier - either by number or special tag
+message BlockId {
+  oneof id {
+    uint64 number = 1;
+    BlockTag tag = 2;
+  }
+}
+
+// Standard block tags
+enum BlockTag {
+  BLOCK_TAG_UNSPECIFIED = 0;
+  BLOCK_TAG_LATEST = 1;
+  BLOCK_TAG_EARLIEST = 2;
+  BLOCK_TAG_PENDING = 3;
+  BLOCK_TAG_SAFE = 4;
+  BLOCK_TAG_FINALIZED = 5;
+}
+
+// Block header information
+message BlockHeader {
+  uint64 number = 1;
+  H256 hash = 2;
+  H256 parent_hash = 3;
+  H256 state_root = 4;
+  H256 transactions_root = 5;
+  H256 receipts_root = 6;
+  Address miner = 7;
+  uint64 gas_limit = 8;
+  uint64 gas_used = 9;
+  uint64 timestamp = 10;
+  bytes extra_data = 11;
+  U256 base_fee_per_gas = 12;
+  bytes logs_bloom = 13;
+}
+
+// Full block with transactions
+message Block {
+  BlockHeader header = 1;
+  // Either transaction hashes or full transactions
+  oneof transactions {
+    TransactionHashes tx_hashes = 2;
+    Transactions full_transactions = 3;
+  }
+  uint64 size = 4;
+}
+
+// List of transaction hashes
+message TransactionHashes {
+  repeated H256 hashes = 1;
+}
+
+// List of full transactions
+message Transactions {
+  repeated Transaction transactions = 1;
+}
+
+// Transaction data
+message Transaction {
+  H256 hash = 1;
+  uint64 nonce = 2;
+  optional H256 block_hash = 3;
+  optional uint64 block_number = 4;
+  optional uint64 transaction_index = 5;
+  Address from = 6;
+  optional Address to = 7;
+  U256 value = 8;
+  uint64 gas = 9;
+  optional U256 gas_price = 10;
+  optional U256 max_fee_per_gas = 11;
+  optional U256 max_priority_fee_per_gas = 12;
+  bytes input = 13;
+  uint32 tx_type = 14;
+  optional uint64 chain_id = 15;
+  // Signature components
+  uint64 v = 16;
+  U256 r = 17;
+  U256 s = 18;
+  // Access list for EIP-2930/1559
+  repeated AccessListItem access_list = 19;
+}
+
+// Access list entry (EIP-2930)
+message AccessListItem {
+  Address address = 1;
+  repeated H256 storage_keys = 2;
+}
+
+// Transaction receipt
+message Receipt {
+  H256 transaction_hash = 1;
+  uint64 transaction_index = 2;
+  H256 block_hash = 3;
+  uint64 block_number = 4;
+  Address from = 5;
+  optional Address to = 6;
+  uint64 cumulative_gas_used = 7;
+  uint64 gas_used = 8;
+  U256 effective_gas_price = 9;
+  optional Address contract_address = 10;
+  repeated Log logs = 11;
+  bytes logs_bloom = 12;
+  uint32 tx_type = 13;
+  uint64 status = 14; // 1 = success, 0 = failure
+}
+
+// Log/event entry
+message Log {
+  Address address = 1;
+  repeated H256 topics = 2;
+  bytes data = 3;
+  optional uint64 block_number = 4;
+  optional H256 transaction_hash = 5;
+  optional uint64 transaction_index = 6;
+  optional H256 block_hash = 7;
+  optional uint64 log_index = 8;
+  bool removed = 9;
+}
+
+// Filter for querying logs
+message LogFilter {
+  optional BlockId from_block = 1;
+  optional BlockId to_block = 2;
+  // Address filter - can be single or multiple
+  repeated Address addresses = 3;
+  // Topic filters - outer is position (0-3), inner is OR alternatives
+  repeated TopicFilter topics = 4;
+  optional H256 block_hash = 5;
+}
+
+// Topic filter for a single position
+message TopicFilter {
+  repeated H256 topics = 1; // empty means any topic at this position
+}
+
+// Call request for eth_call and eth_estimateGas
+message CallRequest {
+  optional Address from = 1;
+  Address to = 2;
+  optional uint64 gas = 3;
+  optional U256 gas_price = 4;
+  optional U256 max_fee_per_gas = 5;
+  optional U256 max_priority_fee_per_gas = 6;
+  optional U256 value = 7;
+  optional bytes data = 8;
+}
+
+// Sync status
+message SyncStatus {
+  oneof status {
+    bool not_syncing = 1;
+    SyncProgress progress = 2;
+  }
+}
+
+// Sync progress details
+message SyncProgress {
+  uint64 starting_block = 1;
+  uint64 current_block = 2;
+  uint64 highest_block = 3;
+}

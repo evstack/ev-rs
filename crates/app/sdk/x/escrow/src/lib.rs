@@ -3,7 +3,6 @@ use evolve_core::account_impl;
 #[account_impl(Escrow)]
 pub mod escrow {
     use borsh::{BorshDeserialize, BorshSerialize};
-    use evolve_block_info::account::BlockInfoRef;
     use evolve_collections::item::Item;
     use evolve_collections::map::Map;
     use evolve_core::{
@@ -27,8 +26,6 @@ pub mod escrow {
         pub locks: Map<UniqueId, Lock>,
         #[storage(1)]
         pub unique: Item<UniqueRef>,
-        #[storage(2)]
-        pub block_info: Item<BlockInfoRef>,
     }
 
     impl Escrow {
@@ -36,12 +33,9 @@ pub mod escrow {
         pub fn initialize(
             &self,
             unique_account: AccountId,
-            block_info_account: AccountId,
             env: &mut dyn Environment,
         ) -> SdkResult<()> {
             self.unique.set(&UniqueRef::from(unique_account), env)?;
-            self.block_info
-                .set(&BlockInfoRef::from(block_info_account), env)?;
             Ok(())
         }
 
@@ -76,8 +70,8 @@ pub mod escrow {
             // ensure owner
             ensure!(escrow.owner == env.sender(), ERR_UNAUTHORIZED);
 
-            // ensure height
-            let block_height = self.block_info.get(env)?.get_height(env)?;
+            // ensure height - use env.block() directly instead of cross-account query
+            let block_height = env.block().height;
             ensure!(block_height >= escrow.unlock_height, ERR_LOCK_NOT_READY);
 
             // unlock funds

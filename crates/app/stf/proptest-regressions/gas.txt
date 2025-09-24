@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e5c10aaaf6b09781042cc569bc5ed08f16c67cf5658431b87f480db58058afbd # shrinks to gas_limit = 4, storage_get_charge = 0, storage_set_charge = 0, storage_remove_charge = 1, ops = [Remove([])]

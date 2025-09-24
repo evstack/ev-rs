@@ -3,7 +3,6 @@
 //! This module contains handlers for system-level operations including:
 //! - Account creation and migration
 //! - Storage operations
-//! - Event emission
 //! - Unique ID generation
 //!
 //! These handlers process messages sent to system accounts and provide
@@ -12,8 +11,6 @@
 use crate::errors::{ERR_ACCOUNT_DOES_NOT_EXIST, ERR_CODE_NOT_FOUND, ERR_SAME_CODE_MIGRATION};
 use crate::invoker::Invoker;
 use crate::runtime_api_impl;
-use crate::validation::validate_event;
-use evolve_core::events_api::{EmitEventRequest, EmitEventResponse, Event};
 use evolve_core::runtime_api::{
     CreateAccountRequest, CreateAccountResponse, MigrateRequest, RUNTIME_ACCOUNT_ID,
 };
@@ -25,7 +22,7 @@ use evolve_core::{
     Environment, FungibleAsset, InvokableMessage, InvokeRequest, InvokeResponse, ReadonlyKV,
     SdkResult, ERR_UNAUTHORIZED, ERR_UNKNOWN_FUNCTION,
 };
-use evolve_server_core::AccountsCodeStorage;
+use evolve_stf_traits::AccountsCodeStorage;
 
 /// Handles execution requests sent to the system/runtime account.
 ///
@@ -136,29 +133,6 @@ pub fn handle_storage_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
             invoker.gas_counter.consume_remove_gas(&key)?;
             invoker.storage.remove(&key)?;
             Ok(InvokeResponse::new(&StorageRemoveResponse {})?)
-        }
-        _ => Err(ERR_UNKNOWN_FUNCTION),
-    }
-}
-
-pub fn handle_event_handler_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
-    invoker: &mut Invoker<'_, '_, S, A>,
-    request: &InvokeRequest,
-) -> SdkResult<InvokeResponse> {
-    match request.function() {
-        EmitEventRequest::FUNCTION_IDENTIFIER => {
-            let req: EmitEventRequest = request.get()?;
-
-            // Validate event
-            validate_event(&req.name, &req.contents.as_vec()?)?;
-
-            let event = Event {
-                source: invoker.whoami,
-                name: req.name,
-                contents: req.contents,
-            };
-            invoker.storage.emit_event(event)?;
-            Ok(InvokeResponse::new(&EmitEventResponse {})?)
         }
         _ => Err(ERR_UNKNOWN_FUNCTION),
     }

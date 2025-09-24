@@ -182,3 +182,25 @@ pub trait NetApi {
     #[method(name = "peerCount")]
     async fn peer_count(&self) -> Result<U64, jsonrpsee::types::ErrorObjectOwned>;
 }
+
+/// Ethereum PubSub namespace RPC API.
+///
+/// This trait defines the WebSocket subscription methods for real-time updates.
+#[rpc(server, namespace = "eth")]
+pub trait EthPubSubApi {
+    /// Creates a new subscription for the specified event type.
+    ///
+    /// Subscription types:
+    /// - `newHeads`: New block headers
+    /// - `logs`: Log events matching an optional filter
+    /// - `newPendingTransactions`: Pending transaction hashes
+    /// - `syncing`: Sync status changes
+    ///
+    /// Returns a subscription ID that can be used with `eth_unsubscribe`.
+    #[subscription(name = "subscribe" => "subscription", unsubscribe = "unsubscribe", item = serde_json::Value)]
+    async fn subscribe(
+        &self,
+        kind: String,
+        params: Option<serde_json::Value>,
+    ) -> jsonrpsee::core::SubscriptionResult;
+}

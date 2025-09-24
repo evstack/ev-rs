@@ -2,13 +2,16 @@
 members = [
     "crates/rpc/types",
     "crates/rpc/eth-jsonrpc",
+    "crates/rpc/grpc",
     "crates/rpc/chain-index",
     "crates/app/operations",
     "crates/app/stf",
+    "crates/app/tx",
     "crates/app/sdk/collections",
     "crates/app/sdk/core",
     "crates/app/sdk/macros",
-    "crates/app/sdk/server_core",
+    "crates/app/sdk/stf_traits",
+    "crates/app/server",
     "crates/app/sdk/standards/*",
     "crates/app/sdk/x/*",
     "crates/storage",
@@ -31,26 +34,26 @@ rust-version = "1.86.0"
 evolve_collections = { path = "crates/app/sdk/collections" }
 evolve_core = { path = "crates/app/sdk/core" }
 evolve_macros = { path = "crates/app/sdk/macros" }
-evolve_server_core = { path = "crates/app/sdk/server_core" }
+evolve_stf_traits = { path = "crates/app/sdk/stf_traits" }
+evolve_server = { path = "crates/app/server" }
 evolve_math = { path = "crates/app/sdk/math" }
 
 evolve_fungible_asset = { path = "crates/app/sdk/standards/evolve_fungible_asset" }
 evolve_authentication = { path = "crates/app/sdk/standards/evolve_authentication" }
 
-evolve_block_info = { path = "crates/app/sdk/x/block_info" }
-evolve_events = { path = "crates/app/sdk/x/events" }
 evolve_escrow = { path = "crates/app/sdk/x/escrow" }
-evolve_gas = { path = "crates/app/sdk/x/gas" }
 evolve_poa = { path = "crates/app/sdk/x/poa" }
 evolve_scheduler = { path = "crates/app/sdk/x/scheduler" }
 evolve_token = { path = "crates/app/sdk/x/token" }
 evolve_unique = { path = "crates/app/sdk/x/unique" }
 
 evolve_stf = { path = "crates/app/stf" }
+evolve_tx = { path = "crates/app/tx" }
 evolve_operations = { path = "crates/app/operations" }
 
 evolve_rpc_types = { path = "crates/rpc/types" }
 evolve_eth_jsonrpc = { path = "crates/rpc/eth-jsonrpc" }
+evolve_grpc = { path = "crates/rpc/grpc" }
 evolve_chain_index = { path = "crates/rpc/chain-index" }
 
 evolve_testing = { path = "crates/app/sdk/testing" }
@@ -64,11 +67,11 @@ evolve_debugger = { path = "crates/testing/debugger" }
 
 # outside deps
 linkme = { version = "0.3", default-features = false }
-commonware-cryptography = "0.0.56"
-commonware-runtime = "0.0.56"
-commonware-storage = "0.0.56"
-commonware-utils = "0.0.56"
-commonware-codec = "0.0.56"
+commonware-cryptography = "0.0.65"
+commonware-runtime = "0.0.65"
+commonware-storage = "0.0.65"
+commonware-utils = "0.0.65"
+commonware-codec = "0.0.65"
 borsh = { features = ["derive"], version = "1.5.5" }
 fixed = { version = "1.29", features = ["borsh", "serde"] }
 log = { version = "0.4.27" }
@@ -77,6 +80,12 @@ futures = "0.3.31"
 base64 = "0.22.1"
 sha2 = { version = "0.10.8" }
 async-trait = "0.1"
+
+# Alloy ecosystem for Ethereum transaction handling
+alloy-primitives = "0.8"
+alloy-consensus = "0.9"
+alloy-rlp = "0.3"
+alloy-eips = "0.9"
 [workspace.lints.rust]
 # missing_docs = "deny"
 

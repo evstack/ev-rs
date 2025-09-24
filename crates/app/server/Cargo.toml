@@ -1,0 +1,26 @@
+[package]
+name = "evolve_server"
+version = "0.1.0"
+edition = "2021"
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+evolve_core = { workspace = true }
+evolve_stf_traits = { workspace = true }
+evolve_stf = { workspace = true }
+evolve_storage = { workspace = true }
+evolve_operations = { workspace = true }
+evolve_chain_index = { workspace = true }
+evolve_eth_jsonrpc = { workspace = true }
+evolve_grpc = { workspace = true }
+
+alloy-primitives = { workspace = true }
+tokio = { workspace = true }
+async-trait = { workspace = true }
+log = { workspace = true }
+thiserror = "2"
+
+[lints]
+workspace = true
