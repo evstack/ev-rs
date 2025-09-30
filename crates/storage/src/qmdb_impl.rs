@@ -20,8 +20,8 @@
 use crate::cache::{CachedValue, ShardedDbCache};
 use crate::metrics::OptionalMetrics;
 use crate::types::{
-    create_storage_key, create_storage_value_chunk, extract_value_from_chunk,
-    MAX_VALUE_DATA_SIZE, StorageKey, StorageValueChunk,
+    create_storage_key, create_storage_value_chunk, extract_value_from_chunk, StorageKey,
+    StorageValueChunk, MAX_VALUE_DATA_SIZE,
 };
 use async_trait::async_trait;
 use commonware_cryptography::sha256::Sha256;
@@ -380,7 +380,11 @@ where
                 QmdbState::Mutable(_) => "Mutable",
                 QmdbState::Transitioning => "Transitioning",
             };
-            log::debug!("get_async_uncached: state={}, key_len={}", state_name, key.len());
+            log::debug!(
+                "get_async_uncached: state={}, key_len={}",
+                state_name,
+                key.len()
+            );
 
             match &*state_guard {
                 QmdbState::Clean(db) => db.get(&storage_key).await,
@@ -1067,8 +1071,10 @@ mod tests {
             assert_eq!(value.len(), 16);
             assert_eq!(
                 value,
-                vec![0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00,
-                     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]
+                vec![
+                    0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                    0x00, 0x00, 0x00
+                ]
             );
 
             storage
@@ -1080,7 +1086,10 @@ mod tests {
                 .unwrap();
 
             let retrieved = storage.get(b"account_id").unwrap().unwrap();
-            assert_eq!(retrieved, value, "Value with trailing zeros must be preserved exactly");
+            assert_eq!(
+                retrieved, value,
+                "Value with trailing zeros must be preserved exactly"
+            );
             assert_eq!(retrieved.len(), 16, "Length must be preserved");
         })
     }
@@ -1196,7 +1205,10 @@ mod tests {
                 .unwrap();
 
             let retrieved = storage.get(b"embedded_zeros").unwrap().unwrap();
-            assert_eq!(retrieved, value, "Value with embedded zeros must be preserved exactly");
+            assert_eq!(
+                retrieved, value,
+                "Value with embedded zeros must be preserved exactly"
+            );
         })
     }
 
@@ -1238,8 +1250,10 @@ mod tests {
             // Read after commit - this is where the original bug manifested
             let retrieved = storage.get(b"scheduler_key").unwrap().unwrap();
             assert_eq!(
-                retrieved.len(), 20,
-                "Value length must be preserved after commit (was {} bytes)", retrieved.len()
+                retrieved.len(),
+                20,
+                "Value length must be preserved after commit (was {} bytes)",
+                retrieved.len()
             );
             assert_eq!(retrieved, value, "Value must be identical after commit");
         })

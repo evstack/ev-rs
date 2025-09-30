@@ -246,9 +246,9 @@ where
         // Execute through STF
         let (result, exec_state) = self.stf.execute_block(&self.storage, &self.codes, &block);
 
-        let changes = exec_state.into_changes().map_err(|e| {
-            ServerError::Execution(format!("failed to get state changes: {:?}", e))
-        })?;
+        let changes = exec_state
+            .into_changes()
+            .map_err(|e| ServerError::Execution(format!("failed to get state changes: {:?}", e)))?;
 
         // Compute block hash
         let block_hash = compute_block_hash(height, timestamp, parent_hash);
