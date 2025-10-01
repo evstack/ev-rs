@@ -16,10 +16,8 @@ evolve_macros.workspace = true
 evolve_stf_traits.workspace = true
 evolve_stf = { workspace = true, features = ["testing"] }
 
-evolve_escrow.workspace = true
 evolve_scheduler.workspace = true
 evolve_token.workspace = true
-evolve_poa.workspace = true
 evolve_operations.workspace = true
 evolve_server.workspace = true
 evolve_storage.workspace = true

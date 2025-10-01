@@ -1,6 +1,5 @@
-use evolve_core::{AccountId, EnvironmentQuery, InvokeRequest, SdkResult};
+use evolve_core::{AccountId, InvokeRequest};
 use evolve_fungible_asset::TransferMsg;
-use evolve_poa::account::Poa;
 use evolve_stf::ERR_OUT_OF_GAS;
 use evolve_stf_traits::WritableKV;
 use evolve_testapp::{
@@ -90,23 +89,4 @@ fn test_out_of_gas_transaction() {
         out_of_gas_result.response.expect_err("expected an error"),
         ERR_OUT_OF_GAS
     );
-}
-
-#[test]
-fn test_poa_validator_query() {
-    let (storage, codes, stf, accounts) = setup_test_environment();
-    let poa_id = accounts.poa;
-
-    // test run as
-    stf.run_with_code(
-        &storage,
-        &codes,
-        poa_id,
-        |x: &Poa, env: &mut dyn EnvironmentQuery| -> SdkResult<()> {
-            let validators = x.get_validator_set(env)?;
-            assert_eq!(validators.len(), 0); // TODO: add validators
-            Ok(())
-        },
-    )
-    .unwrap();
 }

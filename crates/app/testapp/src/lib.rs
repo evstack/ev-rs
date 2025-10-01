@@ -11,9 +11,7 @@ use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
 use evolve_core::{
     AccountId, BlockContext, Environment, InvokeResponse, ReadonlyKV, SdkResult, ERR_ENCODING,
 };
-use evolve_escrow::escrow::Escrow;
 use evolve_fungible_asset::FungibleAssetMetadata;
-use evolve_poa::account::{Poa, PoaRef};
 use evolve_scheduler::scheduler_account::{Scheduler, SchedulerRef};
 use evolve_scheduler::server::{SchedulerBeginBlocker, SchedulerEndBlocker};
 use evolve_server::Block;
@@ -82,8 +80,6 @@ impl TxDecoder<TestTx> for TxDecoderImpl {
 pub fn install_account_codes(codes: &mut impl WritableAccountsCodeStorage) {
     codes.add_code(Token::new()).unwrap();
     codes.add_code(Scheduler::new()).unwrap();
-    codes.add_code(Poa::new()).unwrap();
-    codes.add_code(Escrow::new()).unwrap();
     codes.add_code(EoaAccount::new()).unwrap();
 }
 
@@ -93,7 +89,6 @@ pub struct GenesisAccounts {
     pub bob: AccountId,
     pub atom: AccountId,
     pub scheduler: AccountId,
-    pub poa: AccountId,
 }
 
 /// Genesis initialization logic - can be called from system_exec.
@@ -120,18 +115,14 @@ pub fn do_genesis_inner(env: &mut dyn Environment) -> SdkResult<GenesisAccounts>
     // Create scheduler (no begin blockers needed for block info anymore)
     let scheduler_acc = SchedulerRef::initialize(vec![], vec![], env)?.0;
 
-    // Create poa
-    let poa = PoaRef::initialize(RUNTIME_ACCOUNT_ID, scheduler_acc.0, vec![], env)?.0;
-
     // Update scheduler's account's list.
-    scheduler_acc.update_begin_blockers(vec![poa.0], env)?;
+    scheduler_acc.update_begin_blockers(vec![], env)?;
 
     Ok(GenesisAccounts {
         alice: alice_account.0,
         bob: bob_account.0,
         atom: atom.0,
         scheduler: scheduler_acc.0,
-        poa: poa.0,
     })
 }
 

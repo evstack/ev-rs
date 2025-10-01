@@ -41,8 +41,6 @@ evolve_math = { path = "crates/app/sdk/math" }
 evolve_fungible_asset = { path = "crates/app/sdk/standards/evolve_fungible_asset" }
 evolve_authentication = { path = "crates/app/sdk/standards/evolve_authentication" }
 
-evolve_escrow = { path = "crates/app/sdk/x/escrow" }
-evolve_poa = { path = "crates/app/sdk/x/poa" }
 evolve_scheduler = { path = "crates/app/sdk/x/scheduler" }
 evolve_token = { path = "crates/app/sdk/x/token" }
 evolve_unique = { path = "crates/app/sdk/x/unique" }
