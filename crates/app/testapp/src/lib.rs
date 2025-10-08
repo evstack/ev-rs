@@ -7,7 +7,6 @@ use crate::eoa::eoa_account::{EoaAccount, EoaAccountRef};
 pub use crate::types::TestTx;
 use borsh::BorshDeserialize;
 use evolve_authentication::AuthenticationTxValidator;
-use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
 use evolve_core::{
     AccountId, BlockContext, Environment, InvokeResponse, ReadonlyKV, SdkResult, ERR_ENCODING,
 };

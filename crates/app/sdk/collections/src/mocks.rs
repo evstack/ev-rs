@@ -13,6 +13,7 @@ pub struct MockEnvironment {
     sender_id: AccountId,
     storage: HashMap<Vec<u8>, Message>,
     should_fail: bool, // Simulate environment failure
+    unique_counter: u64,
 }
 
 impl MockEnvironment {
@@ -28,6 +29,7 @@ impl MockEnvironment {
             sender_id: AccountId::new(sender_id),
             storage: HashMap::new(),
             should_fail: false,
+            unique_counter: 0,
         }
     }
 
@@ -105,5 +107,13 @@ impl Environment for MockEnvironment {
     fn emit_event(&mut self, _name: &str, _data: &[u8]) -> SdkResult<()> {
         // Mock: events are discarded in test environment
         Ok(())
+    }
+
+    fn unique_id(&mut self) -> SdkResult<[u8; 32]> {
+        // Mock: return a simple incrementing ID
+        self.unique_counter = self.unique_counter.wrapping_add(1);
+        let mut id = [0u8; 32];
+        id[0..8].copy_from_slice(&self.unique_counter.to_be_bytes());
+        Ok(id)
     }
 }

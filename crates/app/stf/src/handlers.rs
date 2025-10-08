@@ -3,7 +3,6 @@
 //! This module contains handlers for system-level operations including:
 //! - Account creation and migration
 //! - Storage operations
-//! - Unique ID generation
 //!
 //! These handlers process messages sent to system accounts and provide
 //! core blockchain functionality.
@@ -159,28 +158,3 @@ pub fn handle_storage_query<S: ReadonlyKV, A: AccountsCodeStorage>(
     }
 }
 
-pub fn handle_unique_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
-    invoker: &mut Invoker<'_, '_, S, A>,
-    request: &InvokeRequest,
-) -> SdkResult<InvokeResponse> {
-    match request.function() {
-        evolve_unique::unique::NextUniqueIdMsg::FUNCTION_IDENTIFIER => {
-            let next_created_object_counter = invoker.storage.next_unique_object_id();
-            let unique_object_id = invoker.scope.unique_id(next_created_object_counter)?;
-            InvokeResponse::new(&unique_object_id)
-        }
-        _ => Err(ERR_UNKNOWN_FUNCTION),
-    }
-}
-
-pub fn handle_unique_query<S: ReadonlyKV, A: AccountsCodeStorage>(
-    invoker: &mut Invoker<'_, '_, S, A>,
-    request: &InvokeRequest,
-) -> SdkResult<InvokeResponse> {
-    match request.function() {
-        evolve_unique::unique::UniqueObjectsCreatedMsg::FUNCTION_IDENTIFIER => {
-            InvokeResponse::new(&invoker.storage.created_unique_objects())
-        }
-        _ => Err(ERR_UNKNOWN_FUNCTION),
-    }
-}

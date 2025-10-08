@@ -24,7 +24,6 @@ mod invoker;
 pub mod metrics;
 pub mod results;
 mod runtime_api_impl;
-mod unique_api_impl;
 mod validation;
 
 // Re-export gas types for convenience

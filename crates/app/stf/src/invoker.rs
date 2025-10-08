@@ -6,7 +6,6 @@ use crate::validation::{validate_code_id, validate_event};
 use evolve_core::events_api::Event;
 use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
 use evolve_core::storage_api::STORAGE_ACCOUNT_ID;
-use evolve_core::unique_api::UNIQUE_HANDLER_ACCOUNT_ID;
 use evolve_core::{
     AccountCode, AccountId, BlockContext, Environment, EnvironmentQuery, FungibleAsset,
     InvokeRequest, InvokeResponse, Message, ReadonlyKV, SdkResult,
@@ -64,7 +63,6 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> EnvironmentQuery for Invoker<'_, '_,
         match to {
             RUNTIME_ACCOUNT_ID => handlers::handle_system_query(data),
             STORAGE_ACCOUNT_ID => handlers::handle_storage_query(self, data),
-            UNIQUE_HANDLER_ACCOUNT_ID => handlers::handle_unique_query(self, data),
             _ => {
                 let account_codes = self.account_codes;
                 let code_id =
@@ -129,6 +127,11 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, '_, S, A
         };
         self.storage.emit_event(event)?;
         Ok(())
+    }
+
+    fn unique_id(&mut self) -> SdkResult<[u8; 32]> {
+        let counter = self.storage.next_unique_object_id();
+        self.scope.unique_id(counter)
     }
 }
 
@@ -260,7 +263,6 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
             RUNTIME_ACCOUNT_ID => handlers::handle_system_exec(self, data, funds),
             // check if storage
             STORAGE_ACCOUNT_ID => handlers::handle_storage_exec(self, data),
-            UNIQUE_HANDLER_ACCOUNT_ID => handlers::handle_unique_exec(self, data),
             // other account
             _ => {
                 let account_codes = self.account_codes;
@@ -285,7 +287,7 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
         self.storage.reserve_writes(funds.len().saturating_mul(2));
 
         // Validate recipient is not a system account that shouldn't receive funds
-        if to == STORAGE_ACCOUNT_ID || to == UNIQUE_HANDLER_ACCOUNT_ID {
+        if to == STORAGE_ACCOUNT_ID {
             return Err(ERR_FUNDS_TO_SYSTEM_ACCOUNT);
         }
 

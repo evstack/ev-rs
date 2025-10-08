@@ -13,7 +13,6 @@ pub mod low_level;
 pub mod message;
 pub mod runtime_api;
 pub mod storage_api;
-pub mod unique_api;
 
 pub use error::ErrorCode;
 pub use fungible_asset::FungibleAsset;
@@ -98,6 +97,15 @@ pub trait Environment: EnvironmentQuery {
     /// Events are diagnostic data that get included in transaction/block results.
     /// They do not affect state and are used for indexing and observability.
     fn emit_event(&mut self, name: &str, data: &[u8]) -> SdkResult<()>;
+
+    /// Generates a unique 32-byte identifier.
+    ///
+    /// The ID is deterministic and unique within the current execution context:
+    /// - In transactions: derived from tx hash + per-tx counter
+    /// - In begin/end block: derived from block height + per-block counter
+    ///
+    /// Returns an error if called during a query (queries cannot generate unique IDs).
+    fn unique_id(&mut self) -> SdkResult<[u8; 32]>;
 }
 
 /// Defines some arbitrary code that can handle account execution logic.

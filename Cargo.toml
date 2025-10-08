@@ -43,7 +43,6 @@ evolve_authentication = { path = "crates/app/sdk/standards/evolve_authentication
 
 evolve_scheduler = { path = "crates/app/sdk/x/scheduler" }
 evolve_token = { path = "crates/app/sdk/x/token" }
-evolve_unique = { path = "crates/app/sdk/x/unique" }
 
 evolve_stf = { path = "crates/app/stf" }
 evolve_tx = { path = "crates/app/tx" }

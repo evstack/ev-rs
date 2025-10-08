@@ -24,6 +24,7 @@ pub struct MockEnv {
     exec_handlers: HashMap<u64, ExecHandler>,
     block_height: u64,
     block_time: u64,
+    unique_counter: u64,
 }
 
 impl MockEnv {
@@ -37,6 +38,7 @@ impl MockEnv {
             exec_handlers: HashMap::new(),
             block_height: 0,
             block_time: 0,
+            unique_counter: 0,
         }
     }
 
@@ -196,6 +198,13 @@ impl Environment for MockEnv {
     fn emit_event(&mut self, _name: &str, _data: &[u8]) -> SdkResult<()> {
         // Mock: events are discarded in test environment
         Ok(())
+    }
+
+    fn unique_id(&mut self) -> SdkResult<[u8; 32]> {
+        self.unique_counter = self.unique_counter.wrapping_add(1);
+        let mut id = [0u8; 32];
+        id[0..8].copy_from_slice(&self.unique_counter.to_be_bytes());
+        Ok(id)
     }
 }
 
