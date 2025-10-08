@@ -17,6 +17,7 @@ evolve_eth_jsonrpc = { workspace = true }
 evolve_grpc = { workspace = true }
 
 alloy-primitives = { workspace = true }
+borsh = { workspace = true }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 log = { workspace = true }

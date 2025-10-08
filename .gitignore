@@ -18,3 +18,5 @@ Cargo.lock
 .idea
 # VS
 .vscode
+
+data/

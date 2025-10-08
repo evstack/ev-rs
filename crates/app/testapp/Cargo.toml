@@ -36,15 +36,11 @@ evolve_debugger.workspace = true
 sha2.workspace = true
 
 commonware-runtime.workspace = true
-tempfile = "3.8"
 simple_logger = { version = "5.0.0" }
 ctrlc = "3.4"
 
-[[bin]]
-name = "devnode"
-path = "src/bin/devnode.rs"
-
 [dev-dependencies]
+tempfile = "3.8"
 criterion = "0.5"
 
 [[bench]]

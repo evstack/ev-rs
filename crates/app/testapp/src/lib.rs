@@ -82,7 +82,7 @@ pub fn install_account_codes(codes: &mut impl WritableAccountsCodeStorage) {
     codes.add_code(EoaAccount::new()).unwrap();
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct GenesisAccounts {
     pub alice: AccountId,
     pub bob: AccountId,

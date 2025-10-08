@@ -40,6 +40,7 @@ mod builder;
 pub mod dev;
 mod error;
 mod indexer;
+mod persistence;
 mod server;
 
 pub use block::{Block, BlockBuilder, BlockHeader};
@@ -47,4 +48,5 @@ pub use builder::ServerBuilder;
 pub use dev::{DevConfig, DevConsensus, ProducedBlock, StfExecutor};
 pub use error::ServerError;
 pub use indexer::{BlockData, IndexEvent, IndexerHandle, Log, Receipt};
+pub use persistence::{load_chain_state, save_chain_state, ChainState, CHAIN_STATE_KEY};
 pub use server::EvolveServer;
