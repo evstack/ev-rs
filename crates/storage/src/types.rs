@@ -89,14 +89,18 @@ define_error!(ERR_KEY_TOO_LARGE, 0x5, "key exceeds maximum size");
 define_error!(ERR_VALUE_TOO_LARGE, 0x6, "value exceeds maximum size");
 define_error!(ERR_BATCH_TOO_LARGE, 0x7, "batch exceeds maximum size");
 
+/// Length prefix size for storage keys (2 bytes for u16 length)
+pub const KEY_LENGTH_PREFIX_SIZE: usize = 2;
+/// Storage key size for commonware integration (fixed-size type).
+pub const STORAGE_KEY_SIZE: usize = 256;
 /// Maximum sizes for keys and values
-pub const MAX_KEY_SIZE: usize = 256;
-pub const MAX_VALUE_SIZE: usize = 10 * 1024 * 1024; // 10MB
+/// Note: storage keys include a 2-byte length prefix, so payload keys are capped at 254 bytes.
+pub const MAX_KEY_SIZE: usize = STORAGE_KEY_SIZE - KEY_LENGTH_PREFIX_SIZE;
 pub const MAX_BATCH_SIZE: usize = 10_000; // 10k operations
 
 // For commonware integration, we use fixed-size types
 // Keys are 256 bytes (padded with zeros if needed)
-pub type StorageKey = FixedBytes<256>;
+pub type StorageKey = FixedBytes<STORAGE_KEY_SIZE>;
 // Values are stored in 4KB chunks
 pub const STORAGE_VALUE_SIZE: usize = 4096;
 pub type StorageValueChunk = FixedBytes<STORAGE_VALUE_SIZE>;
@@ -107,8 +111,10 @@ pub fn create_storage_key(key: &[u8]) -> Result<StorageKey, ErrorCode> {
         return Err(ERR_KEY_TOO_LARGE);
     }
 
-    let mut data = [0u8; MAX_KEY_SIZE];
-    data[..key.len()].copy_from_slice(key);
+    let mut data = [0u8; STORAGE_KEY_SIZE];
+    let len_bytes = (key.len() as u16).to_le_bytes();
+    data[..KEY_LENGTH_PREFIX_SIZE].copy_from_slice(&len_bytes);
+    data[KEY_LENGTH_PREFIX_SIZE..KEY_LENGTH_PREFIX_SIZE + key.len()].copy_from_slice(key);
 
     Ok(StorageKey::new(data))
 }
@@ -118,6 +124,8 @@ pub const VALUE_LENGTH_PREFIX_SIZE: usize = 4;
 
 /// Maximum actual value size (chunk size minus length prefix)
 pub const MAX_VALUE_DATA_SIZE: usize = STORAGE_VALUE_SIZE - VALUE_LENGTH_PREFIX_SIZE;
+/// Maximum value size accepted by the storage layer.
+pub const MAX_VALUE_SIZE: usize = MAX_VALUE_DATA_SIZE;
 
 /// Helper function for creating storage value chunks
 ///

@@ -183,7 +183,7 @@ Validation and execution share the same ExecutionState - no TOCTOU issues.
 |---------------------|-----------|---------------------------|
 | Max overlay entries | 100,000   | Prevent memory exhaustion |
 | Max events          | 10,000    | Bound event log size      |
-| Max key size        | 256 bytes | Limit key storage         |
+| Max key size        | 254 bytes | Limit key storage         |
 | Max value size      | 1 MB      | Limit value storage       |
 | Max call depth      | 64        | Prevent stack overflow    |
 

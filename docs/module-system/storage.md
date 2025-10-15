@@ -213,7 +213,7 @@ pub struct MyModule {
 
 | Limit | Value |
 |-------|-------|
-| Max key size | 256 bytes |
+| Max key size | 254 bytes |
 | Max value size | 1 MB |
 | Max overlay entries | 100,000 per transaction |
 | Max events | 10,000 per execution |

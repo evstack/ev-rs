@@ -179,5 +179,5 @@ pub trait PostTxExecution<Tx> {
 | Max call depth | 64 | Prevent stack overflow |
 | Max overlay entries | 100,000 | Memory bound |
 | Max events | 10,000 | Memory bound |
-| Max key size | 256 bytes | Storage efficiency |
+| Max key size | 254 bytes | Storage efficiency |
 | Max value size | 1 MB | Storage efficiency |

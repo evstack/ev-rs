@@ -1,10 +1,10 @@
 # Evolve Storage
 
-A storage layer for the Evolve blockchain framework that integrates with [Commonware](https://github.com/commonwarexyz/monorepo)'s authenticated database (ADB) system.
+A storage layer for the Evolve blockchain framework that integrates with [Commonware](https://github.com/commonwarexyz/monorepo)'s authenticated database system (QMDB).
 
 ## Overview
 
-This crate provides a bridge between Evolve's storage traits (`ReadonlyKV`) and Commonware's ADB implementation. It enables persistent, authenticated state storage with Merkle proof capabilities for blockchain consensus-critical data.
+This crate provides a bridge between Evolve's storage traits (`ReadonlyKV`) and Commonware's QMDB implementation. It enables persistent, authenticated state storage with Merkle proof capabilities for blockchain consensus-critical data.
 
 ## Architecture
 
@@ -29,40 +29,37 @@ The crate defines three main traits:
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
-│       CommonwareStorage                 │
-│  (Bridges Evolve traits to ADB API)     │
+│         QmdbStorage                     │
+│  (Bridges Evolve traits to QMDB API)    │
 └────────────────┬────────────────────────┘
                  │
 ┌────────────────▼────────────────────────┐
-│         Commonware ADB                  │
+│         Commonware QMDB                 │
 │   (Authenticated Database with MMR)     │
 └─────────────────────────────────────────┘
 ```
 
 ### Implementation Details
 
-The `CommonwareStorage` struct implements all storage traits using Commonware's ADB:
+The `QmdbStorage` struct implements all storage traits using Commonware's QMDB:
 
 ```rust
-pub struct CommonwareStorage<C> {
-    context: Arc<C>,
-    adb: Arc<Mutex<Current<C, StorageKey, StorageValueChunk, Sha256, EightCap, 256>>>,
-}
+pub struct QmdbStorage<C> { /* ... */ }
 ```
 
 Key design decisions:
 
 1. **Fixed-Size Types**: Uses Commonware's `FixedBytes<256>` for keys and `FixedBytes<4096>` for value chunks
-2. **Async/Sync Bridge**: Uses `tokio::task::spawn_blocking` to bridge async ADB operations with sync trait methods
-3. **Removal Strategy**: Since ADB doesn't support deletion, removed keys are set to empty values
-4. **Thread Safety**: ADB is wrapped in `Arc<Mutex<...>>` for safe concurrent access
+2. **Async/Sync Bridge**: Uses blocking `block_on` to bridge async QMDB operations with sync trait methods
+3. **Deletion**: Uses native QMDB delete semantics
+4. **Thread Safety**: QMDB is protected with an async `RwLock` and in-memory read caches
 
 ## Usage
 
 ### Basic Example
 
 ```rust
-use evolve_storage::{CommonwareStorage, StorageConfig};
+use evolve_storage::{QmdbStorage, StorageConfig};
 use commonware_runtime::tokio::{Config as TokioConfig, Runner};
 use commonware_runtime::Runner as RunnerTrait;
 
@@ -82,10 +79,10 @@ runner.start(|context| async move {
     };
 
     // Initialize storage
-    let mut storage = CommonwareStorage::new(context, config).await?;
+    let mut storage = QmdbStorage::new(context, config).await?;
 
     // Basic read operation
-    let value = storage.get(b"key").await?;
+    let value = storage.get(b"key")?;
     
     // Write operations use batch API
     use evolve_storage::{Operation, Storage as StorageTrait};
@@ -93,7 +90,7 @@ runner.start(|context| async move {
         Operation::Set { key: b"key".to_vec(), value: b"value".to_vec() },
     ]).await?;
     
-    let value = storage.get(b"key").await?;
+    let value = storage.get(b"key")?;
     assert_eq!(value, Some(b"value".to_vec()));
     
     // Batch operations
@@ -117,9 +114,6 @@ pub struct StorageConfig {
     /// Path to the database directory
     pub path: PathBuf,
     
-    /// Maximum database size in bytes (default: 100GB)
-    pub max_size: u64,
-    
     /// Cache size in bytes (default: 1GB)
     pub cache_size: u64,
     
@@ -131,9 +125,12 @@ pub struct StorageConfig {
 }
 ```
 
+Note: `StorageConfig::path` is validated by node startup checks and used to configure the
+Commonware runtime storage directory. `QmdbStorage` itself relies on the runtime context.
+
 ## Storage Layout
 
-The storage uses Commonware's ADB partition structure:
+The storage uses Commonware's QMDB partition structure:
 
 ```tree
 {partition_prefix}/
@@ -198,23 +195,24 @@ let commit_hash = storage.commit().await?;
 
 ## Limitations
 
-1. **Value Size**: Currently limited to 4KB per value (STORAGE_VALUE_SIZE) <!-- TODO: make this bigger-->
-2. **Key Size**: Fixed at 256 bytes (MAX_KEY_SIZE)
-3. **Deletion**: No true deletion - removed keys are set to empty values
+1. **Value Size**: Currently limited to 4092 bytes per value (4KB minus length prefix)
+2. **Key Size**: Payload keys capped at 254 bytes (2-byte length prefix in 256-byte storage key)
+3. **Deletion**: Supported via QMDB delete operations
 4. **Batch Size**: Limited to 10,000 operations per batch (MAX_BATCH_SIZE)
 
 ## Error Handling
 
-The crate uses Evolve's `ErrorCode` system with specific storage error codes:
+The crate uses Evolve's `ErrorCode` system with specific storage error codes
+(see `crates/storage/src/types.rs` for the authoritative list):
 
 ```rust
-pub const ERR_STORAGE_IO: ErrorCode = ErrorCode::new(500, "storage I/O error");
-pub const ERR_STORAGE_CORRUPTION: ErrorCode = ErrorCode::new(501, "storage corruption detected");
-pub const ERR_STORAGE_FULL: ErrorCode = ErrorCode::new(502, "storage full");
-pub const ERR_INVALID_COMMIT: ErrorCode = ErrorCode::new(503, "invalid commit hash");
-pub const ERR_KEY_TOO_LARGE: ErrorCode = ErrorCode::new(504, "key exceeds maximum size");
-pub const ERR_VALUE_TOO_LARGE: ErrorCode = ErrorCode::new(505, "value exceeds maximum size");
-pub const ERR_BATCH_TOO_LARGE: ErrorCode = ErrorCode::new(506, "batch exceeds maximum size");
+pub const ERR_STORAGE_IO: ErrorCode = ErrorCode::new(...);
+pub const ERR_ADB_ERROR: ErrorCode = ErrorCode::new(...);
+pub const ERR_CONCURRENCY_ERROR: ErrorCode = ErrorCode::new(...);
+pub const ERR_RUNTIME_ERROR: ErrorCode = ErrorCode::new(...);
+pub const ERR_KEY_TOO_LARGE: ErrorCode = ErrorCode::new(...);
+pub const ERR_VALUE_TOO_LARGE: ErrorCode = ErrorCode::new(...);
+pub const ERR_BATCH_TOO_LARGE: ErrorCode = ErrorCode::new(...);
 ```
 
 ## Testing
@@ -229,7 +227,7 @@ The test includes basic CRUD operations and demonstrates integration with Common
 
 ## Dependencies
 
-- `commonware-storage`: Provides the ADB implementation
+- `commonware-storage`: Provides the QMDB implementation
 - `commonware-runtime`: Runtime traits (Storage, Clock, Metrics) and buffer pool
 - `commonware-cryptography`: SHA256 hasher for Merkle proofs
 - `commonware-utils`: FixedBytes array type
@@ -239,8 +237,8 @@ The test includes basic CRUD operations and demonstrates integration with Common
 
 ## Future Improvements
 
-1. **Value Chunking**: Support for values larger than 4KB by implementing chunking
-2. **True Deletion**: Implement proper key deletion when ADB supports it
+1. **Value Chunking**: Support for values larger than 4092 bytes by implementing chunking
+2. **Deletion Semantics**: Clarify deletion guarantees with upstream QMDB versions
 3. **Prefix Iteration**: Add support for iterating over keys with a common prefix
 4. **Compression**: Add optional value compression
 5. **Metrics**: Expose storage metrics through the Metrics trait
@@ -250,9 +248,10 @@ The test includes basic CRUD operations and demonstrates integration with Common
 ## Security Considerations
 
 1. **Key Namespacing**: Should be enforced by higher layers to prevent collisions
-2. **Access Control**: Handled by runtime layer, not storage
-3. **Data Integrity**: Leverages Commonware's merkle tree authentication
-4. **Resource Limits**: Enforced to prevent DoS attacks
+2. **Key Encoding**: Keys use a 2-byte length prefix inside a 256-byte storage key
+3. **Access Control**: Handled by runtime layer, not storage
+4. **Data Integrity**: Leverages Commonware's merkle tree authentication
+5. **Resource Limits**: Enforced to prevent DoS attacks
 
 ## License
 

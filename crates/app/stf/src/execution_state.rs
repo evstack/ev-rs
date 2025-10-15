@@ -5,6 +5,7 @@ use crate::errors::{
 use evolve_core::events_api::Event;
 use evolve_core::{ErrorCode, Message, ReadonlyKV, SdkResult};
 use evolve_stf_traits::StateChange as CoreStateChange;
+use evolve_storage::MAX_KEY_SIZE as STORAGE_MAX_KEY_SIZE;
 use hashbrown::hash_map::Entry;
 use hashbrown::HashMap;
 use std::cell::Cell;
@@ -17,7 +18,7 @@ type OverlayMap<K, V> = HashMap<K, V>;
 // Security limits to prevent memory exhaustion attacks
 const MAX_OVERLAY_ENTRIES: usize = 100_000; // Maximum number of keys in overlay
 const MAX_EVENTS_PER_EXECUTION: usize = 10_000; // Maximum events that can be emitted
-const MAX_KEY_SIZE: usize = 256; // Maximum size of a storage key in bytes
+const MAX_KEY_SIZE: usize = STORAGE_MAX_KEY_SIZE; // Maximum size of a storage key payload in bytes
 const MAX_VALUE_SIZE: usize = 1024 * 1024; // Maximum size of a storage value (1MB)
 
 #[derive(Debug, Clone, Copy, Default)]

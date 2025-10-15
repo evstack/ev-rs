@@ -37,6 +37,7 @@ use std::num::{NonZeroU16, NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
 use std::time::Instant;
 use thiserror::Error;
+use tokio::runtime::RuntimeFlavor;
 use tokio::sync::RwLock;
 
 /// Type alias for QMDB in Clean state (Merkleized, Durable)
@@ -79,6 +80,9 @@ pub enum StorageError {
 
     #[error("Invalid state transition: {0}")]
     InvalidState(String),
+
+    #[error("Invalid storage configuration: {0}")]
+    InvalidConfig(String),
 }
 
 impl From<ErrorCode> for StorageError {
@@ -159,15 +163,32 @@ where
     ) -> Result<Self, StorageError> {
         // Configure QMDB for state storage
         let page_size = NonZeroU16::new(4096).unwrap();
-        let capacity = NonZeroUsize::new(16384).unwrap();
+        let cache_pages = config
+            .cache_size
+            .checked_div(u64::from(page_size.get()))
+            .ok_or_else(|| {
+                StorageError::InvalidConfig("cache_size must be at least one page".to_string())
+            })?;
+        let cache_pages = usize::try_from(cache_pages).map_err(|_| {
+            StorageError::InvalidConfig("cache_size exceeds platform limits".to_string())
+        })?;
+        let capacity = NonZeroUsize::new(cache_pages).ok_or_else(|| {
+            StorageError::InvalidConfig("cache_size must be at least one page".to_string())
+        })?;
+        let write_buffer_size = usize::try_from(config.write_buffer_size).map_err(|_| {
+            StorageError::InvalidConfig("write_buffer_size exceeds platform limits".to_string())
+        })?;
+        let write_buffer_size = NonZeroUsize::new(write_buffer_size).ok_or_else(|| {
+            StorageError::InvalidConfig("write_buffer_size must be non-zero".to_string())
+        })?;
 
         let qmdb_config = FixedConfig {
             log_journal_partition: format!("{}_log-journal", config.partition_prefix),
             log_items_per_blob: NonZeroU64::new(1000).unwrap(),
-            log_write_buffer: NonZeroUsize::new(config.write_buffer_size as usize).unwrap(),
+            log_write_buffer: write_buffer_size,
             mmr_journal_partition: format!("{}_mmr-journal", config.partition_prefix),
             mmr_items_per_blob: NonZeroU64::new(1000).unwrap(),
-            mmr_write_buffer: NonZeroUsize::new(config.write_buffer_size as usize).unwrap(),
+            mmr_write_buffer: write_buffer_size,
             mmr_metadata_partition: format!("{}_mmr-metadata", config.partition_prefix),
             bitmap_metadata_partition: format!("{}_bitmap-metadata", config.partition_prefix),
             translator: EightCap,
@@ -249,11 +270,13 @@ where
 
         // Get the root hash
         let root = clean_db.root();
-        let hash = crate::types::CommitHash::new(
-            root.as_ref()
-                .try_into()
-                .map_err(|_| StorageError::Qmdb("Invalid root hash size".to_string()))?,
-        );
+        let hash = match root.as_ref().try_into() {
+            Ok(bytes) => crate::types::CommitHash::new(bytes),
+            Err(_) => {
+                *state_guard = QmdbState::Clean(clean_db);
+                return Err(StorageError::Qmdb("Invalid root hash size".to_string()));
+            }
+        };
 
         // Store clean state back
         *state_guard = QmdbState::Clean(clean_db);
@@ -338,17 +361,17 @@ where
         for (storage_key, maybe_value) in prepared_updates {
             match maybe_value {
                 Some(storage_value) => {
-                    mutable_db
-                        .update(storage_key, storage_value)
-                        .await
-                        .map_err(|e| StorageError::Qmdb(e.to_string()))?;
+                    if let Err(e) = mutable_db.update(storage_key, storage_value).await {
+                        *state_guard = QmdbState::Mutable(mutable_db);
+                        return Err(StorageError::Qmdb(e.to_string()));
+                    }
                 }
                 None => {
                     // Delete the key
-                    mutable_db
-                        .delete(storage_key)
-                        .await
-                        .map_err(|e| StorageError::Qmdb(e.to_string()))?;
+                    if let Err(e) = mutable_db.delete(storage_key).await {
+                        *state_guard = QmdbState::Mutable(mutable_db);
+                        return Err(StorageError::Qmdb(e.to_string()));
+                    }
                 }
             }
         }
@@ -441,8 +464,16 @@ where
         self.metrics.record_cache_miss();
         let start = Instant::now();
         let result = if let Ok(handle) = tokio::runtime::Handle::try_current() {
-            // We're inside a tokio runtime - use block_in_place
-            tokio::task::block_in_place(|| handle.block_on(self.get_async_uncached(key)))
+            match handle.runtime_flavor() {
+                RuntimeFlavor::MultiThread => {
+                    // We're inside a multi-threaded tokio runtime - use block_in_place
+                    tokio::task::block_in_place(|| handle.block_on(self.get_async_uncached(key)))
+                }
+                RuntimeFlavor::CurrentThread => {
+                    return Err(crate::types::ERR_RUNTIME_ERROR);
+                }
+                _ => tokio::task::block_in_place(|| handle.block_on(self.get_async_uncached(key))),
+            }
         } else {
             // Not in tokio runtime - use futures executor
             futures::executor::block_on(self.get_async_uncached(key))
@@ -572,6 +603,28 @@ mod tests {
     }
 
     #[test]
+    fn test_invalid_config_rejected() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            cache_size: 0,
+            write_buffer_size: 0,
+            partition_prefix: "evolve-state".to_string(),
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let result = QmdbStorage::new(context, config).await;
+            assert!(matches!(result, Err(StorageError::InvalidConfig(_))));
+        })
+    }
+
+    #[test]
     fn test_key_size_limit() {
         let temp_dir = TempDir::new().unwrap();
         let config = crate::types::StorageConfig {
@@ -617,6 +670,48 @@ mod tests {
                 }
                 _ => panic!("Expected ERR_KEY_TOO_LARGE"),
             }
+        })
+    }
+
+    #[test]
+    fn test_trailing_zero_keys_distinct() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = QmdbStorage::new(context, config).await.unwrap();
+
+            let key_a = b"a".to_vec();
+            let key_a_zero = b"a\0".to_vec();
+
+            storage
+                .apply_batch(vec![
+                    crate::types::Operation::Set {
+                        key: key_a.clone(),
+                        value: b"value_a".to_vec(),
+                    },
+                    crate::types::Operation::Set {
+                        key: key_a_zero.clone(),
+                        value: b"value_a_zero".to_vec(),
+                    },
+                ])
+                .await
+                .unwrap();
+
+            assert_eq!(storage.get(&key_a).unwrap(), Some(b"value_a".to_vec()));
+            assert_eq!(
+                storage.get(&key_a_zero).unwrap(),
+                Some(b"value_a_zero".to_vec())
+            );
         })
     }
 
