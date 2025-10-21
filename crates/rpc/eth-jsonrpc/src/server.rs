@@ -109,6 +109,15 @@ pub trait StateProvider: Send + Sync + 'static {
         position: U256,
         block: Option<u64>,
     ) -> Result<B256, RpcError>;
+
+    /// Get the protocol version string reported by the client.
+    async fn protocol_version(&self) -> Result<String, RpcError>;
+
+    /// Get the current gas price in wei.
+    async fn gas_price(&self) -> Result<U256, RpcError>;
+
+    /// Get the current sync status.
+    async fn syncing_status(&self) -> Result<SyncStatus, RpcError>;
 }
 
 /// A no-op state provider for testing and development.
@@ -193,6 +202,18 @@ impl StateProvider for NoopStateProvider {
         _block: Option<u64>,
     ) -> Result<B256, RpcError> {
         Ok(B256::ZERO)
+    }
+
+    async fn protocol_version(&self) -> Result<String, RpcError> {
+        Ok("0x0".to_string())
+    }
+
+    async fn gas_price(&self) -> Result<U256, RpcError> {
+        Ok(U256::ZERO)
+    }
+
+    async fn syncing_status(&self) -> Result<SyncStatus, RpcError> {
+        Ok(SyncStatus::NotSyncing(false))
     }
 }
 
@@ -387,8 +408,7 @@ impl<S: StateProvider> EthApiServer for EthRpcServer<S> {
     }
 
     async fn gas_price(&self) -> Result<U256, ErrorObjectOwned> {
-        // Return zero gas price (gas is handled differently in evolve)
-        Ok(U256::ZERO)
+        self.state.gas_price().await.map_err(|e| e.into())
     }
 
     async fn send_raw_transaction(&self, data: Bytes) -> Result<B256, ErrorObjectOwned> {
@@ -403,12 +423,14 @@ impl<S: StateProvider> EthApiServer for EthRpcServer<S> {
     }
 
     async fn syncing(&self) -> Result<SyncStatus, ErrorObjectOwned> {
-        // For now, always return not syncing
-        Ok(SyncStatus::NotSyncing(false))
+        self.state.syncing_status().await.map_err(|e| e.into())
     }
 
     async fn protocol_version(&self) -> Result<String, ErrorObjectOwned> {
-        Ok("1".to_string())
+        self.state
+            .protocol_version()
+            .await
+            .map_err(ErrorObjectOwned::from)
     }
 
     async fn get_code(
@@ -494,8 +516,8 @@ impl<S: StateProvider> Web3ApiServer for EthRpcServer<S> {
     }
 
     async fn sha3(&self, data: Bytes) -> Result<B256, ErrorObjectOwned> {
-        use sha2::{Digest, Sha256};
-        let mut hasher = Sha256::new();
+        use sha3::{Digest, Keccak256};
+        let mut hasher = Keccak256::new();
         hasher.update(data.as_ref());
         Ok(B256::from_slice(&hasher.finalize()))
     }
@@ -766,6 +788,9 @@ mod tests {
         blocks_by_number: RwLock<HashMap<u64, RpcBlock>>,
         blocks_by_hash: RwLock<HashMap<B256, RpcBlock>>,
         error: RwLock<Option<RpcError>>,
+        protocol_version: RwLock<String>,
+        gas_price: RwLock<U256>,
+        syncing_status: RwLock<SyncStatus>,
     }
 
     impl MockStateProvider {
@@ -775,6 +800,9 @@ mod tests {
                 blocks_by_number: RwLock::new(HashMap::new()),
                 blocks_by_hash: RwLock::new(HashMap::new()),
                 error: RwLock::new(None),
+                protocol_version: RwLock::new("0x0".to_string()),
+                gas_price: RwLock::new(U256::ZERO),
+                syncing_status: RwLock::new(SyncStatus::NotSyncing(false)),
             }
         }
 
@@ -796,6 +824,21 @@ mod tests {
 
         fn with_error(self, error: RpcError) -> Self {
             *self.error.write().unwrap() = Some(error);
+            self
+        }
+
+        fn with_protocol_version(self, version: String) -> Self {
+            *self.protocol_version.write().unwrap() = version;
+            self
+        }
+
+        fn with_gas_price(self, price: U256) -> Self {
+            *self.gas_price.write().unwrap() = price;
+            self
+        }
+
+        fn with_syncing_status(self, status: SyncStatus) -> Self {
+            *self.syncing_status.write().unwrap() = status;
             self
         }
 
@@ -874,6 +917,18 @@ mod tests {
             _: Option<u64>,
         ) -> Result<B256, RpcError> {
             Ok(B256::ZERO)
+        }
+
+        async fn protocol_version(&self) -> Result<String, RpcError> {
+            Ok(self.protocol_version.read().unwrap().clone())
+        }
+
+        async fn gas_price(&self) -> Result<U256, RpcError> {
+            Ok(*self.gas_price.read().unwrap())
+        }
+
+        async fn syncing_status(&self) -> Result<SyncStatus, RpcError> {
+            Ok(self.syncing_status.read().unwrap().clone())
         }
     }
 
@@ -1015,5 +1070,50 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, Some(U64::from(3)));
+    }
+
+    #[tokio::test]
+    async fn test_web3_sha3_uses_keccak256() {
+        let provider = MockStateProvider::new();
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        let result = Web3ApiServer::sha3(&server, Bytes::new()).await.unwrap();
+        let expected = B256::from_slice(&[
+            0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7,
+            0x03, 0xc0, 0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04,
+            0x5d, 0x85, 0xa4, 0x70,
+        ]);
+        assert_eq!(result, expected);
+    }
+
+    #[tokio::test]
+    async fn test_state_driven_protocol_and_sync_gas() {
+        use evolve_rpc_types::SyncProgress;
+
+        let provider = MockStateProvider::new()
+            .with_protocol_version("0x42".to_string())
+            .with_gas_price(U256::from(42u64))
+            .with_syncing_status(SyncStatus::Syncing(SyncProgress {
+                starting_block: U64::from(1u64),
+                current_block: U64::from(2u64),
+                highest_block: U64::from(3u64),
+            }));
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        let protocol = EthApiServer::protocol_version(&server).await.unwrap();
+        assert_eq!(protocol, "0x42");
+
+        let gas_price = EthApiServer::gas_price(&server).await.unwrap();
+        assert_eq!(gas_price, U256::from(42u64));
+
+        let sync_status = EthApiServer::syncing(&server).await.unwrap();
+        match sync_status {
+            SyncStatus::Syncing(progress) => {
+                assert_eq!(progress.starting_block, U64::from(1u64));
+                assert_eq!(progress.current_block, U64::from(2u64));
+                assert_eq!(progress.highest_block, U64::from(3u64));
+            }
+            _ => panic!("expected syncing status"),
+        }
     }
 }

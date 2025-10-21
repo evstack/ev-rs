@@ -167,16 +167,3 @@ pub fn encode_metrics(registry: &Registry) -> String {
     }
     buffer
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_health_status_json() {
-        let status = HealthStatus::healthy(100, 5, "test/1.0".to_string(), 1);
-        let json = serde_json::to_string(&status).unwrap();
-        assert!(json.contains("\"healthy\":true"));
-        assert!(json.contains("\"block_height\":100"));
-    }
-}

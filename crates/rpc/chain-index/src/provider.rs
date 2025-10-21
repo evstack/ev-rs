@@ -16,6 +16,7 @@ use crate::index::ChainIndex;
 use evolve_eth_jsonrpc::error::RpcError;
 use evolve_eth_jsonrpc::StateProvider;
 use evolve_rpc_types::block::BlockTransactions;
+use evolve_rpc_types::SyncStatus;
 use evolve_rpc_types::{CallRequest, LogFilter, RpcBlock, RpcLog, RpcReceipt, RpcTransaction};
 
 /// State provider configuration.
@@ -23,6 +24,12 @@ use evolve_rpc_types::{CallRequest, LogFilter, RpcBlock, RpcLog, RpcReceipt, Rpc
 pub struct ChainStateProviderConfig {
     /// Chain ID.
     pub chain_id: u64,
+    /// Protocol version string.
+    pub protocol_version: String,
+    /// Gas price in wei.
+    pub gas_price: U256,
+    /// Sync status response.
+    pub sync_status: SyncStatus,
 }
 
 /// State provider that combines chain index with state storage.
@@ -230,6 +237,18 @@ impl<I: ChainIndex + 'static> StateProvider for ChainStateProvider<I> {
     ) -> Result<B256, RpcError> {
         // TODO: Implement via Storage
         Ok(B256::ZERO)
+    }
+
+    async fn protocol_version(&self) -> Result<String, RpcError> {
+        Ok(self.config.protocol_version.clone())
+    }
+
+    async fn gas_price(&self) -> Result<U256, RpcError> {
+        Ok(self.config.gas_price)
+    }
+
+    async fn syncing_status(&self) -> Result<SyncStatus, RpcError> {
+        Ok(self.config.sync_status.clone())
     }
 }
 
