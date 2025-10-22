@@ -157,4 +157,3 @@ pub fn handle_storage_query<S: ReadonlyKV, A: AccountsCodeStorage>(
         _ => Err(ERR_UNKNOWN_FUNCTION),
     }
 }
-

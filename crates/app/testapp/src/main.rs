@@ -114,29 +114,28 @@ fn main() {
         let gas_config = default_gas_config();
 
         // Check if we have existing chain state
-        let (accounts, initial_height) =
-            match load_chain_state::<GenesisAccounts, _>(&storage) {
-                Some(state) => {
-                    log::info!("Resuming from existing state at height {}", state.height);
-                    log::info!("  Alice: {:?}", state.genesis_result.alice);
-                    log::info!("  Bob: {:?}", state.genesis_result.bob);
-                    log::info!("  Scheduler: {:?}", state.genesis_result.scheduler);
-                    (state.genesis_result, state.height)
-                }
-                None => {
-                    log::info!("No existing state found, running genesis...");
-                    let bootstrap_stf = build_stf(gas_config.clone(), PLACEHOLDER_ACCOUNT);
-                    let accounts = run_genesis(&bootstrap_stf, &codes, &storage)
-                        .await
-                        .expect("genesis failed");
+        let (accounts, initial_height) = match load_chain_state::<GenesisAccounts, _>(&storage) {
+            Some(state) => {
+                log::info!("Resuming from existing state at height {}", state.height);
+                log::info!("  Alice: {:?}", state.genesis_result.alice);
+                log::info!("  Bob: {:?}", state.genesis_result.bob);
+                log::info!("  Scheduler: {:?}", state.genesis_result.scheduler);
+                (state.genesis_result, state.height)
+            }
+            None => {
+                log::info!("No existing state found, running genesis...");
+                let bootstrap_stf = build_stf(gas_config.clone(), PLACEHOLDER_ACCOUNT);
+                let accounts = run_genesis(&bootstrap_stf, &codes, &storage)
+                    .await
+                    .expect("genesis failed");
 
-                    log::info!("Genesis complete. Accounts:");
-                    log::info!("  Alice: {:?}", accounts.alice);
-                    log::info!("  Bob: {:?}", accounts.bob);
-                    log::info!("  Scheduler: {:?}", accounts.scheduler);
-                    (accounts, 1)
-                }
-            };
+                log::info!("Genesis complete. Accounts:");
+                log::info!("  Alice: {:?}", accounts.alice);
+                log::info!("  Bob: {:?}", accounts.bob);
+                log::info!("  Scheduler: {:?}", accounts.scheduler);
+                (accounts, 1)
+            }
+        };
 
         // Build production STF
         let stf = build_stf(gas_config, accounts.scheduler);

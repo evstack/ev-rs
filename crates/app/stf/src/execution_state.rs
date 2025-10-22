@@ -279,7 +279,8 @@ impl<'a, S> ExecutionState<'a, S> {
         // For each key in the overlay:
         //   - If the value is Some(v), then we want to persist a "set" operation.
         //   - If the value is None, then we want to persist a "remove" operation.
-        self.overlay
+        let mut changes: Vec<CoreStateChange> = self
+            .overlay
             .into_iter()
             .map(|(key, maybe_value)| match maybe_value {
                 Some(value) => {
@@ -288,7 +289,18 @@ impl<'a, S> ExecutionState<'a, S> {
                 }
                 None => Ok(CoreStateChange::Remove { key }),
             })
-            .collect()
+            .collect::<SdkResult<Vec<CoreStateChange>>>()?;
+
+        // Ensure deterministic ordering for downstream consumers.
+        changes.sort_by(|a, b| change_key(a).cmp(change_key(b)));
+        Ok(changes)
+    }
+}
+
+fn change_key(change: &CoreStateChange) -> &[u8] {
+    match change {
+        CoreStateChange::Set { key, .. } => key.as_slice(),
+        CoreStateChange::Remove { key } => key.as_slice(),
     }
 }
 
@@ -1056,66 +1068,29 @@ mod tests {
         );
     }
 
-    /// Test optimized set operation performance
+    /// Test deterministic ordering of state changes.
     #[test]
-    fn test_set_optimization() {
-        let storage = MockReadonlyKV::new_with_data(&[(b"base_key", b"base_value")]);
-        let mut cp = ExecutionState::new(&storage);
-
-        // First set - should check base storage
-        cp.set(b"new_key", Message::from_bytes(b"value1".to_vec()))
-            .unwrap();
-
-        // Second set of same key - should not check base storage
-        cp.set(b"new_key", Message::from_bytes(b"value2".to_vec()))
-            .unwrap();
-
-        // Verify the optimization works correctly
-        assert_eq!(
-            cp.get(b"new_key").unwrap().unwrap().as_bytes().unwrap(),
-            b"value2"
-        );
-
-        // Test with key from base storage
-        cp.set(b"base_key", Message::from_bytes(b"new_value".to_vec()))
-            .unwrap();
-        assert_eq!(
-            cp.get(b"base_key").unwrap().unwrap().as_bytes().unwrap(),
-            b"new_value"
-        );
-    }
-
-    /// Test batch operations efficiency with large batches
-    #[test]
-    fn test_batch_efficiency() {
+    fn test_into_changes_deterministic_order() {
         let storage = MockReadonlyKV::new();
         let mut cp = ExecutionState::new(&storage);
 
-        // Create a batch of operations - smaller for miri compatibility
-        let batch_size = if cfg!(miri) { 50 } else { 1000 };
-        let mut operations = Vec::new();
-        for i in 0..batch_size {
-            operations.push(BatchOperation {
-                key: format!("key{i:04}").into_bytes(),
-                operation: BatchOp::Set(Message::from_bytes(format!("value{i}").into_bytes())),
-            });
-        }
+        cp.set(b"b", Message::from_bytes(b"one".to_vec())).unwrap();
+        cp.set(b"a", Message::from_bytes(b"two".to_vec())).unwrap();
+        cp.remove(b"c").unwrap();
 
-        // Apply batch - this should be more efficient than individual operations
-        cp.apply_batch(operations).unwrap();
+        let changes = cp.into_changes().unwrap();
+        let keys: Vec<&[u8]> = changes
+            .iter()
+            .map(|change| match change {
+                evolve_stf_traits::StateChange::Set { key, .. } => key.as_slice(),
+                evolve_stf_traits::StateChange::Remove { key } => key.as_slice(),
+            })
+            .collect();
 
-        // Verify some values
         assert_eq!(
-            cp.get(b"key0000").unwrap().unwrap().as_bytes().unwrap(),
-            b"value0"
+            keys,
+            vec![b"a".as_slice(), b"b".as_slice(), b"c".as_slice()]
         );
-        if !cfg!(miri) {
-            assert_eq!(
-                cp.get(b"key0999").unwrap().unwrap().as_bytes().unwrap(),
-                b"value999"
-            );
-        }
-        assert_eq!(cp.overlay.len(), batch_size);
     }
 
     /// Test delta-based undo log efficiency

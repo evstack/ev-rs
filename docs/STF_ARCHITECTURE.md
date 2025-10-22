@@ -238,4 +238,4 @@ Merkle Root (state hash)
 - [x] Determinism test (`prop_determinism`)
 - [x] State changes collection (`test_state_changes_collection`)
 - [ ] Nested call gas exhaustion
-- [ ] State change ordering determinism (HashMap iteration - may need `into_changes()` sorting)
+- [x] State change ordering determinism (sorted `into_changes()` output)
