@@ -18,6 +18,7 @@ members = [
     "crates/app/sdk/testing",
     "crates/app/sdk/math",
     "crates/app/testapp",
+    "crates/app/genesis",
     "crates/testing/simulator",
     "crates/testing/proptest",
     "crates/testing/debugger",
@@ -45,6 +46,7 @@ evolve_scheduler = { path = "crates/app/sdk/x/scheduler" }
 evolve_token = { path = "crates/app/sdk/x/token" }
 
 evolve_stf = { path = "crates/app/stf" }
+evolve_genesis = { path = "crates/app/genesis" }
 evolve_tx = { path = "crates/app/tx" }
 evolve_operations = { path = "crates/app/operations" }
 

@@ -53,6 +53,10 @@ impl AccountId {
     pub const fn new(u: u128) -> Self {
         Self(u)
     }
+
+    pub const fn inner(&self) -> u128 {
+        self.0
+    }
 }
 
 impl AccountId {

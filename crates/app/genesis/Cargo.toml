@@ -1,0 +1,24 @@
+[package]
+name = "evolve_genesis"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Genesis file handling for Evolve blockchain"
+
+[dependencies]
+evolve_core = { workspace = true }
+evolve_stf = { workspace = true }
+evolve_stf_traits = { workspace = true }
+
+borsh = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+
+[dev-dependencies]
+evolve_testing = { workspace = true }
+
+[lints]
+workspace = true

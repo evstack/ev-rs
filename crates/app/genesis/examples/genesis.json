@@ -1,0 +1,50 @@
+{
+  "chain_id": "evolve-devnet",
+  "genesis_time": 0,
+  "transactions": [
+    {
+      "id": "alice",
+      "sender": "system",
+      "recipient": "runtime",
+      "msg_type": "eoa/initialize",
+      "msg": {}
+    },
+    {
+      "id": "bob",
+      "sender": "system",
+      "recipient": "runtime",
+      "msg_type": "eoa/initialize",
+      "msg": {}
+    },
+    {
+      "id": "atom",
+      "sender": "system",
+      "recipient": "runtime",
+      "msg_type": "token/initialize",
+      "msg": {
+        "metadata": {
+          "name": "uatom",
+          "symbol": "ATOM",
+          "decimals": 6,
+          "icon_url": "https://example.com/atom.png",
+          "description": "The atom coin"
+        },
+        "balances": [
+          ["$alice", 1000],
+          ["$bob", 2000]
+        ],
+        "supply_manager": "$alice"
+      }
+    },
+    {
+      "id": "scheduler",
+      "sender": "system",
+      "recipient": "runtime",
+      "msg_type": "scheduler/initialize",
+      "msg": {
+        "begin_blockers": [],
+        "end_blockers": []
+      }
+    }
+  ]
+}
