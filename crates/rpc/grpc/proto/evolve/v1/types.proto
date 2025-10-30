@@ -177,3 +177,78 @@ message SyncProgress {
   uint64 current_block = 2;
   uint64 highest_block = 3;
 }
+
+// ============================================================================
+// Schema types for module introspection
+// ============================================================================
+
+// Describes a Rust type in the schema
+message TypeSchema {
+  oneof kind {
+    string primitive = 1;        // Primitive type name (u8, u64, bool, String, etc.)
+    TypeSchema array_element = 2; // Vec<T> element type
+    TypeSchema optional_inner = 3; // Option<T> inner type
+    TupleSchema tuple = 4;        // Tuple elements
+    StructSchema struct_type = 5; // Named struct with fields
+    EnumSchema enum_type = 6;     // Enum with variants
+    bool account_id = 7;          // AccountId type (set to true)
+    bool unit = 8;                // Unit type () (set to true)
+    string opaque = 9;            // Opaque type (Rust type path as string)
+  }
+}
+
+// Tuple type with multiple elements
+message TupleSchema {
+  repeated TypeSchema elements = 1;
+}
+
+// Struct type with named fields
+message StructSchema {
+  string name = 1;
+  repeated FieldSchema fields = 2;
+}
+
+// Enum type with variants
+message EnumSchema {
+  string name = 1;
+  repeated VariantSchema variants = 2;
+}
+
+// A named field with its type
+message FieldSchema {
+  string name = 1;
+  TypeSchema ty = 2;
+}
+
+// An enum variant with optional fields
+message VariantSchema {
+  string name = 1;
+  repeated FieldSchema fields = 2;
+}
+
+// Function kind
+enum FunctionKind {
+  FUNCTION_KIND_UNSPECIFIED = 0;
+  FUNCTION_KIND_INIT = 1;
+  FUNCTION_KIND_EXEC = 2;
+  FUNCTION_KIND_QUERY = 3;
+}
+
+// Describes a function in an account module
+message FunctionSchema {
+  string name = 1;
+  uint64 function_id = 2;
+  FunctionKind kind = 3;
+  repeated FieldSchema params = 4;
+  TypeSchema return_type = 5;
+  bool payable = 6;
+}
+
+// Complete schema for an account module
+message AccountSchema {
+  string name = 1;
+  string identifier = 2;
+  optional FunctionSchema init = 3;
+  repeated FunctionSchema exec_functions = 4;
+  repeated FunctionSchema query_functions = 5;
+}

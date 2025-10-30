@@ -12,6 +12,7 @@ pub mod fungible_asset;
 pub mod low_level;
 pub mod message;
 pub mod runtime_api;
+pub mod schema;
 pub mod storage_api;
 
 pub use error::ErrorCode;
@@ -115,6 +116,7 @@ pub trait Environment: EnvironmentQuery {
 /// Defines some arbitrary code that can handle account execution logic.
 pub trait AccountCode: Send + Sync {
     fn identifier(&self) -> String;
+    fn schema(&self) -> schema::AccountSchema;
     fn init(&self, env: &mut dyn Environment, request: &InvokeRequest)
         -> SdkResult<InvokeResponse>;
     fn execute(

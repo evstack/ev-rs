@@ -8,6 +8,7 @@ rust-version.workspace = true
 
 [dependencies]
 # Workspace dependencies
+evolve_core.workspace = true
 evolve_rpc_types.workspace = true
 evolve_eth_jsonrpc.workspace = true
 

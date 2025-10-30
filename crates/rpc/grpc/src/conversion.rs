@@ -355,6 +355,106 @@ pub fn rpc_sync_status_to_proto(status: &RpcSyncStatus) -> proto::SyncStatus {
     }
 }
 
+// ============================================================================
+// Schema conversions
+// ============================================================================
+
+use evolve_core::schema::{
+    AccountSchema, FieldSchema, FunctionKind, FunctionSchema, TypeSchema, VariantSchema,
+};
+
+/// Convert TypeSchema to proto TypeSchema.
+pub fn type_schema_to_proto(ty: &TypeSchema) -> proto::TypeSchema {
+    let kind = match ty {
+        TypeSchema::Primitive { name } => Some(proto::type_schema::Kind::Primitive(name.clone())),
+        TypeSchema::Array { element } => Some(proto::type_schema::Kind::ArrayElement(Box::new(
+            type_schema_to_proto(element),
+        ))),
+        TypeSchema::Optional { inner } => Some(proto::type_schema::Kind::OptionalInner(Box::new(
+            type_schema_to_proto(inner),
+        ))),
+        TypeSchema::Tuple { elements } => {
+            Some(proto::type_schema::Kind::Tuple(proto::TupleSchema {
+                elements: elements.iter().map(type_schema_to_proto).collect(),
+            }))
+        }
+        TypeSchema::Struct { name, fields } => {
+            Some(proto::type_schema::Kind::StructType(proto::StructSchema {
+                name: name.clone(),
+                fields: fields.iter().map(field_schema_to_proto).collect(),
+            }))
+        }
+        TypeSchema::Enum { name, variants } => {
+            Some(proto::type_schema::Kind::EnumType(proto::EnumSchema {
+                name: name.clone(),
+                variants: variants.iter().map(variant_schema_to_proto).collect(),
+            }))
+        }
+        TypeSchema::AccountId => Some(proto::type_schema::Kind::AccountId(true)),
+        TypeSchema::Unit => Some(proto::type_schema::Kind::Unit(true)),
+        TypeSchema::Opaque { rust_type } => {
+            Some(proto::type_schema::Kind::Opaque(rust_type.clone()))
+        }
+    };
+    proto::TypeSchema { kind }
+}
+
+/// Convert FieldSchema to proto FieldSchema.
+pub fn field_schema_to_proto(field: &FieldSchema) -> proto::FieldSchema {
+    proto::FieldSchema {
+        name: field.name.clone(),
+        ty: Some(type_schema_to_proto(&field.ty)),
+    }
+}
+
+/// Convert VariantSchema to proto VariantSchema.
+pub fn variant_schema_to_proto(variant: &VariantSchema) -> proto::VariantSchema {
+    proto::VariantSchema {
+        name: variant.name.clone(),
+        fields: variant.fields.iter().map(field_schema_to_proto).collect(),
+    }
+}
+
+/// Convert FunctionKind to proto FunctionKind.
+pub fn function_kind_to_proto(kind: FunctionKind) -> i32 {
+    match kind {
+        FunctionKind::Init => proto::FunctionKind::Init as i32,
+        FunctionKind::Exec => proto::FunctionKind::Exec as i32,
+        FunctionKind::Query => proto::FunctionKind::Query as i32,
+    }
+}
+
+/// Convert FunctionSchema to proto FunctionSchema.
+pub fn function_schema_to_proto(func: &FunctionSchema) -> proto::FunctionSchema {
+    proto::FunctionSchema {
+        name: func.name.clone(),
+        function_id: func.function_id,
+        kind: function_kind_to_proto(func.kind),
+        params: func.params.iter().map(field_schema_to_proto).collect(),
+        return_type: Some(type_schema_to_proto(&func.return_type)),
+        payable: func.payable,
+    }
+}
+
+/// Convert AccountSchema to proto AccountSchema.
+pub fn account_schema_to_proto(schema: &AccountSchema) -> proto::AccountSchema {
+    proto::AccountSchema {
+        name: schema.name.clone(),
+        identifier: schema.identifier.clone(),
+        init: schema.init.as_ref().map(function_schema_to_proto),
+        exec_functions: schema
+            .exec_functions
+            .iter()
+            .map(function_schema_to_proto)
+            .collect(),
+        query_functions: schema
+            .query_functions
+            .iter()
+            .map(function_schema_to_proto)
+            .collect(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,5 +518,156 @@ mod tests {
             (BlockNumberOrTag::Number(n1), BlockNumberOrTag::Number(n2)) => assert_eq!(n1, n2),
             _ => panic!("Number mismatch"),
         }
+    }
+
+    // ==================== Schema conversion tests ====================
+
+    #[test]
+    fn test_type_schema_primitive_conversion() {
+        let original = TypeSchema::Primitive {
+            name: "u64".to_string(),
+        };
+        let proto = type_schema_to_proto(&original);
+
+        match proto.kind {
+            Some(proto::type_schema::Kind::Primitive(name)) => {
+                assert_eq!(name, "u64");
+            }
+            _ => panic!("Expected primitive kind"),
+        }
+    }
+
+    #[test]
+    fn test_type_schema_account_id_conversion() {
+        let original = TypeSchema::AccountId;
+        let proto = type_schema_to_proto(&original);
+
+        match proto.kind {
+            Some(proto::type_schema::Kind::AccountId(true)) => {}
+            _ => panic!("Expected account_id kind"),
+        }
+    }
+
+    #[test]
+    fn test_type_schema_array_conversion() {
+        let original = TypeSchema::Array {
+            element: Box::new(TypeSchema::Primitive {
+                name: "u8".to_string(),
+            }),
+        };
+        let proto = type_schema_to_proto(&original);
+
+        match proto.kind {
+            Some(proto::type_schema::Kind::ArrayElement(inner)) => match inner.kind {
+                Some(proto::type_schema::Kind::Primitive(name)) => {
+                    assert_eq!(name, "u8");
+                }
+                _ => panic!("Expected primitive inner"),
+            },
+            _ => panic!("Expected array kind"),
+        }
+    }
+
+    #[test]
+    fn test_type_schema_optional_conversion() {
+        let original = TypeSchema::Optional {
+            inner: Box::new(TypeSchema::AccountId),
+        };
+        let proto = type_schema_to_proto(&original);
+
+        match proto.kind {
+            Some(proto::type_schema::Kind::OptionalInner(inner)) => match inner.kind {
+                Some(proto::type_schema::Kind::AccountId(true)) => {}
+                _ => panic!("Expected account_id inner"),
+            },
+            _ => panic!("Expected optional kind"),
+        }
+    }
+
+    #[test]
+    fn test_type_schema_tuple_conversion() {
+        let original = TypeSchema::Tuple {
+            elements: vec![
+                TypeSchema::AccountId,
+                TypeSchema::Primitive {
+                    name: "u128".to_string(),
+                },
+            ],
+        };
+        let proto = type_schema_to_proto(&original);
+
+        match proto.kind {
+            Some(proto::type_schema::Kind::Tuple(tuple)) => {
+                assert_eq!(tuple.elements.len(), 2);
+            }
+            _ => panic!("Expected tuple kind"),
+        }
+    }
+
+    #[test]
+    fn test_function_schema_conversion() {
+        let original = FunctionSchema {
+            name: "transfer".to_string(),
+            function_id: 123456789,
+            kind: FunctionKind::Exec,
+            params: vec![FieldSchema {
+                name: "to".to_string(),
+                ty: TypeSchema::AccountId,
+            }],
+            return_type: TypeSchema::Unit,
+            payable: true,
+        };
+        let proto = function_schema_to_proto(&original);
+
+        assert_eq!(proto.name, "transfer");
+        assert_eq!(proto.function_id, 123456789);
+        assert_eq!(proto.kind, proto::FunctionKind::Exec as i32);
+        assert_eq!(proto.params.len(), 1);
+        assert_eq!(proto.params[0].name, "to");
+        assert!(proto.payable);
+    }
+
+    #[test]
+    fn test_account_schema_conversion() {
+        let original = AccountSchema {
+            name: "Token".to_string(),
+            identifier: "Token".to_string(),
+            init: Some(FunctionSchema {
+                name: "initialize".to_string(),
+                function_id: 111,
+                kind: FunctionKind::Init,
+                params: vec![],
+                return_type: TypeSchema::Unit,
+                payable: false,
+            }),
+            exec_functions: vec![FunctionSchema {
+                name: "transfer".to_string(),
+                function_id: 222,
+                kind: FunctionKind::Exec,
+                params: vec![],
+                return_type: TypeSchema::Unit,
+                payable: false,
+            }],
+            query_functions: vec![FunctionSchema {
+                name: "balance".to_string(),
+                function_id: 333,
+                kind: FunctionKind::Query,
+                params: vec![],
+                return_type: TypeSchema::Primitive {
+                    name: "u128".to_string(),
+                },
+                payable: false,
+            }],
+        };
+        let proto = account_schema_to_proto(&original);
+
+        assert_eq!(proto.name, "Token");
+        assert_eq!(proto.identifier, "Token");
+        assert!(proto.init.is_some());
+        assert_eq!(proto.init.as_ref().unwrap().name, "initialize");
+        assert_eq!(proto.exec_functions.len(), 1);
+        assert_eq!(proto.exec_functions[0].name, "transfer");
+        assert_eq!(proto.query_functions.len(), 1);
+        assert_eq!(proto.query_functions[0].name, "balance");
     }
 }

@@ -3,6 +3,7 @@
 //! This module defines the Ethereum-compatible JSON-RPC API that the server implements.
 
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
+use evolve_core::schema::AccountSchema;
 use evolve_rpc_types::{
     BlockNumberOrTag, CallRequest, FeeHistory, LogFilter, RpcBlock, RpcLog, RpcReceipt,
     RpcTransaction, SyncStatus,
@@ -203,4 +204,28 @@ pub trait EthPubSubApi {
         kind: String,
         params: Option<serde_json::Value>,
     ) -> jsonrpsee::core::SubscriptionResult;
+}
+
+/// Evolve-specific RPC API for module introspection.
+///
+/// This namespace provides methods for discovering registered modules
+/// and their schemas, enabling RPC clients to understand available queries.
+#[rpc(server, namespace = "evolve")]
+pub trait EvolveApi {
+    /// Returns a list of all registered module identifiers.
+    #[method(name = "listModules")]
+    async fn list_modules(&self) -> Result<Vec<String>, jsonrpsee::types::ErrorObjectOwned>;
+
+    /// Returns the schema for a specific module by its identifier.
+    #[method(name = "getModuleSchema")]
+    async fn get_module_schema(
+        &self,
+        id: String,
+    ) -> Result<Option<AccountSchema>, jsonrpsee::types::ErrorObjectOwned>;
+
+    /// Returns schemas for all registered modules.
+    #[method(name = "getAllSchemas")]
+    async fn get_all_schemas(
+        &self,
+    ) -> Result<Vec<AccountSchema>, jsonrpsee::types::ErrorObjectOwned>;
 }

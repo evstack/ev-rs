@@ -37,6 +37,11 @@ service ExecutionService {
 
   // Transaction submission
   rpc SendRawTransaction(SendRawTransactionRequest) returns (SendRawTransactionResponse);
+
+  // Schema introspection (Evolve-specific)
+  rpc ListModules(ListModulesRequest) returns (ListModulesResponse);
+  rpc GetModuleSchema(GetModuleSchemaRequest) returns (GetModuleSchemaResponse);
+  rpc GetAllSchemas(GetAllSchemasRequest) returns (GetAllSchemasResponse);
 }
 
 // Chain information requests/responses
@@ -186,4 +191,26 @@ message SendRawTransactionRequest {
 
 message SendRawTransactionResponse {
   H256 hash = 1;
+}
+
+// Schema introspection requests/responses
+
+message ListModulesRequest {}
+
+message ListModulesResponse {
+  repeated string identifiers = 1;
+}
+
+message GetModuleSchemaRequest {
+  string identifier = 1;
+}
+
+message GetModuleSchemaResponse {
+  optional AccountSchema schema = 1;
+}
+
+message GetAllSchemasRequest {}
+
+message GetAllSchemasResponse {
+  repeated AccountSchema schemas = 1;
 }

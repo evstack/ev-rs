@@ -276,6 +276,113 @@ pub struct SyncProgress {
     #[prost(uint64, tag = "3")]
     pub highest_block: u64,
 }
+/// Describes a Rust type in the schema
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TypeSchema {
+    #[prost(oneof = "type_schema::Kind", tags = "1, 2, 3, 4, 5, 6, 7, 8, 9")]
+    pub kind: ::core::option::Option<type_schema::Kind>,
+}
+/// Nested message and enum types in `TypeSchema`.
+pub mod type_schema {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Kind {
+        /// Primitive type name (u8, u64, bool, String, etc.)
+        #[prost(string, tag = "1")]
+        Primitive(::prost::alloc::string::String),
+        /// Vec<T> element type
+        #[prost(message, tag = "2")]
+        ArrayElement(::prost::alloc::boxed::Box<super::TypeSchema>),
+        /// Option<T> inner type
+        #[prost(message, tag = "3")]
+        OptionalInner(::prost::alloc::boxed::Box<super::TypeSchema>),
+        /// Tuple elements
+        #[prost(message, tag = "4")]
+        Tuple(super::TupleSchema),
+        /// Named struct with fields
+        #[prost(message, tag = "5")]
+        StructType(super::StructSchema),
+        /// Enum with variants
+        #[prost(message, tag = "6")]
+        EnumType(super::EnumSchema),
+        /// AccountId type (set to true)
+        #[prost(bool, tag = "7")]
+        AccountId(bool),
+        /// Unit type () (set to true)
+        #[prost(bool, tag = "8")]
+        Unit(bool),
+        /// Opaque type (Rust type path as string)
+        #[prost(string, tag = "9")]
+        Opaque(::prost::alloc::string::String),
+    }
+}
+/// Tuple type with multiple elements
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TupleSchema {
+    #[prost(message, repeated, tag = "1")]
+    pub elements: ::prost::alloc::vec::Vec<TypeSchema>,
+}
+/// Struct type with named fields
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct StructSchema {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub fields: ::prost::alloc::vec::Vec<FieldSchema>,
+}
+/// Enum type with variants
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct EnumSchema {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub variants: ::prost::alloc::vec::Vec<VariantSchema>,
+}
+/// A named field with its type
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FieldSchema {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "2")]
+    pub ty: ::core::option::Option<TypeSchema>,
+}
+/// An enum variant with optional fields
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VariantSchema {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(message, repeated, tag = "2")]
+    pub fields: ::prost::alloc::vec::Vec<FieldSchema>,
+}
+/// Describes a function in an account module
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct FunctionSchema {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(uint64, tag = "2")]
+    pub function_id: u64,
+    #[prost(enumeration = "FunctionKind", tag = "3")]
+    pub kind: i32,
+    #[prost(message, repeated, tag = "4")]
+    pub params: ::prost::alloc::vec::Vec<FieldSchema>,
+    #[prost(message, optional, tag = "5")]
+    pub return_type: ::core::option::Option<TypeSchema>,
+    #[prost(bool, tag = "6")]
+    pub payable: bool,
+}
+/// Complete schema for an account module
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct AccountSchema {
+    #[prost(string, tag = "1")]
+    pub name: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub identifier: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub init: ::core::option::Option<FunctionSchema>,
+    #[prost(message, repeated, tag = "4")]
+    pub exec_functions: ::prost::alloc::vec::Vec<FunctionSchema>,
+    #[prost(message, repeated, tag = "5")]
+    pub query_functions: ::prost::alloc::vec::Vec<FunctionSchema>,
+}
 /// Standard block tags
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -311,6 +418,39 @@ impl BlockTag {
             "BLOCK_TAG_PENDING" => Some(Self::Pending),
             "BLOCK_TAG_SAFE" => Some(Self::Safe),
             "BLOCK_TAG_FINALIZED" => Some(Self::Finalized),
+            _ => None,
+        }
+    }
+}
+/// Function kind
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum FunctionKind {
+    Unspecified = 0,
+    Init = 1,
+    Exec = 2,
+    Query = 3,
+}
+impl FunctionKind {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    ///
+    /// The values are not transformed in any way and thus are considered stable
+    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unspecified => "FUNCTION_KIND_UNSPECIFIED",
+            Self::Init => "FUNCTION_KIND_INIT",
+            Self::Exec => "FUNCTION_KIND_EXEC",
+            Self::Query => "FUNCTION_KIND_QUERY",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "FUNCTION_KIND_UNSPECIFIED" => Some(Self::Unspecified),
+            "FUNCTION_KIND_INIT" => Some(Self::Init),
+            "FUNCTION_KIND_EXEC" => Some(Self::Exec),
+            "FUNCTION_KIND_QUERY" => Some(Self::Query),
             _ => None,
         }
     }
@@ -489,6 +629,30 @@ pub struct SendRawTransactionResponse {
     #[prost(message, optional, tag = "1")]
     pub hash: ::core::option::Option<H256>,
 }
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct ListModulesRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ListModulesResponse {
+    #[prost(string, repeated, tag = "1")]
+    pub identifiers: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetModuleSchemaRequest {
+    #[prost(string, tag = "1")]
+    pub identifier: ::prost::alloc::string::String,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetModuleSchemaResponse {
+    #[prost(message, optional, tag = "1")]
+    pub schema: ::core::option::Option<AccountSchema>,
+}
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct GetAllSchemasRequest {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct GetAllSchemasResponse {
+    #[prost(message, repeated, tag = "1")]
+    pub schemas: ::prost::alloc::vec::Vec<AccountSchema>,
+}
 /// Generated server implementations.
 pub mod execution_service_server {
     #![allow(
@@ -617,6 +781,28 @@ pub mod execution_service_server {
             request: tonic::Request<super::SendRawTransactionRequest>,
         ) -> std::result::Result<
             tonic::Response<super::SendRawTransactionResponse>,
+            tonic::Status,
+        >;
+        /// Schema introspection (Evolve-specific)
+        async fn list_modules(
+            &self,
+            request: tonic::Request<super::ListModulesRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::ListModulesResponse>,
+            tonic::Status,
+        >;
+        async fn get_module_schema(
+            &self,
+            request: tonic::Request<super::GetModuleSchemaRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetModuleSchemaResponse>,
+            tonic::Status,
+        >;
+        async fn get_all_schemas(
+            &self,
+            request: tonic::Request<super::GetAllSchemasRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::GetAllSchemasResponse>,
             tonic::Status,
         >;
     }
@@ -1489,6 +1675,143 @@ pub mod execution_service_server {
                     let inner = self.inner.clone();
                     let fut = async move {
                         let method = SendRawTransactionSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/evolve.v1.ExecutionService/ListModules" => {
+                    #[allow(non_camel_case_types)]
+                    struct ListModulesSvc<T: ExecutionService>(pub Arc<T>);
+                    impl<
+                        T: ExecutionService,
+                    > tonic::server::UnaryService<super::ListModulesRequest>
+                    for ListModulesSvc<T> {
+                        type Response = super::ListModulesResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::ListModulesRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ExecutionService>::list_modules(&inner, request).await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = ListModulesSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/evolve.v1.ExecutionService/GetModuleSchema" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetModuleSchemaSvc<T: ExecutionService>(pub Arc<T>);
+                    impl<
+                        T: ExecutionService,
+                    > tonic::server::UnaryService<super::GetModuleSchemaRequest>
+                    for GetModuleSchemaSvc<T> {
+                        type Response = super::GetModuleSchemaResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetModuleSchemaRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ExecutionService>::get_module_schema(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetModuleSchemaSvc(inner);
+                        let codec = tonic::codec::ProstCodec::default();
+                        let mut grpc = tonic::server::Grpc::new(codec)
+                            .apply_compression_config(
+                                accept_compression_encodings,
+                                send_compression_encodings,
+                            )
+                            .apply_max_message_size_config(
+                                max_decoding_message_size,
+                                max_encoding_message_size,
+                            );
+                        let res = grpc.unary(method, req).await;
+                        Ok(res)
+                    };
+                    Box::pin(fut)
+                }
+                "/evolve.v1.ExecutionService/GetAllSchemas" => {
+                    #[allow(non_camel_case_types)]
+                    struct GetAllSchemasSvc<T: ExecutionService>(pub Arc<T>);
+                    impl<
+                        T: ExecutionService,
+                    > tonic::server::UnaryService<super::GetAllSchemasRequest>
+                    for GetAllSchemasSvc<T> {
+                        type Response = super::GetAllSchemasResponse;
+                        type Future = BoxFuture<
+                            tonic::Response<Self::Response>,
+                            tonic::Status,
+                        >;
+                        fn call(
+                            &mut self,
+                            request: tonic::Request<super::GetAllSchemasRequest>,
+                        ) -> Self::Future {
+                            let inner = Arc::clone(&self.0);
+                            let fut = async move {
+                                <T as ExecutionService>::get_all_schemas(&inner, request)
+                                    .await
+                            };
+                            Box::pin(fut)
+                        }
+                    }
+                    let accept_compression_encodings = self.accept_compression_encodings;
+                    let send_compression_encodings = self.send_compression_encodings;
+                    let max_decoding_message_size = self.max_decoding_message_size;
+                    let max_encoding_message_size = self.max_encoding_message_size;
+                    let inner = self.inner.clone();
+                    let fut = async move {
+                        let method = GetAllSchemasSvc(inner);
                         let codec = tonic::codec::ProstCodec::default();
                         let mut grpc = tonic::server::Grpc::new(codec)
                             .apply_compression_config(

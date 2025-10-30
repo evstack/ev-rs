@@ -30,6 +30,10 @@ impl AccountsCodeStorage for AccountStorageMock {
         let code = self.codes.get(identifier).map(|e| e.as_ref());
         Ok(f(code))
     }
+
+    fn list_identifiers(&self) -> Vec<String> {
+        self.codes.keys().cloned().collect()
+    }
 }
 
 impl WritableAccountsCodeStorage for AccountStorageMock {

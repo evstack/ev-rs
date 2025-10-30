@@ -50,6 +50,9 @@ pub trait AccountsCodeStorage {
     fn with_code<F, R>(&self, identifier: &str, f: F) -> Result<R, ErrorCode>
     where
         F: FnOnce(Option<&dyn AccountCode>) -> R;
+
+    /// Returns a list of all registered account code identifiers.
+    fn list_identifiers(&self) -> Vec<String>;
 }
 
 /// Extension to also add more codes.

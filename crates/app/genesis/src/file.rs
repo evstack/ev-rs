@@ -192,22 +192,23 @@ impl GenesisFile {
 
         for (idx, tx_json) in self.transactions.iter().enumerate() {
             // Resolve sender
-            let sender = match &tx_json.sender {
-                SenderSpec::System => SYSTEM_ACCOUNT_ID,
-                SenderSpec::Reference(r) if r.starts_with('$') => {
-                    let ref_id = &r[1..];
-                    *id_to_account
-                        .get(ref_id)
-                        .ok_or_else(|| GenesisError::InvalidReference(ref_id.to_string(), idx))?
-                }
-                SenderSpec::Reference(r) => {
-                    // Treat as account ID string
-                    AccountId::new(r.parse().map_err(|_| {
-                        GenesisError::ParseError(format!("invalid sender: {}", r))
-                    })?)
-                }
-                SenderSpec::AccountId(id) => AccountId::new(*id),
-            };
+            let sender =
+                match &tx_json.sender {
+                    SenderSpec::System => SYSTEM_ACCOUNT_ID,
+                    SenderSpec::Reference(r) if r.starts_with('$') => {
+                        let ref_id = &r[1..];
+                        *id_to_account.get(ref_id).ok_or_else(|| {
+                            GenesisError::InvalidReference(ref_id.to_string(), idx)
+                        })?
+                    }
+                    SenderSpec::Reference(r) => {
+                        // Treat as account ID string
+                        AccountId::new(r.parse().map_err(|_| {
+                            GenesisError::ParseError(format!("invalid sender: {}", r))
+                        })?)
+                    }
+                    SenderSpec::AccountId(id) => AccountId::new(*id),
+                };
 
             // Resolve recipient
             let recipient = match &tx_json.recipient {
@@ -404,8 +405,14 @@ mod tests {
         assert_eq!(txs[0].id, Some("alice".to_string()));
         assert_eq!(txs[1].id, Some("token".to_string()));
         // Both should target the runtime account
-        assert_eq!(txs[0].recipient, evolve_core::runtime_api::RUNTIME_ACCOUNT_ID);
-        assert_eq!(txs[1].recipient, evolve_core::runtime_api::RUNTIME_ACCOUNT_ID);
+        assert_eq!(
+            txs[0].recipient,
+            evolve_core::runtime_api::RUNTIME_ACCOUNT_ID
+        );
+        assert_eq!(
+            txs[1].recipient,
+            evolve_core::runtime_api::RUNTIME_ACCOUNT_ID
+        );
     }
 
     #[test]
@@ -441,10 +448,7 @@ mod tests {
             ]
         }"#;
         let genesis = GenesisFile::parse(json).unwrap();
-        assert!(matches!(
-            genesis.transactions[0].sender,
-            SenderSpec::System
-        ));
+        assert!(matches!(genesis.transactions[0].sender, SenderSpec::System));
 
         // Test numeric sender
         let json = r#"{

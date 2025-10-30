@@ -13,11 +13,14 @@ use async_trait::async_trait;
 
 use crate::error::ChainIndexError;
 use crate::index::ChainIndex;
+use evolve_core::schema::AccountSchema;
+use evolve_core::AccountCode;
 use evolve_eth_jsonrpc::error::RpcError;
 use evolve_eth_jsonrpc::StateProvider;
 use evolve_rpc_types::block::BlockTransactions;
 use evolve_rpc_types::SyncStatus;
 use evolve_rpc_types::{CallRequest, LogFilter, RpcBlock, RpcLog, RpcReceipt, RpcTransaction};
+use evolve_stf_traits::AccountsCodeStorage;
 
 /// State provider configuration.
 #[derive(Debug, Clone)]
@@ -35,17 +38,58 @@ pub struct ChainStateProviderConfig {
 /// State provider that combines chain index with state storage.
 ///
 /// This is the main integration point between the RPC server and the chain data.
-pub struct ChainStateProvider<I: ChainIndex> {
+pub struct ChainStateProvider<
+    I: ChainIndex,
+    A: AccountsCodeStorage + Send + Sync = NoopAccountCodes,
+> {
     /// Chain index for blocks/transactions/receipts.
     index: Arc<I>,
     /// Configuration.
     config: ChainStateProviderConfig,
+    /// Account codes storage for schema introspection.
+    account_codes: Arc<A>,
 }
 
-impl<I: ChainIndex> ChainStateProvider<I> {
-    /// Create a new chain state provider.
+/// No-op implementation of AccountsCodeStorage for when schema introspection is not needed.
+#[derive(Default)]
+pub struct NoopAccountCodes;
+
+impl AccountsCodeStorage for NoopAccountCodes {
+    fn with_code<F, R>(&self, _identifier: &str, f: F) -> Result<R, evolve_core::ErrorCode>
+    where
+        F: FnOnce(Option<&dyn AccountCode>) -> R,
+    {
+        Ok(f(None))
+    }
+
+    fn list_identifiers(&self) -> Vec<String> {
+        Vec::new()
+    }
+}
+
+impl<I: ChainIndex> ChainStateProvider<I, NoopAccountCodes> {
+    /// Create a new chain state provider without account codes.
     pub fn new(index: Arc<I>, config: ChainStateProviderConfig) -> Self {
-        Self { index, config }
+        Self {
+            index,
+            config,
+            account_codes: Arc::new(NoopAccountCodes),
+        }
+    }
+}
+
+impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, A> {
+    /// Create a new chain state provider with account codes for schema introspection.
+    pub fn with_account_codes(
+        index: Arc<I>,
+        config: ChainStateProviderConfig,
+        account_codes: Arc<A>,
+    ) -> Self {
+        Self {
+            index,
+            config,
+            account_codes,
+        }
     }
 
     /// Get the chain index.
@@ -56,6 +100,11 @@ impl<I: ChainIndex> ChainStateProvider<I> {
     /// Get the configuration.
     pub fn config(&self) -> &ChainStateProviderConfig {
         &self.config
+    }
+
+    /// Get the account codes storage.
+    pub fn account_codes(&self) -> &Arc<A> {
+        &self.account_codes
     }
 }
 
@@ -73,7 +122,9 @@ impl From<ChainIndexError> for RpcError {
 }
 
 #[async_trait]
-impl<I: ChainIndex + 'static> StateProvider for ChainStateProvider<I> {
+impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> StateProvider
+    for ChainStateProvider<I, A>
+{
     async fn block_number(&self) -> Result<u64, RpcError> {
         self.index
             .latest_block_number()
@@ -239,6 +290,31 @@ impl<I: ChainIndex + 'static> StateProvider for ChainStateProvider<I> {
         Ok(B256::ZERO)
     }
 
+    async fn list_module_identifiers(&self) -> Result<Vec<String>, RpcError> {
+        Ok(self.account_codes.list_identifiers())
+    }
+
+    async fn get_module_schema(&self, id: &str) -> Result<Option<AccountSchema>, RpcError> {
+        self.account_codes
+            .with_code(id, |code| code.map(|c| c.schema()))
+            .map_err(|e| RpcError::InternalError(format!("Failed to get schema: {:?}", e)))
+    }
+
+    async fn get_all_schemas(&self) -> Result<Vec<AccountSchema>, RpcError> {
+        let identifiers = self.account_codes.list_identifiers();
+        let mut schemas = Vec::with_capacity(identifiers.len());
+        for id in identifiers {
+            if let Some(schema) = self
+                .account_codes
+                .with_code(&id, |code| code.map(|c| c.schema()))
+                .map_err(|e| RpcError::InternalError(format!("Failed to get schema: {:?}", e)))?
+            {
+                schemas.push(schema);
+            }
+        }
+        Ok(schemas)
+    }
+
     async fn protocol_version(&self) -> Result<String, RpcError> {
         Ok(self.config.protocol_version.clone())
     }
@@ -252,7 +328,7 @@ impl<I: ChainIndex + 'static> StateProvider for ChainStateProvider<I> {
     }
 }
 
-impl<I: ChainIndex> ChainStateProvider<I> {
+impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, A> {
     /// Get logs for a block range with filtering.
     fn get_logs_for_block_range(
         &self,

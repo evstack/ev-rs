@@ -237,6 +237,10 @@ mod model_tests {
             "test_account".to_string()
         }
 
+        fn schema(&self) -> evolve_core::schema::AccountSchema {
+            evolve_core::schema::AccountSchema::new("TestAccount", "test_account")
+        }
+
         fn init(
             &self,
             _env: &mut dyn Environment,
@@ -296,6 +300,10 @@ mod model_tests {
             F: FnOnce(Option<&dyn AccountCode>) -> R,
         {
             Ok(f(self.codes.get(identifier).map(|c| c.as_ref())))
+        }
+
+        fn list_identifiers(&self) -> Vec<String> {
+            self.codes.keys().cloned().collect()
         }
     }
 
@@ -584,6 +592,10 @@ mod model_tests {
         impl AccountCode for RecursiveAccount {
             fn identifier(&self) -> String {
                 "recursive".to_string()
+            }
+
+            fn schema(&self) -> evolve_core::schema::AccountSchema {
+                evolve_core::schema::AccountSchema::new("RecursiveAccount", "recursive")
             }
 
             fn init(

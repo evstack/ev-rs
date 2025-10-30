@@ -12,11 +12,12 @@ use jsonrpsee::server::{Server, ServerHandle};
 use jsonrpsee::types::ErrorObjectOwned;
 use jsonrpsee::{PendingSubscriptionSink, RpcModule, SubscriptionMessage, SubscriptionSink};
 
-use crate::api::{EthApiServer, EthPubSubApiServer, NetApiServer, Web3ApiServer};
+use crate::api::{EthApiServer, EthPubSubApiServer, EvolveApiServer, NetApiServer, Web3ApiServer};
 use crate::error::RpcError;
 use crate::subscriptions::{
     LogSubscriptionParams, SharedSubscriptionManager, SubscriptionKind, SubscriptionManager,
 };
+use evolve_core::schema::AccountSchema;
 use evolve_rpc_types::{
     BlockNumberOrTag, CallRequest, FeeHistory, LogFilter, RpcBlock, RpcLog, RpcReceipt,
     RpcTransaction, SyncStatus,
@@ -110,6 +111,15 @@ pub trait StateProvider: Send + Sync + 'static {
         block: Option<u64>,
     ) -> Result<B256, RpcError>;
 
+    /// List all registered module identifiers.
+    async fn list_module_identifiers(&self) -> Result<Vec<String>, RpcError>;
+
+    /// Get the schema for a specific module.
+    async fn get_module_schema(&self, id: &str) -> Result<Option<AccountSchema>, RpcError>;
+
+    /// Get schemas for all registered modules.
+    async fn get_all_schemas(&self) -> Result<Vec<AccountSchema>, RpcError>;
+
     /// Get the protocol version string reported by the client.
     async fn protocol_version(&self) -> Result<String, RpcError>;
 
@@ -202,6 +212,18 @@ impl StateProvider for NoopStateProvider {
         _block: Option<u64>,
     ) -> Result<B256, RpcError> {
         Ok(B256::ZERO)
+    }
+
+    async fn list_module_identifiers(&self) -> Result<Vec<String>, RpcError> {
+        Ok(vec![])
+    }
+
+    async fn get_module_schema(&self, _id: &str) -> Result<Option<AccountSchema>, RpcError> {
+        Ok(None)
+    }
+
+    async fn get_all_schemas(&self) -> Result<Vec<AccountSchema>, RpcError> {
+        Ok(vec![])
     }
 
     async fn protocol_version(&self) -> Result<String, RpcError> {
@@ -539,6 +561,30 @@ impl<S: StateProvider> NetApiServer for EthRpcServer<S> {
 }
 
 #[async_trait]
+impl<S: StateProvider> EvolveApiServer for EthRpcServer<S> {
+    async fn list_modules(&self) -> Result<Vec<String>, ErrorObjectOwned> {
+        self.state
+            .list_module_identifiers()
+            .await
+            .map_err(|e| e.into())
+    }
+
+    async fn get_module_schema(
+        &self,
+        id: String,
+    ) -> Result<Option<AccountSchema>, ErrorObjectOwned> {
+        self.state
+            .get_module_schema(&id)
+            .await
+            .map_err(|e| e.into())
+    }
+
+    async fn get_all_schemas(&self) -> Result<Vec<AccountSchema>, ErrorObjectOwned> {
+        self.state.get_all_schemas().await.map_err(|e| e.into())
+    }
+}
+
+#[async_trait]
 impl<S: StateProvider> EthPubSubApiServer for EthRpcServer<S> {
     async fn subscribe(
         &self,
@@ -756,6 +802,7 @@ pub async fn start_server<S: StateProvider>(
     module.merge(EthApiServer::into_rpc(eth_rpc.clone()))?;
     module.merge(Web3ApiServer::into_rpc(eth_rpc.clone()))?;
     module.merge(NetApiServer::into_rpc(eth_rpc.clone()))?;
+    module.merge(EvolveApiServer::into_rpc(eth_rpc.clone()))?;
     module.merge(EthPubSubApiServer::into_rpc(eth_rpc))?;
 
     let handle = server.start(module);
@@ -917,6 +964,15 @@ mod tests {
             _: Option<u64>,
         ) -> Result<B256, RpcError> {
             Ok(B256::ZERO)
+        }
+        async fn list_module_identifiers(&self) -> Result<Vec<String>, RpcError> {
+            Ok(vec![])
+        }
+        async fn get_module_schema(&self, _: &str) -> Result<Option<AccountSchema>, RpcError> {
+            Ok(None)
+        }
+        async fn get_all_schemas(&self) -> Result<Vec<AccountSchema>, RpcError> {
+            Ok(vec![])
         }
 
         async fn protocol_version(&self) -> Result<String, RpcError> {
@@ -1115,5 +1171,204 @@ mod tests {
             }
             _ => panic!("expected syncing status"),
         }
+    }
+
+    // ==================== Schema RPC tests ====================
+
+    /// Mock state provider with configurable schema responses
+    struct SchemaAwareMockProvider {
+        schemas: std::sync::RwLock<std::collections::HashMap<String, AccountSchema>>,
+    }
+
+    impl SchemaAwareMockProvider {
+        fn new() -> Self {
+            Self {
+                schemas: std::sync::RwLock::new(std::collections::HashMap::new()),
+            }
+        }
+
+        fn with_schema(self, schema: AccountSchema) -> Self {
+            self.schemas
+                .write()
+                .unwrap()
+                .insert(schema.identifier.clone(), schema);
+            self
+        }
+    }
+
+    fn make_test_schema(name: &str) -> AccountSchema {
+        use evolve_core::schema::{FunctionKind, FunctionSchema, TypeSchema};
+
+        AccountSchema {
+            name: name.to_string(),
+            identifier: name.to_string(),
+            init: Some(FunctionSchema {
+                name: "initialize".to_string(),
+                function_id: 12345,
+                kind: FunctionKind::Init,
+                params: vec![],
+                return_type: TypeSchema::Unit,
+                payable: false,
+            }),
+            exec_functions: vec![FunctionSchema {
+                name: "do_something".to_string(),
+                function_id: 67890,
+                kind: FunctionKind::Exec,
+                params: vec![],
+                return_type: TypeSchema::Unit,
+                payable: false,
+            }],
+            query_functions: vec![FunctionSchema {
+                name: "get_value".to_string(),
+                function_id: 11111,
+                kind: FunctionKind::Query,
+                params: vec![],
+                return_type: TypeSchema::Primitive {
+                    name: "u64".to_string(),
+                },
+                payable: false,
+            }],
+        }
+    }
+
+    #[async_trait]
+    impl StateProvider for SchemaAwareMockProvider {
+        async fn block_number(&self) -> Result<u64, RpcError> {
+            Ok(0)
+        }
+        async fn get_block_by_number(&self, _: u64, _: bool) -> Result<Option<RpcBlock>, RpcError> {
+            Ok(None)
+        }
+        async fn get_block_by_hash(&self, _: B256, _: bool) -> Result<Option<RpcBlock>, RpcError> {
+            Ok(None)
+        }
+        async fn get_transaction_by_hash(
+            &self,
+            _: B256,
+        ) -> Result<Option<RpcTransaction>, RpcError> {
+            Ok(None)
+        }
+        async fn get_transaction_receipt(&self, _: B256) -> Result<Option<RpcReceipt>, RpcError> {
+            Ok(None)
+        }
+        async fn get_balance(&self, _: Address, _: Option<u64>) -> Result<U256, RpcError> {
+            Ok(U256::ZERO)
+        }
+        async fn get_transaction_count(&self, _: Address, _: Option<u64>) -> Result<u64, RpcError> {
+            Ok(0)
+        }
+        async fn call(&self, _: &CallRequest, _: Option<u64>) -> Result<Bytes, RpcError> {
+            Ok(Bytes::new())
+        }
+        async fn estimate_gas(&self, _: &CallRequest, _: Option<u64>) -> Result<u64, RpcError> {
+            Ok(21000)
+        }
+        async fn get_logs(&self, _: &LogFilter) -> Result<Vec<RpcLog>, RpcError> {
+            Ok(vec![])
+        }
+        async fn send_raw_transaction(&self, _: &[u8]) -> Result<B256, RpcError> {
+            Err(RpcError::NotImplemented("sendRawTransaction".to_string()))
+        }
+        async fn get_code(&self, _: Address, _: Option<u64>) -> Result<Bytes, RpcError> {
+            Ok(Bytes::new())
+        }
+        async fn get_storage_at(
+            &self,
+            _: Address,
+            _: U256,
+            _: Option<u64>,
+        ) -> Result<B256, RpcError> {
+            Ok(B256::ZERO)
+        }
+
+        async fn list_module_identifiers(&self) -> Result<Vec<String>, RpcError> {
+            Ok(self.schemas.read().unwrap().keys().cloned().collect())
+        }
+
+        async fn get_module_schema(&self, id: &str) -> Result<Option<AccountSchema>, RpcError> {
+            Ok(self.schemas.read().unwrap().get(id).cloned())
+        }
+
+        async fn get_all_schemas(&self) -> Result<Vec<AccountSchema>, RpcError> {
+            Ok(self.schemas.read().unwrap().values().cloned().collect())
+        }
+
+        async fn protocol_version(&self) -> Result<String, RpcError> {
+            Ok("0x0".to_string())
+        }
+
+        async fn gas_price(&self) -> Result<U256, RpcError> {
+            Ok(U256::ZERO)
+        }
+
+        async fn syncing_status(&self) -> Result<SyncStatus, RpcError> {
+            Ok(SyncStatus::NotSyncing(false))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_evolve_list_modules() {
+        let provider = SchemaAwareMockProvider::new()
+            .with_schema(make_test_schema("Token"))
+            .with_schema(make_test_schema("Scheduler"));
+
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        let result = EvolveApiServer::list_modules(&server).await.unwrap();
+        assert_eq!(result.len(), 2);
+        assert!(result.contains(&"Token".to_string()));
+        assert!(result.contains(&"Scheduler".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_evolve_get_module_schema() {
+        let provider = SchemaAwareMockProvider::new().with_schema(make_test_schema("Token"));
+
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        // Get existing schema
+        let result = EvolveApiServer::get_module_schema(&server, "Token".to_string())
+            .await
+            .unwrap();
+        assert!(result.is_some());
+        let schema = result.unwrap();
+        assert_eq!(schema.name, "Token");
+        assert!(schema.init.is_some());
+        assert_eq!(schema.exec_functions.len(), 1);
+        assert_eq!(schema.query_functions.len(), 1);
+
+        // Get non-existent schema
+        let result = EvolveApiServer::get_module_schema(&server, "NonExistent".to_string())
+            .await
+            .unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_evolve_get_all_schemas() {
+        let provider = SchemaAwareMockProvider::new()
+            .with_schema(make_test_schema("Token"))
+            .with_schema(make_test_schema("NFT"));
+
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        let result = EvolveApiServer::get_all_schemas(&server).await.unwrap();
+        assert_eq!(result.len(), 2);
+
+        let names: Vec<_> = result.iter().map(|s| s.name.as_str()).collect();
+        assert!(names.contains(&"Token"));
+        assert!(names.contains(&"NFT"));
+    }
+
+    #[tokio::test]
+    async fn test_evolve_empty_schemas() {
+        let provider = SchemaAwareMockProvider::new();
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        let modules = EvolveApiServer::list_modules(&server).await.unwrap();
+        assert!(modules.is_empty());
+
+        let schemas = EvolveApiServer::get_all_schemas(&server).await.unwrap();
+        assert!(schemas.is_empty());
     }
 }

@@ -8,9 +8,10 @@ use evolve_rpc_types::BlockNumberOrTag;
 use tonic::{Request, Response, Status};
 
 use crate::conversion::{
-    b256_to_proto, proto_to_address, proto_to_b256, proto_to_block_id, proto_to_call_request,
-    proto_to_log_filter, proto_to_u256, rpc_block_to_proto, rpc_log_to_proto, rpc_receipt_to_proto,
-    rpc_sync_status_to_proto, rpc_transaction_to_proto, u256_to_proto,
+    account_schema_to_proto, b256_to_proto, proto_to_address, proto_to_b256, proto_to_block_id,
+    proto_to_call_request, proto_to_log_filter, proto_to_u256, rpc_block_to_proto,
+    rpc_log_to_proto, rpc_receipt_to_proto, rpc_sync_status_to_proto, rpc_transaction_to_proto,
+    u256_to_proto,
 };
 use crate::error::GrpcError;
 use crate::proto::evolve::v1::{self as proto, execution_service_server::ExecutionService};
@@ -426,6 +427,50 @@ impl<S: StateProvider> ExecutionService for ExecutionServiceImpl<S> {
 
         Ok(Response::new(proto::SendRawTransactionResponse {
             hash: Some(b256_to_proto(hash)),
+        }))
+    }
+
+    async fn list_modules(
+        &self,
+        _request: Request<proto::ListModulesRequest>,
+    ) -> Result<Response<proto::ListModulesResponse>, Status> {
+        let identifiers = self
+            .state
+            .list_module_identifiers()
+            .await
+            .map_err(GrpcError::from)?;
+
+        Ok(Response::new(proto::ListModulesResponse { identifiers }))
+    }
+
+    async fn get_module_schema(
+        &self,
+        request: Request<proto::GetModuleSchemaRequest>,
+    ) -> Result<Response<proto::GetModuleSchemaResponse>, Status> {
+        let req = request.into_inner();
+        let schema = self
+            .state
+            .get_module_schema(&req.identifier)
+            .await
+            .map_err(GrpcError::from)?;
+
+        Ok(Response::new(proto::GetModuleSchemaResponse {
+            schema: schema.map(|s| account_schema_to_proto(&s)),
+        }))
+    }
+
+    async fn get_all_schemas(
+        &self,
+        _request: Request<proto::GetAllSchemasRequest>,
+    ) -> Result<Response<proto::GetAllSchemasResponse>, Status> {
+        let schemas = self
+            .state
+            .get_all_schemas()
+            .await
+            .map_err(GrpcError::from)?;
+
+        Ok(Response::new(proto::GetAllSchemasResponse {
+            schemas: schemas.iter().map(account_schema_to_proto).collect(),
         }))
     }
 }

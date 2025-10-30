@@ -42,7 +42,8 @@ pub struct MessageTypeInfo {
 }
 
 /// A message encoder function.
-pub type MessageEncoder = Box<dyn Fn(&serde_json::Value) -> Result<InvokeRequest, GenesisError> + Send + Sync>;
+pub type MessageEncoder =
+    Box<dyn Fn(&serde_json::Value) -> Result<InvokeRequest, GenesisError> + Send + Sync>;
 
 /// A simple in-memory message registry.
 pub struct SimpleRegistry {
@@ -111,7 +112,10 @@ impl MessageRegistry for SimpleRegistry {
     }
 
     fn list_message_types(&self) -> Vec<MessageTypeInfo> {
-        self.encoders.values().map(|(_, info)| info.clone()).collect()
+        self.encoders
+            .values()
+            .map(|(_, info)| info.clone())
+            .collect()
     }
 }
 

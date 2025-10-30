@@ -587,6 +587,182 @@ fn compute_function_id(fn_name: &str) -> u64 {
 }
 
 // -----------------------------------------
+// Schema generation helpers
+// -----------------------------------------
+
+/// Converts a syn::Type to a TokenStream that constructs a TypeSchema.
+fn type_to_schema_tokens(ty: &Type) -> proc_macro2::TokenStream {
+    match ty {
+        Type::Path(type_path) => {
+            if let Some(segment) = type_path.path.segments.last() {
+                let name = segment.ident.to_string();
+
+                // Handle primitives
+                match name.as_str() {
+                    "u8" | "u16" | "u32" | "u64" | "u128" | "usize" | "i8" | "i16" | "i32"
+                    | "i64" | "i128" | "isize" | "bool" | "String" => {
+                        let name_str = name.as_str();
+                        return quote! {
+                            ::evolve_core::schema::TypeSchema::Primitive { name: #name_str.to_string() }
+                        };
+                    }
+                    "AccountId" => {
+                        return quote! {
+                            ::evolve_core::schema::TypeSchema::AccountId
+                        };
+                    }
+                    _ => {}
+                }
+
+                // Handle generic types like Vec<T>, Option<T>
+                if let syn::PathArguments::AngleBracketed(args) = &segment.arguments {
+                    let args_list: Vec<_> = args.args.iter().collect();
+
+                    match name.as_str() {
+                        "Vec" => {
+                            if let Some(syn::GenericArgument::Type(inner)) = args_list.first() {
+                                let inner_schema = type_to_schema_tokens(inner);
+                                return quote! {
+                                    ::evolve_core::schema::TypeSchema::Array {
+                                        element: ::std::boxed::Box::new(#inner_schema)
+                                    }
+                                };
+                            }
+                        }
+                        "Option" => {
+                            if let Some(syn::GenericArgument::Type(inner)) = args_list.first() {
+                                let inner_schema = type_to_schema_tokens(inner);
+                                return quote! {
+                                    ::evolve_core::schema::TypeSchema::Optional {
+                                        inner: ::std::boxed::Box::new(#inner_schema)
+                                    }
+                                };
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // Fall through to opaque type
+                let rust_type = quote!(#ty).to_string();
+                quote! {
+                    ::evolve_core::schema::TypeSchema::Opaque { rust_type: #rust_type.to_string() }
+                }
+            } else {
+                let rust_type = quote!(#ty).to_string();
+                quote! {
+                    ::evolve_core::schema::TypeSchema::Opaque { rust_type: #rust_type.to_string() }
+                }
+            }
+        }
+        Type::Tuple(tuple) => {
+            if tuple.elems.is_empty() {
+                quote! {
+                    ::evolve_core::schema::TypeSchema::Unit
+                }
+            } else {
+                let elements: Vec<_> = tuple.elems.iter().map(type_to_schema_tokens).collect();
+                quote! {
+                    ::evolve_core::schema::TypeSchema::Tuple {
+                        elements: ::std::vec![#(#elements),*]
+                    }
+                }
+            }
+        }
+        _ => {
+            let rust_type = quote!(#ty).to_string();
+            quote! {
+                ::evolve_core::schema::TypeSchema::Opaque { rust_type: #rust_type.to_string() }
+            }
+        }
+    }
+}
+
+/// Generates the TokenStream to construct a FunctionSchema for a given function.
+fn generate_function_schema_tokens(info: &FunctionInfo) -> proc_macro2::TokenStream {
+    let fn_name_str = info.fn_name.to_string();
+    let fn_id = compute_function_id(&fn_name_str);
+
+    let kind = match &info.kind {
+        FunctionKind::Init { .. } => quote!(::evolve_core::schema::FunctionKind::Init),
+        FunctionKind::Exec { .. } => quote!(::evolve_core::schema::FunctionKind::Exec),
+        FunctionKind::Query => quote!(::evolve_core::schema::FunctionKind::Query),
+    };
+
+    let payable = match &info.kind {
+        FunctionKind::Init { payable } | FunctionKind::Exec { payable } => *payable,
+        FunctionKind::Query => false,
+    };
+
+    let return_type_schema = type_to_schema_tokens(&info.return_type);
+
+    let params: Vec<_> = info
+        .params
+        .iter()
+        .map(|(name, ty)| {
+            let name_str = name.to_string();
+            let ty_schema = type_to_schema_tokens(ty);
+            quote! {
+                ::evolve_core::schema::FieldSchema {
+                    name: #name_str.to_string(),
+                    ty: #ty_schema,
+                }
+            }
+        })
+        .collect();
+
+    quote! {
+        ::evolve_core::schema::FunctionSchema {
+            name: #fn_name_str.to_string(),
+            function_id: #fn_id,
+            kind: #kind,
+            params: ::std::vec![#(#params),*],
+            return_type: #return_type_schema,
+            payable: #payable,
+        }
+    }
+}
+
+/// Generates the schema() method implementation for AccountCode.
+fn generate_schema_method(
+    account_ident: &Ident,
+    init_fn: &Option<FunctionInfo>,
+    exec_fns: &[FunctionInfo],
+    query_fns: &[FunctionInfo],
+) -> proc_macro2::TokenStream {
+    let account_name_str = account_ident.to_string();
+
+    let init_schema = if let Some(info) = init_fn {
+        let schema = generate_function_schema_tokens(info);
+        quote! { Some(#schema) }
+    } else {
+        quote! { None }
+    };
+
+    let exec_schemas: Vec<_> = exec_fns
+        .iter()
+        .map(generate_function_schema_tokens)
+        .collect();
+
+    let query_schemas: Vec<_> = query_fns
+        .iter()
+        .map(generate_function_schema_tokens)
+        .collect();
+
+    quote! {
+        fn schema(&self) -> ::evolve_core::schema::AccountSchema {
+            ::evolve_core::schema::AccountSchema {
+                name: #account_name_str.to_string(),
+                identifier: #account_name_str.to_string(),
+                init: #init_schema,
+                exec_functions: ::std::vec![#(#exec_schemas),*],
+                query_functions: ::std::vec![#(#query_schemas),*],
+            }
+        }
+    }
+}
+
+// -----------------------------------------
 // 2) Generate `impl AccountCode for {account_ident}`
 // -----------------------------------------
 
@@ -655,11 +831,14 @@ fn generate_accountcode_impl(
         }
     };
 
+    let schema_impl = generate_schema_method(account_ident, init_fn, exec_fns, query_fns);
+
     quote! {
         impl ::evolve_core::AccountCode for #account_ident {
             fn identifier(&self) -> String {
                 #account_name_str.to_string()
             }
+            #schema_impl
             #init_impl
             #exec_impl
             #query_impl
