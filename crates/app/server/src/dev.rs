@@ -33,8 +33,10 @@
 
 use crate::block::{Block, BlockBuilder};
 use crate::error::ServerError;
-use alloy_primitives::B256;
+use alloy_primitives::{Address, B256};
+use evolve_chain_index::{build_index_data, BlockMetadata, ChainIndex};
 use evolve_core::ReadonlyKV;
+use evolve_eth_jsonrpc::SharedSubscriptionManager;
 use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::results::BlockResult;
 use evolve_stf_traits::{AccountsCodeStorage, PostTxExecution, Transaction, TxValidator};
@@ -56,6 +58,9 @@ pub struct DevConfig {
 
     /// Initial block height (default: 1, since 0 is typically genesis).
     pub initial_height: u64,
+
+    /// Chain ID for transactions and RPC responses.
+    pub chain_id: u64,
 }
 
 impl Default for DevConfig {
@@ -64,6 +69,7 @@ impl Default for DevConfig {
             block_interval: Some(Duration::from_secs(1)),
             gas_limit: 30_000_000,
             initial_height: 1,
+            chain_id: 1,
         }
     }
 }
@@ -134,7 +140,8 @@ pub struct ProducedBlock {
 /// * `S` - The storage backend (must be ReadonlyKV + Storage for async operations)
 /// * `Codes` - Account codes storage
 /// * `Tx` - Transaction type
-pub struct DevConsensus<Stf, S, Codes, Tx> {
+/// * `I` - Optional chain index for RPC queries
+pub struct DevConsensus<Stf, S, Codes, Tx, I = NoopChainIndex> {
     /// The STF for block execution.
     stf: Stf,
     /// Storage with async batch/commit operations.
@@ -147,12 +154,16 @@ pub struct DevConsensus<Stf, S, Codes, Tx> {
     state: DevState,
     /// Whether auto-production is running.
     running: AtomicBool,
+    /// Optional chain index for block/tx/receipt queries.
+    chain_index: Option<Arc<I>>,
+    /// Optional subscription manager for publishing events.
+    subscriptions: Option<SharedSubscriptionManager>,
     /// Phantom for Tx type.
     _tx: std::marker::PhantomData<Tx>,
 }
 
-impl<Stf, S, Codes, Tx> DevConsensus<Stf, S, Codes, Tx> {
-    /// Create a new dev consensus engine.
+impl<Stf, S, Codes, Tx> DevConsensus<Stf, S, Codes, Tx, NoopChainIndex> {
+    /// Create a new dev consensus engine without RPC support.
     ///
     /// # Arguments
     ///
@@ -169,6 +180,42 @@ impl<Stf, S, Codes, Tx> DevConsensus<Stf, S, Codes, Tx> {
             config,
             state: DevState::new(initial_height),
             running: AtomicBool::new(false),
+            chain_index: None,
+            subscriptions: None,
+            _tx: std::marker::PhantomData,
+        }
+    }
+}
+
+impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
+    /// Create a new dev consensus engine with RPC support.
+    ///
+    /// # Arguments
+    ///
+    /// * `stf` - The state transition function
+    /// * `storage` - Storage backend with async batch/commit
+    /// * `codes` - Account codes storage
+    /// * `config` - Dev mode configuration
+    /// * `chain_index` - Chain index for block/tx/receipt queries
+    /// * `subscriptions` - Subscription manager for publishing events
+    pub fn with_rpc(
+        stf: Stf,
+        storage: S,
+        codes: Codes,
+        config: DevConfig,
+        chain_index: Arc<I>,
+        subscriptions: SharedSubscriptionManager,
+    ) -> Self {
+        let initial_height = config.initial_height;
+        Self {
+            stf,
+            storage,
+            codes,
+            config,
+            state: DevState::new(initial_height),
+            running: AtomicBool::new(false),
+            chain_index: Some(chain_index),
+            subscriptions: Some(subscriptions),
             _tx: std::marker::PhantomData,
         }
     }
@@ -186,6 +233,11 @@ impl<Stf, S, Codes, Tx> DevConsensus<Stf, S, Codes, Tx> {
     /// Get a reference to the codes.
     pub fn codes(&self) -> &Codes {
         &self.codes
+    }
+
+    /// Get the configuration.
+    pub fn config(&self) -> &DevConfig {
+        &self.config
     }
 
     /// Get the current block height.
@@ -207,14 +259,20 @@ impl<Stf, S, Codes, Tx> DevConsensus<Stf, S, Codes, Tx> {
     pub fn stop(&self) {
         self.running.store(false, Ordering::SeqCst);
     }
+
+    /// Get the subscription manager, if configured.
+    pub fn subscriptions(&self) -> Option<&SharedSubscriptionManager> {
+        self.subscriptions.as_ref()
+    }
 }
 
-impl<Stf, S, Codes, Tx> DevConsensus<Stf, S, Codes, Tx>
+impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I>
 where
     Tx: Transaction + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
+    I: ChainIndex + 'static,
 {
     /// Produce a single empty block.
     ///
@@ -276,6 +334,34 @@ where
         // Update state
         *self.state.last_hash.write().await = block_hash;
         self.state.last_timestamp.store(timestamp, Ordering::SeqCst);
+
+        // Index the block for RPC queries if chain index is configured
+        if let Some(ref index) = self.chain_index {
+            let metadata = BlockMetadata::new(
+                block_hash,
+                parent_hash,
+                B256::ZERO, // TODO: Compute actual state root
+                timestamp,
+                self.config.gas_limit,
+                Address::ZERO, // No miner in dev mode
+                self.config.chain_id,
+            );
+
+            let (stored_block, stored_txs, stored_receipts) =
+                build_index_data(&block, &result, &metadata);
+
+            if let Err(e) = index.store_block(stored_block.clone(), stored_txs, stored_receipts) {
+                log::warn!("Failed to index block {}: {:?}", height, e);
+            } else {
+                log::debug!("Indexed block {}", height);
+
+                // Publish new block to subscribers
+                if let Some(ref subs) = self.subscriptions {
+                    let rpc_block = stored_block.to_rpc_block(None);
+                    subs.publish_new_head(rpc_block);
+                }
+            }
+        }
 
         log::info!(
             "Produced block {} with {} txs, {} gas used",
@@ -377,6 +463,83 @@ where
         block: &Block<Tx>,
     ) -> (BlockResult, ExecutionState<'a, S>) {
         self.apply_block(storage, codes, block)
+    }
+}
+
+/// A no-op chain index for when RPC indexing is not needed.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoopChainIndex;
+
+impl ChainIndex for NoopChainIndex {
+    fn latest_block_number(
+        &self,
+    ) -> evolve_chain_index::ChainIndexResult<Option<u64>> {
+        Ok(None)
+    }
+
+    fn get_block(
+        &self,
+        _number: u64,
+    ) -> evolve_chain_index::ChainIndexResult<Option<evolve_chain_index::StoredBlock>> {
+        Ok(None)
+    }
+
+    fn get_block_by_hash(
+        &self,
+        _hash: B256,
+    ) -> evolve_chain_index::ChainIndexResult<Option<evolve_chain_index::StoredBlock>> {
+        Ok(None)
+    }
+
+    fn get_block_number(
+        &self,
+        _hash: B256,
+    ) -> evolve_chain_index::ChainIndexResult<Option<u64>> {
+        Ok(None)
+    }
+
+    fn get_block_transactions(
+        &self,
+        _number: u64,
+    ) -> evolve_chain_index::ChainIndexResult<Vec<B256>> {
+        Ok(vec![])
+    }
+
+    fn get_transaction(
+        &self,
+        _hash: B256,
+    ) -> evolve_chain_index::ChainIndexResult<Option<evolve_chain_index::StoredTransaction>> {
+        Ok(None)
+    }
+
+    fn get_transaction_location(
+        &self,
+        _hash: B256,
+    ) -> evolve_chain_index::ChainIndexResult<Option<evolve_chain_index::TxLocation>> {
+        Ok(None)
+    }
+
+    fn get_receipt(
+        &self,
+        _hash: B256,
+    ) -> evolve_chain_index::ChainIndexResult<Option<evolve_chain_index::StoredReceipt>> {
+        Ok(None)
+    }
+
+    fn get_logs_by_block(
+        &self,
+        _number: u64,
+    ) -> evolve_chain_index::ChainIndexResult<Vec<evolve_chain_index::StoredLog>> {
+        Ok(vec![])
+    }
+
+    fn store_block(
+        &self,
+        _block: evolve_chain_index::StoredBlock,
+        _transactions: Vec<evolve_chain_index::StoredTransaction>,
+        _receipts: Vec<evolve_chain_index::StoredReceipt>,
+    ) -> evolve_chain_index::ChainIndexResult<()> {
+        Ok(())
     }
 }
 

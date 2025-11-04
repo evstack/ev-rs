@@ -45,8 +45,18 @@ mod server;
 
 pub use block::{Block, BlockBuilder, BlockHeader};
 pub use builder::ServerBuilder;
-pub use dev::{DevConfig, DevConsensus, ProducedBlock, StfExecutor};
+pub use dev::{DevConfig, DevConsensus, NoopChainIndex, ProducedBlock, StfExecutor};
 pub use error::ServerError;
 pub use indexer::{BlockData, IndexEvent, IndexerHandle, Log, Receipt};
 pub use persistence::{load_chain_state, save_chain_state, ChainState, CHAIN_STATE_KEY};
 pub use server::EvolveServer;
+
+// Re-export RPC-related types for convenience
+pub use evolve_chain_index::{
+    ChainIndex, ChainStateProvider, ChainStateProviderConfig, PersistentChainIndex,
+};
+pub use evolve_eth_jsonrpc::{
+    start_server as start_rpc_server, RpcServerConfig, SharedSubscriptionManager,
+    SubscriptionManager,
+};
+pub use evolve_grpc::{GrpcServer, GrpcServerConfig};

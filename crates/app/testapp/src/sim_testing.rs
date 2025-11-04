@@ -4,12 +4,14 @@ use crate::{
     TestTx, MINTER, PLACEHOLDER_ACCOUNT,
 };
 use evolve_core::{
-    AccountId, BlockContext, Environment, FungibleAsset, InvokeRequest, ReadonlyKV, SdkResult,
+    encoding::Decodable, AccountId, BlockContext, Environment, FungibleAsset, InvokableMessage,
+    InvokeRequest, ReadonlyKV, SdkResult,
 };
 use evolve_debugger::{ExecutionTrace, StateSnapshot, TraceBuilder};
 use evolve_fungible_asset::TransferMsg;
 use evolve_server::Block;
 use evolve_simulator::{SimConfig, SimStorageAdapter, Simulator};
+use evolve_stf::gas::GasCounter;
 use evolve_stf::results::BlockResult;
 use evolve_stf_traits::{Block as BlockTrait, Transaction};
 use evolve_testing::server_mocks::AccountStorageMock;
@@ -161,6 +163,218 @@ impl TxGenerator for TokenTransferGenerator {
     }
 }
 
+/// Generates transfers with balance awareness to reduce failed txs.
+/// Tracks expected balances and only generates transfers when funds are available.
+pub struct BalanceAwareTransferGenerator {
+    token_account: AccountId,
+    accounts: Vec<AccountId>,
+    balances: std::collections::BTreeMap<AccountId, u128>,
+    min_amount: u128,
+    max_amount: u128,
+    gas_limit: u64,
+}
+
+impl BalanceAwareTransferGenerator {
+    pub fn new(
+        token_account: AccountId,
+        initial_balances: Vec<(AccountId, u128)>,
+        min_amount: u128,
+        max_amount: u128,
+        gas_limit: u64,
+    ) -> Self {
+        let accounts: Vec<AccountId> = initial_balances.iter().map(|(a, _)| *a).collect();
+        let balances: std::collections::BTreeMap<_, _> = initial_balances.into_iter().collect();
+        Self {
+            token_account,
+            accounts,
+            balances,
+            min_amount,
+            max_amount,
+            gas_limit,
+        }
+    }
+
+    /// Updates internal balance tracking after a successful transfer.
+    pub fn record_transfer(&mut self, from: AccountId, to: AccountId, amount: u128) {
+        if let Some(bal) = self.balances.get_mut(&from) {
+            *bal = bal.saturating_sub(amount);
+        }
+        *self.balances.entry(to).or_insert(0) += amount;
+    }
+
+    /// Adds a new account with initial balance (e.g., after minting).
+    pub fn add_balance(&mut self, account: AccountId, amount: u128) {
+        *self.balances.entry(account).or_insert(0) += amount;
+        if !self.accounts.contains(&account) {
+            self.accounts.push(account);
+        }
+    }
+}
+
+impl TxGenerator for BalanceAwareTransferGenerator {
+    fn generate_tx(&mut self, _height: u64, sim: &mut Simulator) -> Option<TestTx> {
+        if self.accounts.len() < 2 {
+            return None;
+        }
+
+        // Find accounts with sufficient balance
+        let funded_accounts: Vec<_> = self
+            .accounts
+            .iter()
+            .filter(|a| self.balances.get(a).copied().unwrap_or(0) >= self.min_amount)
+            .copied()
+            .collect();
+
+        if funded_accounts.is_empty() {
+            return None;
+        }
+
+        let sender_idx = sim.rng().gen_range(0..funded_accounts.len());
+        let sender = funded_accounts[sender_idx];
+        let sender_balance = self.balances.get(&sender).copied().unwrap_or(0);
+
+        // Pick recipient different from sender
+        let recipient = loop {
+            let idx = sim.rng().gen_range(0..self.accounts.len());
+            if self.accounts[idx] != sender {
+                break self.accounts[idx];
+            }
+        };
+
+        // Clamp amount to available balance
+        let max_transfer = sender_balance.min(self.max_amount);
+        if max_transfer < self.min_amount {
+            return None;
+        }
+        let amount = sim.rng().gen_range(self.min_amount..=max_transfer);
+
+        // Pre-update balances (optimistic)
+        self.record_transfer(sender, recipient, amount);
+
+        let request = InvokeRequest::new(&TransferMsg {
+            to: recipient,
+            amount,
+        })
+        .ok()?;
+
+        Some(TestTx {
+            sender,
+            recipient: self.token_account,
+            request,
+            gas_limit: self.gas_limit,
+            funds: vec![],
+        })
+    }
+}
+
+/// Generates random transfer amounts that may exceed balances (for failure testing).
+pub struct FailingTransferGenerator {
+    token_account: AccountId,
+    senders: Vec<AccountId>,
+    recipients: Vec<AccountId>,
+    amount: u128,
+    gas_limit: u64,
+}
+
+impl FailingTransferGenerator {
+    pub fn new(
+        token_account: AccountId,
+        senders: Vec<AccountId>,
+        recipients: Vec<AccountId>,
+        amount: u128,
+        gas_limit: u64,
+    ) -> Self {
+        Self {
+            token_account,
+            senders,
+            recipients,
+            amount,
+            gas_limit,
+        }
+    }
+}
+
+impl TxGenerator for FailingTransferGenerator {
+    fn generate_tx(&mut self, _height: u64, sim: &mut Simulator) -> Option<TestTx> {
+        if self.senders.is_empty() || self.recipients.is_empty() {
+            return None;
+        }
+
+        let sender_idx = sim.rng().gen_range(0..self.senders.len());
+        let recipient_idx = sim.rng().gen_range(0..self.recipients.len());
+        let sender = self.senders[sender_idx];
+        let recipient = self.recipients[recipient_idx];
+
+        let request = InvokeRequest::new(&TransferMsg {
+            to: recipient,
+            amount: self.amount,
+        })
+        .ok()?;
+
+        Some(TestTx {
+            sender,
+            recipient: self.token_account,
+            request,
+            gas_limit: self.gas_limit,
+            funds: vec![],
+        })
+    }
+}
+
+/// Generates a sequence of transfers in round-robin fashion for predictable testing.
+pub struct RoundRobinTransferGenerator {
+    token_account: AccountId,
+    participants: Vec<AccountId>,
+    current_sender_idx: usize,
+    amount: u128,
+    gas_limit: u64,
+}
+
+impl RoundRobinTransferGenerator {
+    pub fn new(
+        token_account: AccountId,
+        participants: Vec<AccountId>,
+        amount: u128,
+        gas_limit: u64,
+    ) -> Self {
+        Self {
+            token_account,
+            participants,
+            current_sender_idx: 0,
+            amount,
+            gas_limit,
+        }
+    }
+}
+
+impl TxGenerator for RoundRobinTransferGenerator {
+    fn generate_tx(&mut self, _height: u64, _sim: &mut Simulator) -> Option<TestTx> {
+        if self.participants.len() < 2 {
+            return None;
+        }
+
+        let sender = self.participants[self.current_sender_idx];
+        let recipient_idx = (self.current_sender_idx + 1) % self.participants.len();
+        let recipient = self.participants[recipient_idx];
+
+        self.current_sender_idx = (self.current_sender_idx + 1) % self.participants.len();
+
+        let request = InvokeRequest::new(&TransferMsg {
+            to: recipient,
+            amount: self.amount,
+        })
+        .ok()?;
+
+        Some(TestTx {
+            sender,
+            recipient: self.token_account,
+            request,
+            gas_limit: self.gas_limit,
+            funds: vec![],
+        })
+    }
+}
+
 impl SimTestApp {
     pub fn new() -> Self {
         Self::default()
@@ -200,6 +414,18 @@ impl SimTestApp {
         let changes = state.into_changes()?;
         self.sim.apply_state_changes(changes)?;
         Ok(resp)
+    }
+
+    /// Queries an account and decodes the response.
+    pub fn query<Req: InvokableMessage, Resp: Decodable>(
+        &self,
+        target: AccountId,
+        request: &Req,
+    ) -> SdkResult<Resp> {
+        let adapter = SimStorageAdapter::new(self.sim.storage());
+        let gc = GasCounter::infinite();
+        let response = self.stf.query(&adapter, &self.codes, target, request, gc)?;
+        response.get::<Resp>()
     }
 
     pub fn apply_block(&mut self, block: &Block<TestTx>) -> BlockResult {

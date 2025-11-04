@@ -1,0 +1,28 @@
+[package]
+name = "evolve_node"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+description = "Reusable dev-node runner for Evolve applications."
+
+[dependencies]
+commonware-runtime = { workspace = true }
+ctrlc = "3.4"
+log = { workspace = true }
+borsh = { workspace = true }
+tokio = { workspace = true }
+alloy-primitives = { workspace = true }
+
+evolve_core = { workspace = true }
+evolve_server = { workspace = true }
+evolve_stf_traits = { workspace = true }
+evolve_storage = { workspace = true }
+evolve_chain_index = { workspace = true }
+evolve_eth_jsonrpc = { workspace = true }
+evolve_rpc_types = { workspace = true }
+
+[lints]
+workspace = true

@@ -164,6 +164,10 @@ mod tests {
             "test_account".to_string()
         }
 
+        fn schema(&self) -> evolve_core::schema::AccountSchema {
+            evolve_core::schema::AccountSchema::new("TestAccount", "test_account")
+        }
+
         fn init(
             &self,
             _env: &mut dyn Environment,
@@ -195,6 +199,10 @@ mod tests {
     impl AccountCode for FailingAccount {
         fn identifier(&self) -> String {
             "failing_account".to_string()
+        }
+
+        fn schema(&self) -> evolve_core::schema::AccountSchema {
+            evolve_core::schema::AccountSchema::new("FailingAccount", "failing_account")
         }
 
         fn init(
@@ -245,6 +253,10 @@ mod tests {
             F: FnOnce(Option<&dyn AccountCode>) -> R,
         {
             Ok(f(self.codes.get(identifier).map(|c| c.as_ref())))
+        }
+
+        fn list_identifiers(&self) -> Vec<String> {
+            self.codes.keys().cloned().collect()
         }
     }
 

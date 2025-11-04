@@ -17,6 +17,7 @@ members = [
     "crates/storage",
     "crates/app/sdk/testing",
     "crates/app/sdk/math",
+    "crates/app/node",
     "crates/app/testapp",
     "crates/app/genesis",
     "crates/testing/simulator",
@@ -62,6 +63,7 @@ evolve_storage = { path = "crates/storage" }
 evolve_simulator = { path = "crates/testing/simulator" }
 evolve_proptest = { path = "crates/testing/proptest" }
 evolve_debugger = { path = "crates/testing/debugger" }
+evolve_node = { path = "crates/app/node" }
 
 
 # outside deps

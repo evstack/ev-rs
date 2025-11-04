@@ -21,6 +21,7 @@ evolve_token.workspace = true
 evolve_operations.workspace = true
 evolve_server.workspace = true
 evolve_storage.workspace = true
+evolve_node.workspace = true
 
 borsh.workspace = true
 log.workspace = true
