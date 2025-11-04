@@ -47,6 +47,10 @@ pub use block::{Block, BlockBuilder, BlockHeader};
 pub use builder::ServerBuilder;
 pub use dev::{DevConfig, DevConsensus, NoopChainIndex, ProducedBlock, StfExecutor};
 pub use error::ServerError;
+pub use evolve_mempool::{
+    new_shared_mempool, new_shared_mempool_with_base_fee, Mempool, MempoolError, MempoolResult,
+    MempoolTransaction, SharedMempool,
+};
 pub use indexer::{BlockData, IndexEvent, IndexerHandle, Log, Receipt};
 pub use persistence::{load_chain_state, save_chain_state, ChainState, CHAIN_STATE_KEY};
 pub use server::EvolveServer;

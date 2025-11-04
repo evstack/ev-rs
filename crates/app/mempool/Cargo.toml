@@ -1,0 +1,20 @@
+[package]
+name = "evolve_mempool"
+version = "0.1.0"
+edition = "2021"
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+evolve_core = { workspace = true }
+evolve_stf_traits = { workspace = true }
+evolve_tx = { workspace = true }
+
+alloy-primitives = { workspace = true }
+
+tokio = { workspace = true }
+thiserror = "2"
+
+[lints]
+workspace = true

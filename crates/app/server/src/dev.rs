@@ -36,6 +36,7 @@ use crate::error::ServerError;
 use alloy_primitives::{Address, B256};
 use evolve_chain_index::{build_index_data, BlockMetadata, ChainIndex};
 use evolve_core::ReadonlyKV;
+use evolve_mempool::{MempoolTransaction, SharedMempool};
 use evolve_eth_jsonrpc::SharedSubscriptionManager;
 use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::results::BlockResult;
@@ -154,6 +155,8 @@ pub struct DevConsensus<Stf, S, Codes, Tx, I = NoopChainIndex> {
     state: DevState,
     /// Whether auto-production is running.
     running: AtomicBool,
+    /// Optional mempool for transaction sourcing.
+    mempool: Option<SharedMempool>,
     /// Optional chain index for block/tx/receipt queries.
     chain_index: Option<Arc<I>>,
     /// Optional subscription manager for publishing events.
@@ -180,6 +183,7 @@ impl<Stf, S, Codes, Tx> DevConsensus<Stf, S, Codes, Tx, NoopChainIndex> {
             config,
             state: DevState::new(initial_height),
             running: AtomicBool::new(false),
+            mempool: None,
             chain_index: None,
             subscriptions: None,
             _tx: std::marker::PhantomData,
@@ -218,6 +222,43 @@ impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             subscriptions: Some(subscriptions),
             _tx: std::marker::PhantomData,
         }
+    }
+
+    /// Create a new dev consensus engine with a mempool.
+    ///
+    /// When a mempool is present, automatic block production will pull
+    /// transactions from the mempool instead of producing empty blocks.
+    ///
+    /// # Arguments
+    ///
+    /// * `stf` - The state transition function
+    /// * `storage` - Storage backend with async batch/commit
+    /// * `codes` - Account codes storage
+    /// * `config` - Dev mode configuration
+    /// * `mempool` - Shared mempool for transaction sourcing
+    pub fn with_mempool(
+        stf: Stf,
+        storage: S,
+        codes: Codes,
+        config: DevConfig,
+        mempool: SharedMempool,
+    ) -> Self {
+        let initial_height = config.initial_height;
+        Self {
+            stf,
+            storage,
+            codes,
+            config,
+            state: DevState::new(initial_height),
+            running: AtomicBool::new(false),
+            mempool: Some(mempool),
+            _tx: std::marker::PhantomData,
+        }
+    }
+
+    /// Get a reference to the mempool, if present.
+    pub fn mempool(&self) -> Option<&SharedMempool> {
+        self.mempool.as_ref()
     }
 
     /// Get a reference to the STF.
@@ -414,6 +455,119 @@ where
             match self.produce_block().await {
                 Ok(block) => {
                     log::debug!("Auto-produced block {}", block.height);
+                }
+                Err(e) => {
+                    log::error!("Failed to produce block: {}", e);
+                    // Continue trying - dev mode should be resilient
+                }
+            }
+        }
+
+        log::info!("Dev consensus stopped");
+    }
+}
+
+/// Specialized implementation for MempoolTransaction-based block production.
+///
+/// When using the mempool, the DevConsensus should be instantiated with
+/// `Tx = MempoolTransaction` to enable automatic transaction sourcing.
+impl<Stf, S, Codes> DevConsensus<Stf, S, Codes, MempoolTransaction>
+where
+    S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
+    Codes: AccountsCodeStorage + Send + Sync + 'static,
+    Stf: StfExecutor<MempoolTransaction, S, Codes> + Send + Sync + 'static,
+{
+    /// Produce a block with transactions from the mempool.
+    ///
+    /// Selects up to `max_txs` transactions from the mempool, ordered by gas price,
+    /// produces a block, and removes the included transactions from the mempool.
+    ///
+    /// Returns an error if no mempool is configured.
+    pub async fn produce_block_from_mempool(
+        &self,
+        max_txs: usize,
+    ) -> Result<ProducedBlock, ServerError> {
+        let mempool = self
+            .mempool
+            .as_ref()
+            .ok_or_else(|| ServerError::Execution("no mempool configured".to_string()))?;
+
+        // Select transactions from mempool
+        let selected = {
+            let mut pool = mempool.write().await;
+            pool.select(max_txs)
+        };
+
+        // Get transaction hashes before converting (for removal after block production)
+        let tx_hashes: Vec<_> = selected.iter().map(|tx| tx.hash()).collect();
+
+        // Convert Arc<MempoolTransaction> to MempoolTransaction
+        let transactions: Vec<MempoolTransaction> = selected
+            .into_iter()
+            .map(|arc_tx| (*arc_tx).clone())
+            .collect();
+
+        // Produce the block
+        let result = self.produce_block_with_txs(transactions).await?;
+
+        // Remove included transactions from mempool
+        if !tx_hashes.is_empty() {
+            let mut pool = mempool.write().await;
+            pool.remove_many(&tx_hashes);
+        }
+
+        Ok(result)
+    }
+
+    /// Start automatic block production with mempool integration.
+    ///
+    /// When a mempool is configured, this pulls transactions from the mempool
+    /// for each block. Otherwise, produces empty blocks.
+    ///
+    /// Use `stop()` to stop production.
+    pub async fn run_block_production_with_mempool(self: &Arc<Self>, max_txs_per_block: usize) {
+        let interval = match self.config.block_interval {
+            Some(i) => i,
+            None => return,
+        };
+
+        if self
+            .running
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            return; // Already running
+        }
+
+        let mut ticker = tokio::time::interval(interval);
+        ticker.tick().await; // First tick is immediate
+
+        while self.running.load(Ordering::SeqCst) {
+            ticker.tick().await;
+
+            if !self.running.load(Ordering::SeqCst) {
+                break;
+            }
+
+            let result = if self.mempool.is_some() {
+                self.produce_block_from_mempool(max_txs_per_block).await
+            } else {
+                self.produce_block().await
+            };
+
+            match result {
+                Ok(block) => {
+                    if block.tx_count > 0 {
+                        log::info!(
+                            "Produced block {} with {} txs ({} successful, {} failed)",
+                            block.height,
+                            block.tx_count,
+                            block.successful_txs,
+                            block.failed_txs
+                        );
+                    } else {
+                        log::debug!("Produced empty block {}", block.height);
+                    }
                 }
                 Err(e) => {
                     log::error!("Failed to produce block: {}", e);

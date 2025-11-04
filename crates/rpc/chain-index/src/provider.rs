@@ -5,6 +5,7 @@
 //! - `ChainIndex` for block/transaction/receipt queries
 //! - `Storage` for state queries (balance, nonce, code)
 //! - `Stf` for call/estimateGas execution
+//! - `Mempool` for transaction submission (optional)
 
 use std::sync::Arc;
 
@@ -17,6 +18,7 @@ use evolve_core::schema::AccountSchema;
 use evolve_core::AccountCode;
 use evolve_eth_jsonrpc::error::RpcError;
 use evolve_eth_jsonrpc::StateProvider;
+use evolve_mempool::SharedMempool;
 use evolve_rpc_types::block::BlockTransactions;
 use evolve_rpc_types::SyncStatus;
 use evolve_rpc_types::{CallRequest, LogFilter, RpcBlock, RpcLog, RpcReceipt, RpcTransaction};
@@ -48,6 +50,8 @@ pub struct ChainStateProvider<
     config: ChainStateProviderConfig,
     /// Account codes storage for schema introspection.
     account_codes: Arc<A>,
+    /// Optional mempool for transaction submission.
+    mempool: Option<SharedMempool>,
 }
 
 /// No-op implementation of AccountsCodeStorage for when schema introspection is not needed.
@@ -74,6 +78,7 @@ impl<I: ChainIndex> ChainStateProvider<I, NoopAccountCodes> {
             index,
             config,
             account_codes: Arc::new(NoopAccountCodes),
+            mempool: None,
         }
     }
 }
@@ -89,6 +94,25 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
             index,
             config,
             account_codes,
+            mempool: None,
+        }
+    }
+
+    /// Create a new chain state provider with account codes and mempool.
+    ///
+    /// When a mempool is provided, `send_raw_transaction` will decode and
+    /// add transactions to the mempool for block inclusion.
+    pub fn with_mempool(
+        index: Arc<I>,
+        config: ChainStateProviderConfig,
+        account_codes: Arc<A>,
+        mempool: SharedMempool,
+    ) -> Self {
+        Self {
+            index,
+            config,
+            account_codes,
+            mempool: Some(mempool),
         }
     }
 
@@ -105,6 +129,11 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
     /// Get the account codes storage.
     pub fn account_codes(&self) -> &Arc<A> {
         &self.account_codes
+    }
+
+    /// Get the mempool, if present.
+    pub fn mempool(&self) -> Option<&SharedMempool> {
+        self.mempool.as_ref()
     }
 }
 
@@ -270,9 +299,28 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
         self.get_logs_for_block_range(from_block, to_block, filter)
     }
 
-    async fn send_raw_transaction(&self, _data: &[u8]) -> Result<B256, RpcError> {
-        // No mempool implemented yet
-        Err(RpcError::NotImplemented("sendRawTransaction".to_string()))
+    async fn send_raw_transaction(&self, data: &[u8]) -> Result<B256, RpcError> {
+        // Check if mempool is available
+        let mempool = match &self.mempool {
+            Some(m) => m,
+            None => {
+                return Err(RpcError::NotImplemented(
+                    "sendRawTransaction: no mempool configured".to_string(),
+                ))
+            }
+        };
+
+        // Add the raw transaction to the mempool
+        // The mempool handles decoding and validation
+        let hash = mempool
+            .write()
+            .await
+            .add_raw(data)
+            .map_err(|e| RpcError::InvalidTransaction(e.to_string()))?;
+
+        log::info!("Transaction submitted to mempool: {}", hash);
+
+        Ok(hash)
     }
 
     async fn get_code(&self, _address: Address, _block: Option<u64>) -> Result<Bytes, RpcError> {
