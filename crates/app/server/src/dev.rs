@@ -218,6 +218,7 @@ impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             config,
             state: DevState::new(initial_height),
             running: AtomicBool::new(false),
+            mempool: None,
             chain_index: Some(chain_index),
             subscriptions: Some(subscriptions),
             _tx: std::marker::PhantomData,
@@ -252,6 +253,8 @@ impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             state: DevState::new(initial_height),
             running: AtomicBool::new(false),
             mempool: Some(mempool),
+            chain_index: None,
+            subscriptions: None,
             _tx: std::marker::PhantomData,
         }
     }
