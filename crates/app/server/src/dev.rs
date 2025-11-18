@@ -36,8 +36,8 @@ use crate::error::ServerError;
 use alloy_primitives::{Address, B256};
 use evolve_chain_index::{build_index_data, BlockMetadata, ChainIndex};
 use evolve_core::ReadonlyKV;
-use evolve_mempool::{MempoolTransaction, SharedMempool};
 use evolve_eth_jsonrpc::SharedSubscriptionManager;
+use evolve_mempool::{MempoolTransaction, SharedMempool};
 use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::results::BlockResult;
 use evolve_stf_traits::{AccountsCodeStorage, PostTxExecution, Transaction, TxValidator};
@@ -628,9 +628,7 @@ where
 pub struct NoopChainIndex;
 
 impl ChainIndex for NoopChainIndex {
-    fn latest_block_number(
-        &self,
-    ) -> evolve_chain_index::ChainIndexResult<Option<u64>> {
+    fn latest_block_number(&self) -> evolve_chain_index::ChainIndexResult<Option<u64>> {
         Ok(None)
     }
 
@@ -648,10 +646,7 @@ impl ChainIndex for NoopChainIndex {
         Ok(None)
     }
 
-    fn get_block_number(
-        &self,
-        _hash: B256,
-    ) -> evolve_chain_index::ChainIndexResult<Option<u64>> {
+    fn get_block_number(&self, _hash: B256) -> evolve_chain_index::ChainIndexResult<Option<u64>> {
         Ok(None)
     }
 

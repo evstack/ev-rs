@@ -288,16 +288,15 @@ pub fn run_dev_node_with_rpc<
                     .expect("failed to start RPC server");
 
                 // Create DevConsensus with RPC support
-                let dev: Arc<
-                    DevConsensus<Stf, S, Codes, Tx, PersistentChainIndex<S>>,
-                > = Arc::new(DevConsensus::with_rpc(
-                    stf,
-                    storage,
-                    codes,
-                    dev_config,
-                    chain_index,
-                    subscriptions,
-                ));
+                let dev: Arc<DevConsensus<Stf, S, Codes, Tx, PersistentChainIndex<S>>> =
+                    Arc::new(DevConsensus::with_rpc(
+                        stf,
+                        storage,
+                        codes,
+                        dev_config,
+                        chain_index,
+                        subscriptions,
+                    ));
 
                 log::info!(
                     "Block interval: {:?}, starting at height {}",

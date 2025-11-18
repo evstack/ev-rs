@@ -128,8 +128,8 @@ impl Mempool {
     /// Returns the transaction hash on success.
     pub fn add_raw(&mut self, raw: &[u8]) -> MempoolResult<B256> {
         // Decode the transaction
-        let envelope = TxEnvelope::decode(raw)
-            .map_err(|e| MempoolError::DecodeFailed(format!("{:?}", e)))?;
+        let envelope =
+            TxEnvelope::decode(raw).map_err(|e| MempoolError::DecodeFailed(format!("{:?}", e)))?;
 
         self.add_envelope(envelope)
     }
