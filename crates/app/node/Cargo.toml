@@ -10,7 +10,6 @@ description = "Reusable dev-node runner for Evolve applications."
 
 [dependencies]
 commonware-runtime = { workspace = true }
-ctrlc = "3.4"
 log = { workspace = true }
 borsh = { workspace = true }
 tokio = { workspace = true }

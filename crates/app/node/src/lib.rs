@@ -15,7 +15,7 @@ use std::time::Duration;
 use alloy_primitives::U256;
 use borsh::{BorshDeserialize, BorshSerialize};
 use commonware_runtime::tokio::{Config as TokioConfig, Context as TokioContext, Runner};
-use commonware_runtime::Runner as RunnerTrait;
+use commonware_runtime::{Runner as RunnerTrait, Spawner};
 use evolve_chain_index::{ChainStateProvider, ChainStateProviderConfig, PersistentChainIndex};
 use evolve_core::ReadonlyKV;
 use evolve_eth_jsonrpc::{RpcServerConfig, SubscriptionManager};
@@ -206,6 +206,8 @@ pub fn run_dev_node_with_rpc<
         let rpc_config = rpc_config.clone();
 
         async move {
+            // Clone context early since build_storage takes ownership
+            let context_for_shutdown = context.clone();
             let storage = (build_storage)(context, storage_config)
                 .await
                 .expect("failed to create storage");
@@ -304,18 +306,22 @@ pub fn run_dev_node_with_rpc<
                     initial_height
                 );
 
-                // Link Ctrl+C to DevConsensus
-                let dev_for_stop = Arc::clone(&dev);
-                ctrlc::set_handler(move || {
-                    log::info!("Received Ctrl+C, shutting down...");
-                    dev_for_stop.stop();
-                })
-                .expect("failed to set Ctrl+C handler");
-
                 log::info!("Starting block production... (Ctrl+C to stop)");
 
-                // Run block production (blocks until stopped)
-                dev.run_block_production().await;
+                // Run block production and Ctrl+C handling concurrently using Spawner pattern.
+                // When Ctrl+C is received, stop() triggers shutdown signal via context.stopped().
+                tokio::select! {
+                    _ = dev.run_block_production(context_for_shutdown.clone()) => {
+                        // Block production exited
+                    }
+                    _ = tokio::signal::ctrl_c() => {
+                        log::info!("Received Ctrl+C, initiating graceful shutdown...");
+                        context_for_shutdown
+                            .stop(0, Some(Duration::from_secs(10)))
+                            .await
+                            .expect("shutdown failed");
+                    }
+                }
 
                 // Save chain state
                 let final_height = dev.height();
@@ -343,16 +349,21 @@ pub fn run_dev_node_with_rpc<
                     initial_height
                 );
 
-                let dev_for_stop = Arc::clone(&dev);
-                ctrlc::set_handler(move || {
-                    log::info!("Received Ctrl+C, shutting down...");
-                    dev_for_stop.stop();
-                })
-                .expect("failed to set Ctrl+C handler");
-
                 log::info!("Starting block production... (Ctrl+C to stop)");
 
-                dev.run_block_production().await;
+                // Run block production and Ctrl+C handling concurrently using Spawner pattern
+                tokio::select! {
+                    _ = dev.run_block_production(context_for_shutdown.clone()) => {
+                        // Block production exited
+                    }
+                    _ = tokio::signal::ctrl_c() => {
+                        log::info!("Received Ctrl+C, initiating graceful shutdown...");
+                        context_for_shutdown
+                            .stop(0, Some(Duration::from_secs(10)))
+                            .await
+                            .expect("shutdown failed");
+                    }
+                }
 
                 let final_height = dev.height();
                 log::info!("Stopped at height: {}", final_height);

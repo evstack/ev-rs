@@ -11,29 +11,29 @@
 //!
 //! ```ignore
 //! use evolve_server::{DevConsensus, DevConfig};
-//! use std::sync::Arc;
+//! use commonware_runtime::Spawner;
 //!
-//! // Create storage (must implement ReadonlyKV + Storage)
-//! let storage = MyAsyncStorage::new().await;
+//! // Inside runner.start():
+//! runner.start(|context| async move {
+//!     let dev = Arc::new(DevConsensus::new(stf, storage, codes, config));
 //!
-//! // Create dev consensus
-//! let dev = Arc::new(DevConsensus::new(
-//!     stf,
-//!     storage,
-//!     codes,
-//!     DevConfig::default(),
-//! ));
+//!     // Spawn block production as a managed task
+//!     context.clone().spawn(|ctx| {
+//!         let dev = dev.clone();
+//!         async move { dev.run_block_production(ctx).await }
+//!     });
 //!
-//! // Produce blocks manually
-//! dev.produce_block().await?;
+//!     // ... do other work ...
 //!
-//! // Or run automatic block production
-//! dev.run_block_production().await;
+//!     // Shutdown triggers automatic cleanup
+//!     context.stop(0, Some(Duration::from_secs(10))).await?;
+//! });
 //! ```
 
 use crate::block::{Block, BlockBuilder};
 use crate::error::ServerError;
 use alloy_primitives::{Address, B256};
+use commonware_runtime::Spawner;
 use evolve_chain_index::{build_index_data, BlockMetadata, ChainIndex};
 use evolve_core::ReadonlyKV;
 use evolve_eth_jsonrpc::SharedSubscriptionManager;
@@ -42,7 +42,7 @@ use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::results::BlockResult;
 use evolve_stf_traits::{AccountsCodeStorage, PostTxExecution, Transaction, TxValidator};
 use evolve_storage::{Operation, Storage};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
@@ -135,6 +135,12 @@ pub struct ProducedBlock {
 /// This type provides block production without an external consensus layer.
 /// It uses a shared storage with interior mutability for both reads and writes.
 ///
+/// # Lifecycle
+///
+/// Block production is controlled via the commonware-runtime `Spawner` pattern:
+/// - Start: Call `run_block_production(context)` with a Spawner context
+/// - Stop: The runtime signals shutdown via `context.stopped()`
+///
 /// # Type Parameters
 ///
 /// * `Stf` - The state transition function type
@@ -153,8 +159,6 @@ pub struct DevConsensus<Stf, S, Codes, Tx, I = NoopChainIndex> {
     config: DevConfig,
     /// Internal state.
     state: DevState,
-    /// Whether auto-production is running.
-    running: AtomicBool,
     /// Optional mempool for transaction sourcing.
     mempool: Option<SharedMempool>,
     /// Optional chain index for block/tx/receipt queries.
@@ -182,7 +186,6 @@ impl<Stf, S, Codes, Tx> DevConsensus<Stf, S, Codes, Tx, NoopChainIndex> {
             codes,
             config,
             state: DevState::new(initial_height),
-            running: AtomicBool::new(false),
             mempool: None,
             chain_index: None,
             subscriptions: None,
@@ -217,7 +220,6 @@ impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             codes,
             config,
             state: DevState::new(initial_height),
-            running: AtomicBool::new(false),
             mempool: None,
             chain_index: Some(chain_index),
             subscriptions: Some(subscriptions),
@@ -251,7 +253,6 @@ impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             codes,
             config,
             state: DevState::new(initial_height),
-            running: AtomicBool::new(false),
             mempool: Some(mempool),
             chain_index: None,
             subscriptions: None,
@@ -292,16 +293,6 @@ impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
     /// Get the last block hash.
     pub async fn last_hash(&self) -> B256 {
         *self.state.last_hash.read().await
-    }
-
-    /// Check if auto-production is running.
-    pub fn is_running(&self) -> bool {
-        self.running.load(Ordering::SeqCst)
-    }
-
-    /// Stop auto-production.
-    pub fn stop(&self) {
-        self.running.store(false, Ordering::SeqCst);
     }
 
     /// Get the subscription manager, if configured.
@@ -424,49 +415,61 @@ where
         })
     }
 
-    /// Start automatic block production.
+    /// Start automatic block production with runtime lifecycle management.
     ///
-    /// Returns a future that runs the block production loop.
-    /// The future is not `Send` due to storage constraints, so it must be
-    /// run on a local executor (e.g., `tokio::task::LocalSet`).
+    /// Produces blocks at the configured interval until the runtime signals
+    /// shutdown via `context.stopped()`. This method integrates with the
+    /// commonware-runtime lifecycle - when the runtime calls `stop()`, this
+    /// method will gracefully exit.
     ///
-    /// Use `stop()` to stop production.
-    pub async fn run_block_production(self: &Arc<Self>) {
+    /// # Arguments
+    ///
+    /// * `context` - A Spawner context for lifecycle management
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Spawn block production as a managed task
+    /// let dev = Arc::new(DevConsensus::new(...));
+    /// context.clone().spawn(|ctx| {
+    ///     let dev = dev.clone();
+    ///     async move { dev.run_block_production(ctx).await }
+    /// });
+    /// ```
+    pub async fn run_block_production<C: Spawner>(self: &Arc<Self>, context: C) {
         let interval = match self.config.block_interval {
             Some(i) => i,
             None => return,
         };
 
-        if self
-            .running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return; // Already running
-        }
-
+        let mut stopped = context.stopped();
         let mut ticker = tokio::time::interval(interval);
         ticker.tick().await; // First tick is immediate
 
-        while self.running.load(Ordering::SeqCst) {
-            ticker.tick().await;
+        log::info!("Block production started (interval: {:?})", interval);
 
-            if !self.running.load(Ordering::SeqCst) {
-                break;
-            }
-
-            match self.produce_block().await {
-                Ok(block) => {
-                    log::debug!("Auto-produced block {}", block.height);
+        loop {
+            tokio::select! {
+                result = &mut stopped => {
+                    let code = result.unwrap_or(0);
+                    log::info!("Block production received shutdown signal (code: {})", code);
+                    break;
                 }
-                Err(e) => {
-                    log::error!("Failed to produce block: {}", e);
-                    // Continue trying - dev mode should be resilient
+                _ = ticker.tick() => {
+                    match self.produce_block().await {
+                        Ok(block) => {
+                            log::debug!("Auto-produced block {}", block.height);
+                        }
+                        Err(e) => {
+                            log::error!("Failed to produce block: {}", e);
+                            // Continue trying - dev mode should be resilient
+                        }
+                    }
                 }
             }
         }
 
-        log::info!("Dev consensus stopped");
+        log::info!("Block production stopped at height {}", self.height());
     }
 }
 
@@ -474,11 +477,12 @@ where
 ///
 /// When using the mempool, the DevConsensus should be instantiated with
 /// `Tx = MempoolTransaction` to enable automatic transaction sourcing.
-impl<Stf, S, Codes> DevConsensus<Stf, S, Codes, MempoolTransaction>
+impl<Stf, S, Codes, I> DevConsensus<Stf, S, Codes, MempoolTransaction, I>
 where
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     Stf: StfExecutor<MempoolTransaction, S, Codes> + Send + Sync + 'static,
+    I: ChainIndex + 'static,
 {
     /// Produce a block with transactions from the mempool.
     ///
@@ -522,64 +526,72 @@ where
         Ok(result)
     }
 
-    /// Start automatic block production with mempool integration.
+    /// Start automatic block production with mempool integration using Spawner lifecycle.
     ///
     /// When a mempool is configured, this pulls transactions from the mempool
     /// for each block. Otherwise, produces empty blocks.
     ///
-    /// Use `stop()` to stop production.
-    pub async fn run_block_production_with_mempool(self: &Arc<Self>, max_txs_per_block: usize) {
+    /// # Arguments
+    ///
+    /// * `context` - A Spawner context for lifecycle management
+    /// * `max_txs_per_block` - Maximum transactions to include per block
+    pub async fn run_block_production_with_mempool<C: Spawner>(
+        self: &Arc<Self>,
+        context: C,
+        max_txs_per_block: usize,
+    ) {
         let interval = match self.config.block_interval {
             Some(i) => i,
             None => return,
         };
 
-        if self
-            .running
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            return; // Already running
-        }
-
+        let mut stopped = context.stopped();
         let mut ticker = tokio::time::interval(interval);
         ticker.tick().await; // First tick is immediate
 
-        while self.running.load(Ordering::SeqCst) {
-            ticker.tick().await;
+        log::info!(
+            "Block production with mempool started (interval: {:?})",
+            interval
+        );
 
-            if !self.running.load(Ordering::SeqCst) {
-                break;
-            }
-
-            let result = if self.mempool.is_some() {
-                self.produce_block_from_mempool(max_txs_per_block).await
-            } else {
-                self.produce_block().await
-            };
-
-            match result {
-                Ok(block) => {
-                    if block.tx_count > 0 {
-                        log::info!(
-                            "Produced block {} with {} txs ({} successful, {} failed)",
-                            block.height,
-                            block.tx_count,
-                            block.successful_txs,
-                            block.failed_txs
-                        );
-                    } else {
-                        log::debug!("Produced empty block {}", block.height);
-                    }
+        loop {
+            tokio::select! {
+                result = &mut stopped => {
+                    let code = result.unwrap_or(0);
+                    log::info!("Block production received shutdown signal (code: {})", code);
+                    break;
                 }
-                Err(e) => {
-                    log::error!("Failed to produce block: {}", e);
-                    // Continue trying - dev mode should be resilient
+                _ = ticker.tick() => {
+                    let result = if self.mempool.is_some() {
+                        self.produce_block_from_mempool(max_txs_per_block).await
+                    } else {
+                        self.produce_block().await
+                    };
+
+                    match result {
+                        Ok(block) => {
+                            if block.tx_count > 0 {
+                                log::info!(
+                                    "Produced block {} with {} txs ({} successful, {} failed)",
+                                    block.height,
+                                    block.tx_count,
+                                    block.successful_txs,
+                                    block.failed_txs
+                                );
+                            } else {
+                                log::debug!("Produced empty block {}", block.height);
+                            }
+                        }
+                        Err(e) => {
+                            log::error!("Failed to produce block: {}", e);
+                            // Continue trying - dev mode should be resilient
+                        }
+                    }
                 }
             }
         }
 
-        log::info!("Dev consensus stopped");
+        log::info!("Block production stopped at height {}", self.height());
     }
 }
 
