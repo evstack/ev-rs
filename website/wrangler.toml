@@ -1,4 +1,8 @@
 # Cloudflare Pages configuration
 name = "evolve-docs"
 compatibility_date = "2025-01-26"
+
+[build]
+command = "bun run build"
+
 pages_build_output_dir = "./dist"
