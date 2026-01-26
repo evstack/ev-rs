@@ -1,4 +1,4 @@
 # Cloudflare Pages configuration for evolve-docs
 name = "evolve-docs"
-pages_build_output_dir = "website/dist"
+pages_build_output_dir = "website/docs/dist"
 compatibility_date = "2025-01-26"
