@@ -1,0 +1,265 @@
+# gRPC API
+
+Evolve exposes a gRPC API for high-performance programmatic access. The gRPC interface is ideal for:
+
+- **Consensus layer integration** - Connect execution clients to consensus nodes
+- **High-throughput indexers** - Stream blocks and events efficiently
+- **Backend services** - Low-latency queries from application servers
+- **Schema introspection** - Discover module APIs programmatically
+
+## Service Definitions
+
+### ExecutionService
+
+The primary service for block execution and queries.
+
+```protobuf
+service ExecutionService {
+  // Block execution
+  rpc ExecuteBlock(ExecuteBlockRequest) returns (ExecuteBlockResponse);
+  rpc QueryState(QueryStateRequest) returns (QueryStateResponse);
+
+  // Schema introspection
+  rpc ListModules(ListModulesRequest) returns (ListModulesResponse);
+  rpc GetModuleSchema(GetModuleSchemaRequest) returns (GetModuleSchemaResponse);
+  rpc GetAllSchemas(GetAllSchemasRequest) returns (GetAllSchemasResponse);
+}
+```
+
+## Schema Introspection RPCs
+
+### ListModules
+
+Returns all registered module identifiers.
+
+```protobuf
+message ListModulesRequest {}
+
+message ListModulesResponse {
+  repeated string identifiers = 1;
+}
+```
+
+### GetModuleSchema
+
+Returns the schema for a specific module.
+
+```protobuf
+message GetModuleSchemaRequest {
+  string identifier = 1;
+}
+
+message GetModuleSchemaResponse {
+  optional AccountSchema schema = 1;
+}
+```
+
+### GetAllSchemas
+
+Returns schemas for all registered modules.
+
+```protobuf
+message GetAllSchemasRequest {}
+
+message GetAllSchemasResponse {
+  repeated AccountSchema schemas = 1;
+}
+```
+
+## Schema Message Types
+
+```protobuf
+message TypeSchema {
+  oneof kind {
+    string primitive = 1;        // "u128", "bool", "String"
+    TypeSchema array_element = 2;
+    TypeSchema optional_inner = 3;
+    TupleSchema tuple = 4;
+    StructSchema struct_type = 5;
+    EnumSchema enum_type = 6;
+    bool account_id = 7;
+    bool unit = 8;
+    string opaque = 9;           // Rust type name for complex types
+  }
+}
+
+message FieldSchema {
+  string name = 1;
+  TypeSchema ty = 2;
+}
+
+message TupleSchema {
+  repeated TypeSchema elements = 1;
+}
+
+message StructSchema {
+  string name = 1;
+  repeated FieldSchema fields = 2;
+}
+
+message EnumSchema {
+  string name = 1;
+  repeated VariantSchema variants = 2;
+}
+
+message VariantSchema {
+  string name = 1;
+  repeated FieldSchema fields = 2;
+}
+
+message FunctionSchema {
+  string name = 1;
+  uint64 function_id = 2;
+  FunctionKind kind = 3;         // INIT, EXEC, QUERY
+  repeated FieldSchema params = 4;
+  TypeSchema return_type = 5;
+  bool payable = 6;
+}
+
+message AccountSchema {
+  string name = 1;
+  string identifier = 2;
+  optional FunctionSchema init = 3;
+  repeated FunctionSchema exec_functions = 4;
+  repeated FunctionSchema query_functions = 5;
+}
+
+enum FunctionKind {
+  FUNCTION_KIND_UNSPECIFIED = 0;
+  FUNCTION_KIND_INIT = 1;
+  FUNCTION_KIND_EXEC = 2;
+  FUNCTION_KIND_QUERY = 3;
+}
+```
+
+## Client Examples
+
+### grpcurl
+
+```bash
+# List all modules
+grpcurl -plaintext localhost:9545 evolve.v1.ExecutionService/ListModules
+
+# Get Token schema
+grpcurl -plaintext -d '{"identifier": "Token"}' \
+  localhost:9545 evolve.v1.ExecutionService/GetModuleSchema
+
+# Get all schemas
+grpcurl -plaintext localhost:9545 evolve.v1.ExecutionService/GetAllSchemas
+```
+
+### Rust Client
+
+```rust
+use evolve_grpc::proto::evolve::v1::{
+    execution_service_client::ExecutionServiceClient,
+    ListModulesRequest, GetModuleSchemaRequest, GetAllSchemasRequest,
+};
+
+async fn discover_modules() -> Result<(), Box<dyn std::error::Error>> {
+    let mut client = ExecutionServiceClient::connect("http://localhost:9545").await?;
+
+    // List all modules
+    let response = client.list_modules(ListModulesRequest {}).await?;
+    println!("Modules: {:?}", response.into_inner().identifiers);
+
+    // Get Token schema
+    let response = client
+        .get_module_schema(GetModuleSchemaRequest {
+            identifier: "Token".to_string(),
+        })
+        .await?;
+
+    if let Some(schema) = response.into_inner().schema {
+        println!("Token has {} exec functions", schema.exec_functions.len());
+        println!("Token has {} query functions", schema.query_functions.len());
+    }
+
+    Ok(())
+}
+```
+
+### Go Client
+
+```go
+package main
+
+import (
+    "context"
+    "log"
+
+    pb "github.com/evolvesdk/evolve/proto/evolve/v1"
+    "google.golang.org/grpc"
+    "google.golang.org/grpc/credentials/insecure"
+)
+
+func main() {
+    conn, err := grpc.NewClient("localhost:9545",
+        grpc.WithTransportCredentials(insecure.NewCredentials()))
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer conn.Close()
+
+    client := pb.NewExecutionServiceClient(conn)
+
+    // List modules
+    resp, err := client.ListModules(context.Background(), &pb.ListModulesRequest{})
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    for _, id := range resp.Identifiers {
+        log.Printf("Module: %s", id)
+    }
+}
+```
+
+## Server Configuration
+
+### Enabling gRPC
+
+Configure the gRPC server in your node configuration:
+
+```toml
+[grpc]
+enabled = true
+listen_addr = "0.0.0.0:9545"
+
+# Optional TLS
+[grpc.tls]
+cert_path = "/path/to/cert.pem"
+key_path = "/path/to/key.pem"
+```
+
+### Programmatic Setup
+
+```rust
+use evolve_grpc::GrpcServer;
+
+let grpc_server = GrpcServer::builder()
+    .with_execution_service(execution_service)
+    .listen_addr("0.0.0.0:9545".parse()?)
+    .build()?;
+
+grpc_server.serve().await?;
+```
+
+## Port Conventions
+
+| Port | Protocol | Purpose |
+|------|----------|---------|
+| 8545 | HTTP | JSON-RPC (Ethereum compatible) |
+| 9545 | gRPC | Native gRPC API |
+| 26657 | HTTP | CometBFT RPC (if using CometBFT) |
+
+## Performance Considerations
+
+gRPC offers several advantages over JSON-RPC:
+
+- **Binary encoding** - Protobuf is more compact than JSON
+- **Streaming** - Support for server-side and bidirectional streaming
+- **HTTP/2** - Multiplexing, header compression, connection reuse
+- **Code generation** - Strongly typed clients in multiple languages
+
+For high-throughput scenarios (indexers, analytics), prefer gRPC over JSON-RPC.

@@ -1,0 +1,285 @@
+# Schema Introspection
+
+The schema introspection API allows RPC clients to discover all available modules and their query/exec functions at runtime.
+
+## Overview
+
+Evolve provides a reflection system that exposes module schemas via RPC. This enables:
+
+- **Client SDK generation** - Automatically generate typed clients from schemas
+- **Documentation** - Generate API documentation from live modules
+- **Tooling** - Build explorers, debuggers, and development tools
+- **Validation** - Validate requests against known schemas before sending
+
+## Schema Structure
+
+Each registered module exposes an `AccountSchema` containing:
+
+```json
+{
+  "name": "Token",
+  "identifier": "Token",
+  "init": { /* FunctionSchema */ },
+  "exec_functions": [ /* FunctionSchema[] */ ],
+  "query_functions": [ /* FunctionSchema[] */ ]
+}
+```
+
+### FunctionSchema
+
+```json
+{
+  "name": "transfer",
+  "function_id": 1234567890,
+  "kind": "exec",
+  "params": [
+    { "name": "to", "ty": { "kind": "account_id" } },
+    { "name": "amount", "ty": { "kind": "primitive", "name": "u128" } }
+  ],
+  "return_type": { "kind": "unit" },
+  "payable": false
+}
+```
+
+### TypeSchema Variants
+
+| Kind | JSON Example | Description |
+|------|--------------|-------------|
+| `primitive` | `{"kind": "primitive", "name": "u128"}` | Basic types (u8-u128, bool, String) |
+| `account_id` | `{"kind": "account_id"}` | Account identifier |
+| `unit` | `{"kind": "unit"}` | Empty/void return |
+| `array` | `{"kind": "array", "element": {...}}` | Vec&lt;T&gt; |
+| `optional` | `{"kind": "optional", "inner": {...}}` | Option&lt;T&gt; |
+| `tuple` | `{"kind": "tuple", "elements": [...]}` | (A, B, C) |
+| `struct` | `{"kind": "struct", "name": "...", "fields": [...]}` | Named struct |
+| `enum` | `{"kind": "enum", "name": "...", "variants": [...]}` | Enum type |
+| `opaque` | `{"kind": "opaque", "rust_type": "..."}` | Unknown/complex type |
+
+## JSON-RPC API
+
+The schema introspection endpoints are in the `evolve` namespace.
+
+### evolve_listModules
+
+Returns all registered module identifiers.
+
+```json
+// Request
+{
+  "jsonrpc": "2.0",
+  "method": "evolve_listModules",
+  "params": [],
+  "id": 1
+}
+
+// Response
+{
+  "jsonrpc": "2.0",
+  "result": ["Token", "Scheduler", "EoaAccount"],
+  "id": 1
+}
+```
+
+### evolve_getModuleSchema
+
+Returns the schema for a specific module.
+
+```json
+// Request
+{
+  "jsonrpc": "2.0",
+  "method": "evolve_getModuleSchema",
+  "params": ["Token"],
+  "id": 1
+}
+
+// Response
+{
+  "jsonrpc": "2.0",
+  "result": {
+    "name": "Token",
+    "identifier": "Token",
+    "init": {
+      "name": "initialize",
+      "function_id": 9876543210,
+      "kind": "init",
+      "params": [
+        {"name": "metadata", "ty": {"kind": "opaque", "rust_type": "FungibleAssetMetadata"}},
+        {"name": "balances", "ty": {"kind": "array", "element": {"kind": "tuple", "elements": [{"kind": "account_id"}, {"kind": "primitive", "name": "u128"}]}}},
+        {"name": "supply_manager", "ty": {"kind": "optional", "inner": {"kind": "account_id"}}}
+      ],
+      "return_type": {"kind": "unit"},
+      "payable": false
+    },
+    "exec_functions": [...],
+    "query_functions": [...]
+  },
+  "id": 1
+}
+```
+
+### evolve_getAllSchemas
+
+Returns schemas for all registered modules.
+
+```json
+// Request
+{
+  "jsonrpc": "2.0",
+  "method": "evolve_getAllSchemas",
+  "params": [],
+  "id": 1
+}
+
+// Response
+{
+  "jsonrpc": "2.0",
+  "result": [
+    { "name": "Token", "identifier": "Token", ... },
+    { "name": "Scheduler", "identifier": "Scheduler", ... }
+  ],
+  "id": 1
+}
+```
+
+### curl Examples
+
+```bash
+# List all modules
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"evolve_listModules","params":[],"id":1}'
+
+# Get Token schema
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"evolve_getModuleSchema","params":["Token"],"id":1}'
+
+# Get all schemas
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"evolve_getAllSchemas","params":[],"id":1}'
+```
+
+## Server Setup
+
+### Enabling Schema Introspection
+
+To enable schema introspection, provide an `AccountsCodeStorage` implementation when creating the `ChainStateProvider`.
+
+```rust
+use evolve_chain_index::{ChainStateProvider, ChainStateProviderConfig};
+use evolve_stf_traits::AccountsCodeStorage;
+
+// Your AccountsCodeStorage implementation that holds registered modules
+let account_codes: Arc<MyAccountCodes> = /* ... */;
+
+let provider = ChainStateProvider::with_account_codes(
+    Arc::new(index),
+    ChainStateProviderConfig { chain_id: 1 },
+    account_codes,
+);
+```
+
+### Implementing AccountsCodeStorage
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+use evolve_core::{AccountCode, ErrorCode};
+use evolve_stf_traits::AccountsCodeStorage;
+
+pub struct MyAccountCodes {
+    codes: HashMap<String, Arc<dyn AccountCode>>,
+}
+
+impl AccountsCodeStorage for MyAccountCodes {
+    fn with_code<F, R>(&self, identifier: &str, f: F) -> Result<R, ErrorCode>
+    where
+        F: FnOnce(Option<&dyn AccountCode>) -> R,
+    {
+        Ok(f(self.codes.get(identifier).map(|c| c.as_ref())))
+    }
+
+    fn list_identifiers(&self) -> Vec<String> {
+        self.codes.keys().cloned().collect()
+    }
+}
+```
+
+## Use Cases
+
+### Generate TypeScript Client
+
+```typescript
+const response = await fetch('http://localhost:8545', {
+  method: 'POST',
+  body: JSON.stringify({
+    jsonrpc: '2.0',
+    method: 'evolve_getAllSchemas',
+    params: [],
+    id: 1
+  })
+});
+
+const { result: schemas } = await response.json();
+
+for (const schema of schemas) {
+  console.log(`Module: ${schema.name}`);
+  for (const query of schema.query_functions) {
+    console.log(`  Query: ${query.name}(${query.params.map(p => p.name).join(', ')})`);
+  }
+}
+```
+
+### Build CLI Tool
+
+```bash
+#!/bin/bash
+MODULE=$1
+SCHEMA=$(curl -s http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d "{\"jsonrpc\":\"2.0\",\"method\":\"evolve_getModuleSchema\",\"params\":[\"$MODULE\"],\"id\":1}" \
+  | jq '.result')
+
+echo "Queries for $MODULE:"
+echo "$SCHEMA" | jq -r '.query_functions[] | "  \(.name): \(.params | map(.name) | join(", "))"'
+```
+
+### Validate Requests
+
+```rust
+fn validate_query(schema: &AccountSchema, function_name: &str, params: &[Value]) -> Result<(), String> {
+    let func = schema.query_functions
+        .iter()
+        .find(|f| f.name == function_name)
+        .ok_or_else(|| format!("Unknown query: {}", function_name))?;
+
+    if params.len() != func.params.len() {
+        return Err(format!(
+            "Expected {} params, got {}",
+            func.params.len(),
+            params.len()
+        ));
+    }
+
+    Ok(())
+}
+```
+
+## Function IDs
+
+Each function has a deterministic `function_id` computed as the first 8 bytes of `SHA-256(function_name)`. This ID is used for message dispatch at runtime.
+
+```rust
+use sha2::{Sha256, Digest};
+
+fn compute_function_id(name: &str) -> u64 {
+    let mut hasher = Sha256::new();
+    hasher.update(name.as_bytes());
+    let hash = hasher.finalize();
+    u64::from_le_bytes(hash[..8].try_into().unwrap())
+}
+```
+
+The same function name always produces the same ID, enabling clients to cache and reuse IDs.

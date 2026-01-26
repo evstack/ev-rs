@@ -56,6 +56,8 @@ export default defineConfig({
         { text: 'Collections', link: '/reference/collections' },
         { text: 'Standards', link: '/reference/standards' },
         { text: 'Pre-built Modules', link: '/reference/prebuilt' },
+        { text: 'Schema Introspection', link: '/reference/schema-introspection' },
+        { text: 'gRPC API', link: '/reference/grpc' },
       ],
     },
     {
