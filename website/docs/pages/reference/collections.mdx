@@ -1,0 +1,159 @@
+# Collections
+
+Type-safe storage primitives for module state.
+
+## Overview
+
+| Collection | Use Case | Iteration |
+|------------|----------|-----------|
+| `Item<T>` | Single value | N/A |
+| `Map<K, V>` | Key-value lookup | Deterministic |
+| `Vector<T>` | Ordered list | Index-based |
+| `Queue<T>` | FIFO processing | Front-to-back |
+| `UnorderedMap<K, V>` | Large datasets | Session-deterministic |
+
+## Item
+
+Single value storage:
+
+```rust
+use evolve_collections::Item;
+
+static CONFIG: Item<Config> = Item::new(b"config");
+
+// Operations
+CONFIG.set(env, value)?;
+let val = CONFIG.get(env)?;
+let exists = CONFIG.exists(env)?;
+CONFIG.remove(env)?;
+```
+
+## Map
+
+Key-value mapping:
+
+```rust
+use evolve_collections::Map;
+
+static BALANCES: Map<AccountId, u128> = Map::new(b"bal");
+
+// Basic operations
+BALANCES.set(env, key, value)?;
+let val = BALANCES.get(env, key)?;
+BALANCES.remove(env, key)?;
+
+// Atomic update
+BALANCES.update(env, key, |current| {
+    Ok(current.unwrap_or(0) + amount)
+})?;
+
+// Iteration (deterministic order)
+for (key, value) in BALANCES.iter(env)? {
+    // ...
+}
+```
+
+## Vector
+
+Ordered dynamic array:
+
+```rust
+use evolve_collections::Vector;
+
+static HISTORY: Vector<Event> = Vector::new(b"hist");
+
+// Operations
+HISTORY.push(env, event)?;
+let event = HISTORY.get(env, index)?;
+let last = HISTORY.pop(env)?;
+let len = HISTORY.len(env)?;
+
+// Iteration
+for event in HISTORY.iter(env)? {
+    // ...
+}
+```
+
+## Queue
+
+FIFO queue:
+
+```rust
+use evolve_collections::Queue;
+
+static PENDING: Queue<Task> = Queue::new(b"pending");
+
+// Operations
+PENDING.enqueue(env, task)?;
+let task = PENDING.dequeue(env)?;
+let next = PENDING.peek(env)?;
+let empty = PENDING.is_empty(env)?;
+```
+
+## UnorderedMap
+
+Optimized for large datasets:
+
+```rust
+use evolve_collections::UnorderedMap;
+
+static METADATA: UnorderedMap<TokenId, Metadata> = UnorderedMap::new(b"meta");
+
+// Same API as Map
+// Better performance for:
+// - Large datasets (100k+ entries)
+// - Random access patterns
+// - When iteration order doesn't matter
+```
+
+## Composite Keys
+
+Use tuples or custom types:
+
+```rust
+// Tuple key
+static ALLOWANCES: Map<(AccountId, AccountId), u128> = Map::new(b"allow");
+ALLOWANCES.set(env, (owner, spender), amount)?;
+
+// Custom key type
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct PositionKey {
+    pub user: AccountId,
+    pub pool: AccountId,
+}
+
+static POSITIONS: Map<PositionKey, Position> = Map::new(b"pos");
+```
+
+## Nested Collections
+
+```rust
+// Map of vectors (conceptually)
+static USER_ORDERS: Map<AccountId, Vec<OrderId>> = Map::new(b"orders");
+
+// Better: separate collections with composite key
+static ORDERS: Map<(AccountId, u64), Order> = Map::new(b"orders");
+static ORDER_COUNT: Map<AccountId, u64> = Map::new(b"order_cnt");
+```
+
+## Size Limits
+
+| Limit | Value |
+|-------|-------|
+| Max key size | 254 bytes |
+| Max value size | 1 MB |
+| Max overlay entries | 100,000 |
+
+## Serialization
+
+All types must implement Borsh:
+
+```rust
+use borsh::{BorshSerialize, BorshDeserialize};
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct MyData {
+    pub field1: u64,
+    pub field2: String,
+}
+```

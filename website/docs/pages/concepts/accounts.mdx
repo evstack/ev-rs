@@ -1,0 +1,94 @@
+# Accounts
+
+Everything in Evolve is an account. This account-centric model is the foundation of the entire system.
+
+## What is an Account?
+
+An account has three components:
+
+| Component | Description |
+|-----------|-------------|
+| **Identity** | Unique `AccountId` (u128) |
+| **Code** | Implementation of the `AccountCode` trait |
+| **State** | Isolated storage namespace |
+
+## The AccountCode Trait
+
+Every account implements the `AccountCode` trait:
+
+```rust
+pub trait AccountCode: Send + Sync {
+    fn execute(
+        &self,
+        env: &mut dyn Environment,
+        request: InvokeRequest,
+    ) -> SdkResult<Vec<u8>>;
+
+    fn query(
+        &self,
+        env: &dyn EnvironmentQuery,
+        request: InvokeRequest,
+    ) -> SdkResult<Vec<u8>>;
+}
+```
+
+The `#[account_impl]` macro generates this implementation for you.
+
+## System Accounts
+
+Reserved AccountId values with special behavior:
+
+| ID | Name | Purpose |
+|----|------|---------|
+| 0 | `RUNTIME_ACCOUNT_ID` | Account creation, migrations |
+| 1 | `STORAGE_ACCOUNT_ID` | Storage read/write operations |
+| 2 | `EVENT_HANDLER_ACCOUNT_ID` | Event emission |
+| 5 | `UNIQUE_HANDLER_ACCOUNT_ID` | Unique ID generation |
+
+System accounts have hardcoded handlers in the invoker.
+
+## Inter-Account Calls
+
+Accounts communicate through message passing:
+
+```rust
+// Account A calls Account B
+env.do_exec(account_b_id, &message, funds)?;
+
+// Internally:
+// 1. Invoker creates checkpoint
+// 2. Funds are transferred (if any)
+// 3. Account B's code executes
+// 4. On error: checkpoint restored
+// 5. On success: changes committed
+```
+
+## Message Dispatch
+
+The `#[account_impl]` macro generates:
+
+1. **Message structs** for each function
+2. **Function IDs** from SHA-256 of function name
+3. **Dispatch logic** in `AccountCode::execute/query`
+
+## Storage Isolation
+
+Each account's storage is prefixed by its AccountId:
+
+```
+[AccountId][FieldPrefix][Key] => Value
+
+Example:
+[0x0A][0x01][alice] => 1000  // Account 10, field 1, key "alice"
+```
+
+This prevents accounts from accidentally (or maliciously) accessing each other's state.
+
+## No Sudo Model
+
+There is no privileged escalation in Evolve. All execution is account-driven:
+
+- No "admin" accounts with special powers
+- No way to bypass account code
+- All state changes go through the account's execute method
+- System accounts are explicitly defined and limited in scope

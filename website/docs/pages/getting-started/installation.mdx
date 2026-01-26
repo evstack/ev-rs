@@ -1,0 +1,64 @@
+# Installation
+
+## Prerequisites
+
+- **Rust 1.86.0** or later
+- **Cargo** (comes with Rust)
+
+## Install Rust
+
+If you don't have Rust installed:
+
+```bash
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+Verify your installation:
+
+```bash
+rustc --version  # Should be 1.86.0 or later
+cargo --version
+```
+
+## Clone Evolve
+
+```bash
+git clone https://github.com/evolvesdk/evolve.git
+cd evolve
+```
+
+## Build
+
+```bash
+# Build the project
+cargo build
+
+# Run tests
+cargo test
+
+# Format code
+cargo fmt
+
+# Run lints
+cargo clippy
+```
+
+## Add to Your Project
+
+Add the SDK crates to your `Cargo.toml`:
+
+```toml
+[dependencies]
+evolve_core = { path = "crates/app/sdk/core" }
+evolve_macros = { path = "crates/app/sdk/macros" }
+evolve_collections = { path = "crates/app/sdk/collections" }
+```
+
+Or if using a published version:
+
+```toml
+[dependencies]
+evolve_core = "0.1"
+evolve_macros = "0.1"
+evolve_collections = "0.1"
+```

@@ -1,0 +1,86 @@
+# Module Architecture
+
+The Evolve module system uses an account-centric model where every piece of application logic is an account.
+
+## Core Components
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      State Transition Function (STF)         │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │                      ExecutionState                      │ │
+│  │  - Overlay (write cache)                                 │ │
+│  │  - Undo log (for rollback)                              │ │
+│  │  - Events                                                │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │                        Invoker                           │ │
+│  │  - Implements Environment/EnvironmentQuery               │ │
+│  │  - Manages call stack (max depth: 64)                   │ │
+│  │  - Handles fund transfers                                │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+## Lifecycle Hooks
+
+Modules can implement lifecycle traits:
+
+```rust
+pub trait BeginBlocker<B> {
+    fn begin_block(&self, block: &B, env: &mut dyn Environment);
+}
+
+pub trait EndBlocker {
+    fn end_block(&self, env: &mut dyn Environment);
+}
+
+pub trait TxValidator<Tx> {
+    fn validate_tx(&self, tx: &Tx, env: &mut dyn Environment) -> SdkResult<()>;
+}
+
+pub trait PostTxExecution<Tx> {
+    fn after_tx_executed(
+        tx: &Tx,
+        gas_consumed: u64,
+        tx_result: Result<...>,
+        env: &mut dyn Environment,
+    ) -> SdkResult<()>;
+}
+```
+
+## Resource Limits
+
+| Limit | Value | Purpose |
+|-------|-------|---------|
+| Max call depth | 64 | Prevent stack overflow |
+| Max overlay entries | 100,000 | Memory bound |
+| Max events | 10,000 | Memory bound |
+| Max key size | 254 bytes | Storage efficiency |
+| Max value size | 1 MB | Storage efficiency |
+
+## State Management
+
+### Checkpoint/Restore
+
+Every `do_exec` call creates a checkpoint:
+
+```rust
+let checkpoint = state.checkpoint();
+
+match execute_call() {
+    Ok(result) => result,
+    Err(e) => {
+        state.restore(checkpoint)?;  // Rollback all changes
+        return Err(e);
+    }
+}
+```
+
+### Storage Isolation
+
+Each account's storage is prefixed by its AccountId:
+
+```
+[AccountId][FieldPrefix][Key] => Value
+```

@@ -1,0 +1,200 @@
+# Storage
+
+Evolve provides type-safe, collision-free storage primitives for module state.
+
+## Collection Types
+
+### Item
+
+Single value storage:
+
+```rust
+use evolve_collections::Item;
+
+static CONFIG: Item<Config> = Item::new(b"config");
+
+// Set value
+CONFIG.set(env, Config { admin, paused: false })?;
+
+// Get value
+let config = CONFIG.get(env)?.unwrap_or_default();
+
+// Check existence
+if CONFIG.exists(env)? {
+    // ...
+}
+
+// Remove value
+CONFIG.remove(env)?;
+```
+
+### Map
+
+Key-value mapping with deterministic iteration:
+
+```rust
+use evolve_collections::Map;
+
+static BALANCES: Map<AccountId, u128> = Map::new(b"bal");
+
+// Set value
+BALANCES.set(env, account, 1000)?;
+
+// Get value
+let balance = BALANCES.get(env, account)?.unwrap_or(0);
+
+// Update atomically
+BALANCES.update(env, account, |balance| {
+    Ok(balance.unwrap_or(0) + amount)
+})?;
+
+// Remove entry
+BALANCES.remove(env, account)?;
+
+// Iterate (deterministic order)
+for (key, value) in BALANCES.iter(env)? {
+    // ...
+}
+```
+
+### Vector
+
+Dynamic ordered array:
+
+```rust
+use evolve_collections::Vector;
+
+static HISTORY: Vector<Event> = Vector::new(b"hist");
+
+// Push to end
+HISTORY.push(env, event)?;
+
+// Get by index
+let event = HISTORY.get(env, 0)?;
+
+// Get length
+let len = HISTORY.len(env)?;
+
+// Pop from end
+let last = HISTORY.pop(env)?;
+
+// Iterate
+for event in HISTORY.iter(env)? {
+    // ...
+}
+```
+
+### Queue
+
+FIFO queue for processing:
+
+```rust
+use evolve_collections::Queue;
+
+static PENDING: Queue<Task> = Queue::new(b"pending");
+
+// Enqueue (add to back)
+PENDING.enqueue(env, task)?;
+
+// Dequeue (remove from front)
+let task = PENDING.dequeue(env)?;
+
+// Peek at front
+let next = PENDING.peek(env)?;
+
+// Check if empty
+if PENDING.is_empty(env)? {
+    // ...
+}
+```
+
+### UnorderedMap
+
+Hash-based mapping for large datasets:
+
+```rust
+use evolve_collections::UnorderedMap;
+
+static METADATA: UnorderedMap<TokenId, Metadata> = UnorderedMap::new(b"meta");
+
+// Same API as Map, but optimized for:
+// - Large datasets
+// - Random access patterns
+// - When iteration order doesn't matter
+```
+
+## Storage Prefixes
+
+Each collection needs a unique prefix to avoid collisions:
+
+```rust
+// Good: unique prefixes
+static BALANCES: Map<AccountId, u128> = Map::new(b"bal");
+static ALLOWANCES: Map<(AccountId, AccountId), u128> = Map::new(b"allow");
+
+// Bad: collision!
+static A: Map<u64, u64> = Map::new(b"data");
+static B: Map<u64, u64> = Map::new(b"data"); // Same prefix!
+```
+
+## Serialization
+
+Types must implement Borsh serialization:
+
+```rust
+use borsh::{BorshSerialize, BorshDeserialize};
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct Config {
+    pub admin: AccountId,
+    pub fee_rate: u64,
+}
+```
+
+## Best Practices
+
+### Use Typed Keys
+
+```rust
+// Good: type-safe key
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct AllowanceKey {
+    owner: AccountId,
+    spender: AccountId,
+}
+
+static ALLOWANCES: Map<AllowanceKey, u128> = Map::new(b"allow");
+
+// Also good: tuple key
+static ALLOWANCES: Map<(AccountId, AccountId), u128> = Map::new(b"allow");
+```
+
+### Batch Updates
+
+```rust
+// Bad: multiple writes
+for account in accounts {
+    BALANCES.set(env, account, amount)?;
+}
+
+// Better: use update for atomic operations
+BALANCES.update(env, account, |bal| Ok(bal.unwrap_or(0) + amount))?;
+```
+
+### Lazy Loading
+
+```rust
+// Only load what you need
+let balance = BALANCES.get(env, specific_account)?;
+
+// Avoid loading everything
+// let all = BALANCES.iter(env)?.collect::<Vec<_>>();
+```
+
+## Size Limits
+
+| Limit | Value |
+|-------|-------|
+| Max key size | 254 bytes |
+| Max value size | 1 MB |
+| Max overlay entries | 100,000 |

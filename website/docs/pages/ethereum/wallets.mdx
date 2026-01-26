@@ -1,0 +1,147 @@
+# Wallet Integration
+
+Evolve is compatible with standard Ethereum wallets.
+
+## MetaMask Setup
+
+1. Open MetaMask
+2. Click network dropdown → "Add Network"
+3. Enter network details:
+
+| Field | Value |
+|-------|-------|
+| Network Name | Evolve Local |
+| RPC URL | http://localhost:8545 |
+| Chain ID | 1 (or your configured chain_id) |
+| Currency Symbol | ETH |
+
+4. Click "Save"
+
+## Using ethers.js
+
+```javascript
+import { ethers } from 'ethers';
+
+// Connect to local node
+const provider = new ethers.JsonRpcProvider('http://localhost:8545');
+
+// Create wallet
+const wallet = new ethers.Wallet(privateKey, provider);
+
+// Get balance
+const balance = await provider.getBalance(wallet.address);
+console.log('Balance:', ethers.formatEther(balance));
+
+// Send transaction
+const tx = await wallet.sendTransaction({
+  to: recipientAddress,
+  value: ethers.parseEther('1.0'),
+});
+await tx.wait();
+```
+
+## Using viem
+
+```typescript
+import { createPublicClient, createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
+
+// Create clients
+const publicClient = createPublicClient({
+  transport: http('http://localhost:8545'),
+});
+
+const account = privateKeyToAccount('0x...');
+const walletClient = createWalletClient({
+  account,
+  transport: http('http://localhost:8545'),
+});
+
+// Get balance
+const balance = await publicClient.getBalance({
+  address: account.address,
+});
+
+// Send transaction
+const hash = await walletClient.sendTransaction({
+  to: recipientAddress,
+  value: parseEther('1.0'),
+});
+```
+
+## Using wagmi (React)
+
+```typescript
+import { WagmiConfig, createConfig, http } from 'wagmi';
+import { defineChain } from 'viem';
+
+// Define custom chain
+const evolveLocal = defineChain({
+  id: 1,
+  name: 'Evolve Local',
+  nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+  rpcUrls: {
+    default: { http: ['http://localhost:8545'] },
+  },
+});
+
+// Create config
+const config = createConfig({
+  chains: [evolveLocal],
+  transports: {
+    [evolveLocal.id]: http(),
+  },
+});
+
+// Use in app
+function App() {
+  return (
+    <WagmiConfig config={config}>
+      {/* Your app */}
+    </WagmiConfig>
+  );
+}
+```
+
+## Address Format
+
+Evolve uses standard Ethereum addresses (20 bytes, hex-encoded with 0x prefix):
+
+```
+0x742d35Cc6634C0532925a3b844Bc9e7595f1Ef67
+```
+
+### Address to AccountId Mapping
+
+```rust
+// Ethereum address (20 bytes) maps to AccountId (u128)
+// Lower 16 bytes of address become the AccountId
+let account_id = AccountId::from_address(address);
+let address = account_id.to_address();
+```
+
+## Transaction Signing
+
+All standard Ethereum signing methods work:
+
+```javascript
+// Personal sign
+const signature = await wallet.signMessage('Hello');
+
+// Typed data (EIP-712)
+const signature = await wallet._signTypedData(domain, types, value);
+
+// Transaction signing (automatic with sendTransaction)
+```
+
+## Supported Features
+
+| Feature | Status |
+|---------|--------|
+| EOA transactions | Supported |
+| EIP-1559 gas | Supported |
+| Legacy gas | Supported |
+| Contract calls | Supported |
+| Event logs | Supported |
+| Block subscriptions | Supported |
+| EIP-712 signing | Supported |

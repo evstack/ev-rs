@@ -1,0 +1,170 @@
+# JSON-RPC
+
+Evolve provides a full Ethereum-compatible JSON-RPC 2.0 API.
+
+## Endpoint
+
+Default: `http://localhost:8545`
+
+## Supported Methods
+
+### eth_ Namespace
+
+| Method | Description |
+|--------|-------------|
+| `eth_chainId` | Returns the chain ID |
+| `eth_blockNumber` | Returns current block number |
+| `eth_getBlockByNumber` | Get block by number |
+| `eth_getBlockByHash` | Get block by hash |
+| `eth_getTransactionByHash` | Get transaction by hash |
+| `eth_getTransactionReceipt` | Get transaction receipt |
+| `eth_sendRawTransaction` | Submit signed transaction |
+| `eth_call` | Call contract (read-only) |
+| `eth_estimateGas` | Estimate gas for transaction |
+| `eth_getBalance` | Get account balance |
+| `eth_getTransactionCount` | Get account nonce |
+| `eth_getCode` | Get contract code |
+| `eth_getStorageAt` | Get storage value |
+| `eth_gasPrice` | Get current gas price |
+| `eth_feeHistory` | Get fee history |
+| `eth_getLogs` | Get event logs |
+
+### net_ Namespace
+
+| Method | Description |
+|--------|-------------|
+| `net_version` | Network version |
+| `net_listening` | Is node listening |
+| `net_peerCount` | Number of peers |
+
+### web3_ Namespace
+
+| Method | Description |
+|--------|-------------|
+| `web3_clientVersion` | Client version string |
+| `web3_sha3` | Keccak-256 hash |
+
+## Examples
+
+### Get Block Number
+
+```bash
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_blockNumber",
+    "params": [],
+    "id": 1
+  }'
+```
+
+Response:
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "result": "0x64"
+}
+```
+
+### Get Balance
+
+```bash
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_getBalance",
+    "params": ["0x742d35Cc6634C0532925a3b844Bc9e7595f1Ef67", "latest"],
+    "id": 1
+  }'
+```
+
+### Send Transaction
+
+```bash
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_sendRawTransaction",
+    "params": ["0xf86c...signed_tx..."],
+    "id": 1
+  }'
+```
+
+### Call Contract
+
+```bash
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_call",
+    "params": [{
+      "to": "0x...",
+      "data": "0x..."
+    }, "latest"],
+    "id": 1
+  }'
+```
+
+## WebSocket Subscriptions
+
+Connect to `ws://localhost:8545` for real-time updates.
+
+### Subscribe to New Blocks
+
+```javascript
+const ws = new WebSocket('ws://localhost:8545');
+
+ws.send(JSON.stringify({
+  jsonrpc: '2.0',
+  method: 'eth_subscribe',
+  params: ['newHeads'],
+  id: 1
+}));
+
+ws.onmessage = (event) => {
+  const data = JSON.parse(event.data);
+  console.log('New block:', data.params.result);
+};
+```
+
+### Subscribe to Logs
+
+```javascript
+ws.send(JSON.stringify({
+  jsonrpc: '2.0',
+  method: 'eth_subscribe',
+  params: ['logs', {
+    address: '0x...',
+    topics: ['0x...']
+  }],
+  id: 2
+}));
+```
+
+## Configuration
+
+```yaml
+rpc:
+  enabled: true
+  http_addr: "127.0.0.1:8545"
+  ws_addr: "127.0.0.1:8546"
+  client_version: "evolve/0.1.0"
+  max_connections: 100
+  request_timeout_secs: 30
+```
+
+## Error Codes
+
+| Code | Message |
+|------|---------|
+| -32700 | Parse error |
+| -32600 | Invalid request |
+| -32601 | Method not found |
+| -32602 | Invalid params |
+| -32603 | Internal error |
+| -32000 | Server error |

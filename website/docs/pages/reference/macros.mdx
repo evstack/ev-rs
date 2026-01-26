@@ -1,0 +1,136 @@
+# Macros
+
+Evolve provides procedural macros to eliminate boilerplate in module development.
+
+## account_impl
+
+The main macro for defining account modules:
+
+```rust
+#[account_impl(MyAccount)]
+pub mod my_account {
+    #[init]
+    fn initialize(env: &impl Env, value: u128) -> SdkResult<()> { ... }
+
+    #[exec]
+    fn do_something(env: &impl Env, arg: String) -> SdkResult<()> { ... }
+
+    #[query]
+    fn get_value(env: &impl Env) -> SdkResult<u128> { ... }
+}
+```
+
+This generates:
+- `MyAccount` struct implementing `AccountCode`
+- Message types for each function
+- Function ID constants (SHA-256 of function name)
+- Dispatch logic in `execute` and `query`
+
+## init
+
+Marks a one-time initialization function:
+
+```rust
+#[init]
+fn initialize(env: &impl Env, admin: AccountId, config: Config) -> SdkResult<()> {
+    ADMIN.set(env, admin)?;
+    CONFIG.set(env, config)?;
+    Ok(())
+}
+```
+
+Rules:
+- Called exactly once when account is created
+- Must return `SdkResult<()>`
+- First parameter must be `env: &impl Env`
+
+## exec
+
+Marks state-mutating functions:
+
+```rust
+#[exec]
+fn transfer(env: &impl Env, to: AccountId, amount: u128) -> SdkResult<()> {
+    // State changes are allowed
+    BALANCES.set(env, env.sender(), new_balance)?;
+    Ok(())
+}
+
+#[exec]
+fn mint(env: &impl Env, amount: u128) -> SdkResult<MintResult> {
+    // Can return data
+    Ok(MintResult { new_supply })
+}
+```
+
+Rules:
+- Can modify state
+- Can emit events
+- First parameter must be `env: &impl Env`
+- Returns `SdkResult<T>` where T is serializable
+
+## query
+
+Marks read-only query functions:
+
+```rust
+#[query]
+fn balance_of(env: &impl Env, account: AccountId) -> SdkResult<u128> {
+    Ok(BALANCES.get(env, account)?.unwrap_or(0))
+}
+
+#[query]
+fn get_config(env: &impl Env) -> SdkResult<Config> {
+    CONFIG.get(env)?.ok_or(ERR_NOT_INITIALIZED)
+}
+```
+
+Rules:
+- Cannot modify state (compile error if attempted)
+- First parameter must be `env: &impl Env`
+- Returns `SdkResult<T>` where T is serializable
+
+## Generated Code
+
+For a function like:
+
+```rust
+#[exec]
+fn transfer(env: &impl Env, to: AccountId, amount: u128) -> SdkResult<()>
+```
+
+The macro generates:
+
+```rust
+// Message struct
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct TransferMsg {
+    pub to: AccountId,
+    pub amount: u128,
+}
+
+impl TransferMsg {
+    // Function ID from SHA-256("transfer")
+    pub const ID: [u8; 4] = [0x12, 0x34, 0x56, 0x78];
+}
+```
+
+## Calling Generated Functions
+
+From other accounts:
+
+```rust
+use my_module::TransferMsg;
+
+// Build and send message
+let msg = TransferMsg { to: recipient, amount: 100 };
+env.do_exec(token_account_id, &msg, funds)?;
+```
+
+## Best Practices
+
+1. **Keep functions focused** - One responsibility per function
+2. **Use descriptive names** - Function names become message types
+3. **Document parameters** - Add doc comments above functions
+4. **Validate early** - Check inputs at function start
+5. **Return meaningful errors** - Use specific error codes

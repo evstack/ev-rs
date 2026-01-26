@@ -1,0 +1,44 @@
+# Evolve
+
+Evolve is a modular Rust SDK for building blockchain applications with Ethereum compatibility.
+
+Build flexible blockchain systems without starting from scratch. Define modules with simple primitives, integrate with any VM, and work with any consensus engine.
+
+## Core Principles
+
+- **No Sudo Model** - All execution is account-driven; no privileged escalation
+- **Everything is an Account** - Storage, execution, and queries are namespaced by AccountId
+- **Macro-Driven Development** - `#[account_impl]`, `#[init]`, `#[exec]`, `#[query]` eliminate boilerplate
+- **Deterministic Execution** - Sequential block processing with checkpoint/rollback for atomicity
+- **Ethereum Compatible** - Full EIP-2718 typed transactions, EIP-1559, and JSON-RPC support
+
+## Quick Example
+
+```rust
+#[account_impl(Counter)]
+pub mod counter {
+    #[init]
+    fn initialize(env: &impl Env) -> SdkResult<()> {
+        VALUE.set(env, 0)?;
+        Ok(())
+    }
+
+    #[exec]
+    fn increment(env: &impl Env) -> SdkResult<()> {
+        let current = VALUE.get(env)?.unwrap_or(0);
+        VALUE.set(env, current + 1)?;
+        Ok(())
+    }
+
+    #[query]
+    fn get_value(env: &impl Env) -> SdkResult<u128> {
+        Ok(VALUE.get(env)?.unwrap_or(0))
+    }
+}
+```
+
+## Get Started
+
+- [Installation](/getting-started/installation) - Set up your development environment
+- [Quickstart](/getting-started/quickstart) - Build your first account module
+- [Running the Testapp](/getting-started/testapp) - See a complete working example

@@ -1,0 +1,113 @@
+# Concurrency Model
+
+Evolve uses a hybrid sync/async model optimized for deterministic execution while maximizing performance where possible.
+
+## Overview
+
+The STF is single-threaded and synchronous for determinism. Parallelism is used only where it doesn't affect execution order:
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    PARALLEL (Pre-consensus)                   │
+│  Signature verification, cache warming, network I/O          │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                   SEQUENTIAL (Block execution)                │
+│  Transaction processing, state transitions, event emission    │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌──────────────────────────────────────────────────────────────┐
+│                    PARALLEL (Post-commit)                     │
+│  Indexing, notifications, cache updates                       │
+└──────────────────────────────────────────────────────────────┘
+```
+
+## Why Single-Threaded Execution?
+
+| Requirement | Why Sequential |
+|-------------|----------------|
+| Determinism | Same order = same result on all nodes |
+| Atomicity | Checkpoint/restore assumes single writer |
+| Simplicity | No complex concurrency bugs |
+| State consistency | No race conditions on storage |
+
+## Where Parallelism is Used
+
+### 1. Signature Verification
+
+Before block execution, signatures can be verified in parallel:
+
+```rust
+// Done before STF receives the block
+let valid_sigs: Vec<bool> = transactions
+    .par_iter()
+    .map(|tx| verify_signature(tx))
+    .collect();
+```
+
+### 2. Storage Cache
+
+The storage layer uses sharded locking for concurrent reads:
+
+```rust
+// 256 shards for cache access
+struct ShardedCache {
+    shards: [RwLock<HashMap<Key, Value>>; 256],
+}
+
+impl ShardedCache {
+    fn shard_for_key(&self, key: &Key) -> usize {
+        hash(key) % 256
+    }
+}
+```
+
+### 3. Database I/O
+
+Async I/O for disk operations that don't affect execution order:
+
+```rust
+// Background commit doesn't block next block
+tokio::spawn(async move {
+    storage.commit_to_disk(changes).await;
+});
+```
+
+## Send/Sync Analysis
+
+| Type | Send | Sync | Reason |
+|------|------|------|--------|
+| `AccountCode` | Yes | Yes | Stored in shared registry |
+| `ExecutionState` | No | No | Contains &mut references |
+| `Invoker` | No | No | Contains &mut references |
+| `CommonwareStorage` | Yes | Yes | Needs cross-thread access |
+
+## Best Practices
+
+### Do
+
+- Use Evolve collections (deterministic by design)
+- Pass data through the `Environment` trait
+- Use block time instead of system time
+- Derive randomness from chain state
+
+### Don't
+
+- Spawn threads in module code
+- Use async in module code
+- Access external state (files, network, env vars)
+- Use HashMap/HashSet for iteration
+
+## Performance Characteristics
+
+| Operation | Time Complexity | Notes |
+|-----------|-----------------|-------|
+| Storage read (cached) | O(1) | Sharded lock, no contention |
+| Storage read (miss) | O(log n) | RocksDB lookup |
+| Storage write | O(1) | Overlay only during execution |
+| Checkpoint | O(1) | Just captures indices |
+| Restore | O(k) | k = changes since checkpoint |
+| Commit | O(n) | n = total overlay size |

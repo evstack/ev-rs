@@ -1,0 +1,171 @@
+# Testing
+
+Evolve provides multiple testing levels: unit tests with MockEnv, integration tests with TestApp, and simulation tests with SimTestApp.
+
+## Unit Testing with MockEnv
+
+```rust
+use evolve_core::{AccountId, Environment};
+use evolve_testing::MockEnv;
+
+#[test]
+fn test_basic_operation() {
+    let contract_id = AccountId::new(1);
+    let sender_id = AccountId::new(100);
+    let mut env = MockEnv::new(contract_id, sender_id);
+
+    let module = MyModule::default();
+    module.initialize(42, &mut env).expect("init failed");
+
+    let result = module.increment(&mut env).expect("increment failed");
+    assert_eq!(result, 43);
+}
+```
+
+## MockEnv Builder
+
+```rust
+let mut env = MockEnv::new(contract_id, sender_id)
+    .with_sender(new_sender)
+    .with_funds(vec![fungible_asset])
+    .with_account_balance(account, token, amount);
+```
+
+## Testing Authorization
+
+```rust
+#[test]
+fn test_unauthorized_access() {
+    let contract_id = AccountId::new(1);
+    let owner_id = AccountId::new(100);
+    let attacker_id = AccountId::new(999);
+
+    let mut env = MockEnv::new(contract_id, owner_id);
+    let module = MyModule::default();
+    module.initialize(&mut env).unwrap();
+
+    // Try as attacker
+    env = env.with_sender(attacker_id);
+    let result = module.admin_only_function(&mut env);
+
+    assert!(matches!(result, Err(e) if e == ERR_UNAUTHORIZED));
+}
+```
+
+## Testing Payable Functions
+
+```rust
+#[test]
+fn test_deposit() {
+    let mut env = MockEnv::new(contract_id, depositor_id)
+        .with_funds(vec![FungibleAsset {
+            asset_id: token_id,
+            amount: 1000,
+        }]);
+
+    let module = MyModule::default();
+    module.deposit(&mut env).expect("deposit failed");
+
+    assert_eq!(env.funds().len(), 0); // Funds consumed
+}
+```
+
+## Testing Error Conditions
+
+```rust
+#[test]
+fn test_insufficient_balance() {
+    let mut env = setup_env();
+    let module = MyModule::default();
+    module.initialize(vec![(sender, 100)], &mut env).unwrap();
+
+    let result = module.transfer(recipient, 1000, &mut env);
+
+    assert!(matches!(result, Err(e) if e == ERR_NOT_ENOUGH_BALANCE));
+}
+```
+
+## Property-Based Testing
+
+Use proptest for exhaustive testing:
+
+```rust
+use proptest::prelude::*;
+
+proptest! {
+    #[test]
+    fn test_transfer_preserves_total(
+        balance1 in 0u128..1_000_000,
+        balance2 in 0u128..1_000_000,
+        transfer_amount in 0u128..1_000_000,
+    ) {
+        let mut env = setup_env();
+        let module = MyModule::default();
+
+        module.initialize(
+            vec![(account1, balance1), (account2, balance2)],
+            &mut env
+        ).unwrap();
+
+        let total_before = balance1 + balance2;
+
+        // Attempt transfer (may fail)
+        let _ = module.transfer(account1, account2, transfer_amount, &mut env);
+
+        // Total preserved regardless
+        let b1 = module.get_balance(account1, &env).unwrap().unwrap_or(0);
+        let b2 = module.get_balance(account2, &env).unwrap().unwrap_or(0);
+
+        prop_assert_eq!(b1 + b2, total_before);
+    }
+}
+```
+
+## Integration Testing with TestApp
+
+```rust
+use evolve_testapp::TestApp;
+
+#[test]
+fn test_full_block_execution() {
+    let app = TestApp::new();
+
+    let result = app.execute_block(vec![
+        transaction1,
+        transaction2,
+    ]);
+
+    assert!(result.is_ok());
+    assert_eq!(result.tx_results.len(), 2);
+}
+```
+
+## Simulation Testing
+
+For deterministic testing with fault injection:
+
+```rust
+use evolve_testing::SimTestApp;
+
+#[test]
+fn test_with_simulation() {
+    let sim = SimTestApp::builder()
+        .with_seed(42)  // Deterministic
+        .with_fault_injection(true)
+        .build();
+
+    // Run simulation
+    sim.run_for_blocks(100);
+
+    // Check invariants
+    assert!(sim.check_invariants());
+}
+```
+
+## Best Practices
+
+1. **Test both success and failure paths**
+2. **Use property-based testing for arithmetic**
+3. **Test authorization for all privileged functions**
+4. **Test edge cases** (zero, max values, empty collections)
+5. **Test determinism** by running tests multiple times

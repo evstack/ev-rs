@@ -1,0 +1,161 @@
+# State Transition Function
+
+The STF is the core execution engine. It processes blocks of transactions deterministically, transforming state from one consistent snapshot to the next.
+
+## Design Principles
+
+- **Sequential, deterministic execution** - No transaction parallelism
+- **Atomic transactions** - Checkpoint/rollback for atomicity
+- **Single-threaded block processing** - Guarantees determinism
+- **Lazy system configuration** - Config loaded at block start
+
+## Block Processing Flow
+
+```
+BeginBlock
+    │
+    ├── BeginBlocker accounts execute
+    │   └── e.g., Scheduler, PoA validator updates
+    │
+    ▼
+For each Transaction:
+    │
+    ├── 1. Validate (TxValidator)
+    │   └── Check signature, nonce
+    │
+    ├── 2. Execute (AccountCode.execute)
+    │   └── State changes in overlay
+    │
+    ├── 3. Post-TX Handler
+    │   └── Fee collection, logging
+    │
+    └── 4. Commit or Rollback
+        └── Based on success/failure
+    │
+    ▼
+EndBlock
+    │
+    └── EndBlocker accounts execute
+```
+
+## Component Relationships
+
+### ExecutionState
+
+Holds all mutable state during block execution:
+
+```rust
+ExecutionState {
+    base_storage: &S,          // Immutable reference to committed state
+    overlay: HashMap<K, V>,     // Write cache
+    undo_log: Vec<StateChange>, // For checkpoint/restore
+    events: Vec<Event>,         // Collected events
+    unique_objects: u64,        // Counter for unique IDs
+    metrics: ExecutionMetrics,  // Performance tracking
+}
+```
+
+### Invoker
+
+Implements the `Environment` trait for account code:
+
+```rust
+Invoker {
+    whoami: AccountId,      // Current executing account
+    sender: AccountId,      // Message sender
+    funds: Coins,           // Attached funds
+    account_codes: &Registry,
+    storage: &mut ExecutionState,
+    gas_counter: GasCounter,
+    scope: ExecutionScope,
+    call_depth: u32,
+}
+```
+
+### GasCounter
+
+Tracks gas consumption:
+
+```rust
+enum GasCounter {
+    Infinite,                  // For system operations
+    Finite { limit, used, cfg } // For user transactions
+}
+```
+
+## Checkpoint/Restore
+
+Every `do_exec` call creates a checkpoint for atomicity:
+
+```rust
+let checkpoint = state.checkpoint();
+
+match execute_call() {
+    Ok(result) => result,
+    Err(e) => {
+        state.restore(checkpoint)?;  // Rollback all changes
+        return Err(e);
+    }
+}
+```
+
+A checkpoint captures:
+- `undo_log` index
+- `events` index
+- `unique_objects` counter
+
+## Threading Model
+
+### Single-Threaded (Determinism Required)
+
+| Component | Reason |
+|-----------|--------|
+| Block execution | Sequential tx processing |
+| Transaction execution | Shared ExecutionState |
+| Checkpoint/restore | Single-writer undo log |
+| Event collection | Sequential append |
+
+### Can Be Parallel
+
+| Component | Where | Mechanism |
+|-----------|-------|-----------|
+| Signature verification | Pre-consensus | `rayon::par_iter()` |
+| Cache reads | Storage layer | 256-shard RwLock |
+| ADB access | Storage layer | `tokio::RwLock` |
+
+## Resource Limits
+
+| Limit | Value | Purpose |
+|-------|-------|---------|
+| Max overlay entries | 100,000 | Prevent memory exhaustion |
+| Max events | 10,000 | Bound event log size |
+| Max key size | 254 bytes | Limit key storage |
+| Max value size | 1 MB | Limit value storage |
+| Max call depth | 64 | Prevent stack overflow |
+
+## Gas Model
+
+- **Infinite gas**: BeginBlock, EndBlock, system operations
+- **Finite gas**: User transactions
+- **Config loaded**: From GasService account at block start
+- **Charges**: Per-byte for reads, writes, and deletes
+
+## Storage Layer
+
+```
+ExecutionState.overlay
+       │
+       │ into_changes()
+       ▼
+Vec<StateChange>
+  - Set { key, value }
+  - Remove { key }
+       │
+       │ apply to storage
+       ▼
+CommonwareStorage.adb
+       │
+       │ commit
+       ▼
+Merkle Root (state hash)
+```

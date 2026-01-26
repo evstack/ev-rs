@@ -1,0 +1,124 @@
+# Error Handling
+
+Evolve uses error codes for compact, deterministic error handling.
+
+## Defining Errors
+
+Use the `define_error!` macro:
+
+```rust
+use evolve_core::define_error;
+
+define_error!(ERR_NOT_ENOUGH_BALANCE, 0x01, "not enough balance");
+define_error!(ERR_UNAUTHORIZED, 0x02, "unauthorized");
+define_error!(ERR_OVERFLOW, 0x03, "arithmetic overflow");
+```
+
+## Error Code Namespacing
+
+Prevent collisions between modules with namespaced codes:
+
+```rust
+// Each module gets a range
+const MODULE_BASE: u16 = 0x0100;
+
+define_error!(ERR_MY_ERROR, MODULE_BASE | 0x01, "my error");
+define_error!(ERR_ANOTHER, MODULE_BASE | 0x02, "another error");
+```
+
+### Reserved Ranges
+
+| Range | Module |
+|-------|--------|
+| `0x0000-0x00FF` | Core SDK errors |
+| `0x0100-0x01FF` | Token module |
+| `0x0200-0x02FF` | Gas module |
+| `0x0300-0x03FF` | Scheduler module |
+| `0x0400+` | Custom modules |
+
+## Core SDK Errors
+
+| Error | Code | Description |
+|-------|------|-------------|
+| `ERR_ENCODING` | `0x01` | Borsh encoding/decoding failed |
+| `ERR_UNKNOWN_FUNCTION` | `0x02` | Function ID not found |
+| `ERR_ACCOUNT_NOT_INIT` | `0x03` | Account not initialized |
+| `ERR_UNAUTHORIZED` | `0x04` | Sender not authorized |
+| `ERR_NOT_PAYABLE` | `0x05` | Function doesn't accept funds |
+| `ERR_ONE_COIN` | `0x06` | Expected exactly one coin |
+| `ERR_INCOMPATIBLE_FA` | `0x07` | Incompatible fungible asset |
+| `ERR_INSUFFICIENT_BALANCE` | `0x08` | Insufficient balance |
+| `ERR_OVERFLOW` | `0x09` | Arithmetic overflow |
+
+## Using ensure!
+
+For conditional error returns:
+
+```rust
+use evolve_core::ensure;
+
+fn transfer(&self, to: AccountId, amount: u128, env: &mut dyn Environment) -> SdkResult<()> {
+    let balance = self.balances.get(&env.sender(), env)?;
+
+    // Returns Err(ERR_INSUFFICIENT_BALANCE) if false
+    ensure!(balance >= amount, ERR_INSUFFICIENT_BALANCE);
+
+    // ... proceed with transfer
+    Ok(())
+}
+```
+
+## Error Propagation
+
+Use `?` for clean propagation:
+
+```rust
+fn complex_operation(&self, env: &mut dyn Environment) -> SdkResult<()> {
+    let value = self.storage.get(env)?;
+    let result = self.other_account.query(env)?;
+    self.storage.set(&new_value, env)?;
+    Ok(())
+}
+```
+
+## Handling Optional Values
+
+```rust
+// BAD - panics if not found
+let value = self.data.may_get(env)?.unwrap();
+
+// GOOD - returns error if not found
+let value = self.data.may_get(env)?.ok_or(ERR_NOT_FOUND)?;
+
+// GOOD - use default
+let value = self.data.may_get(env)?.unwrap_or_default();
+```
+
+## Transaction Atomicity
+
+Errors automatically trigger rollback:
+
+```rust
+fn multi_step_operation(&self, env: &mut dyn Environment) -> SdkResult<()> {
+    self.step_one(env)?;  // Succeeds
+    self.step_two(env)?;  // Fails - step_one is rolled back
+    Ok(())
+}
+```
+
+## Error Decoding (Development)
+
+Enable human-readable errors:
+
+```toml
+[dependencies]
+evolve_core = { workspace = true, features = ["error-decode"] }
+```
+
+## Best Practices
+
+1. **Use namespaced error codes** - Prevent collisions
+2. **Prefer ensure!** - Cleaner than manual if/return
+3. **Never use unwrap()** - Use `ok_or(ERR_...)` or `unwrap_or_default()`
+4. **Document error conditions** - Add doc comments
+5. **Keep error messages short** - They're stored in the binary

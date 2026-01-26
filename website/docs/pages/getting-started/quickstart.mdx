@@ -1,0 +1,102 @@
+# Quickstart
+
+Build your first account module in 5 minutes.
+
+## 1. Define Storage
+
+Every account has isolated storage. Define your state using typed collections:
+
+```rust
+use evolve_collections::Item;
+
+// Single value storage
+static VALUE: Item<u128> = Item::new(b"value");
+```
+
+## 2. Create Your Account
+
+Use the `#[account_impl]` macro to define your account module:
+
+```rust
+use evolve_core::prelude::*;
+use evolve_macros::account_impl;
+use evolve_collections::Item;
+
+static VALUE: Item<u128> = Item::new(b"value");
+
+#[account_impl(Counter)]
+pub mod counter {
+    use super::*;
+
+    #[init]
+    fn initialize(env: &impl Env) -> SdkResult<()> {
+        VALUE.set(env, 0)?;
+        Ok(())
+    }
+
+    #[exec]
+    fn increment(env: &impl Env) -> SdkResult<()> {
+        let current = VALUE.get(env)?.unwrap_or(0);
+        VALUE.set(env, current + 1)?;
+        Ok(())
+    }
+
+    #[query]
+    fn get_value(env: &impl Env) -> SdkResult<u128> {
+        Ok(VALUE.get(env)?.unwrap_or(0))
+    }
+}
+```
+
+### Function Types
+
+| Macro | Purpose | State Changes | Returns |
+|-------|---------|---------------|---------|
+| `#[init]` | One-time initialization | Yes | `SdkResult<()>` |
+| `#[exec]` | State-mutating execution | Yes | `SdkResult<T>` |
+| `#[query]` | Read-only queries | No | `SdkResult<T>` |
+
+## 3. Write Tests
+
+Use `MockEnv` for unit testing:
+
+```rust
+use evolve_testing::MockEnv;
+
+#[test]
+fn test_counter() {
+    let env = MockEnv::builder()
+        .with_caller(AccountId::new(1))
+        .build();
+
+    counter::initialize(&env).unwrap();
+    counter::increment(&env).unwrap();
+
+    assert_eq!(counter::get_value(&env).unwrap(), 1);
+}
+```
+
+## 4. Register Your Account
+
+Register your account code in the State Transition Function:
+
+```rust
+use evolve_stf::StfBuilder;
+
+let stf = StfBuilder::new()
+    .register_account::<Counter>()
+    .build();
+```
+
+## 5. Run
+
+```bash
+cargo test
+cargo run
+```
+
+## Next Steps
+
+- [Storage Collections](/modules/storage) - Learn about Maps, Vectors, and Queues
+- [Error Handling](/modules/errors) - Proper error handling patterns
+- [Testing](/modules/testing) - Advanced testing with TestApp and Simulator

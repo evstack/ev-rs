@@ -1,0 +1,133 @@
+# Server Configuration
+
+Configure and run an Evolve node.
+
+## Configuration File
+
+Create `config.yaml`:
+
+```yaml
+chain:
+  chain_id: 1
+  gas:
+    storage_get_charge: 10
+    storage_set_charge: 100
+    storage_remove_charge: 50
+
+storage:
+  path: "./data"
+  cache_size: 1GB
+  write_buffer_size: 64MB
+
+rpc:
+  enabled: true
+  http_addr: "127.0.0.1:8545"
+  ws_addr: "127.0.0.1:8546"
+  client_version: "evolve/0.1.0"
+  max_connections: 100
+  request_timeout_secs: 30
+
+grpc:
+  enabled: false
+  addr: "127.0.0.1:9545"
+  max_message_size: 4MB
+
+operations:
+  shutdown_timeout_secs: 30
+  startup_checks: true
+  min_disk_space_mb: 1024
+
+observability:
+  log_level: "info"
+  log_format: "json"
+  metrics_enabled: true
+  metrics_addr: "127.0.0.1:9090"
+```
+
+## Configuration Sections
+
+### Chain
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `chain_id` | Network identifier | 1 |
+| `gas.storage_get_charge` | Gas per byte read | 10 |
+| `gas.storage_set_charge` | Gas per byte write | 100 |
+| `gas.storage_remove_charge` | Gas per byte delete | 50 |
+
+### Storage
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `path` | Data directory | "./data" |
+| `cache_size` | RocksDB cache size | 1GB |
+| `write_buffer_size` | Write buffer size | 64MB |
+
+### RPC
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `enabled` | Enable JSON-RPC | true |
+| `http_addr` | HTTP endpoint | "127.0.0.1:8545" |
+| `ws_addr` | WebSocket endpoint | "127.0.0.1:8546" |
+| `client_version` | Version string | "evolve/0.1.0" |
+| `max_connections` | Max concurrent connections | 100 |
+| `request_timeout_secs` | Request timeout | 30 |
+
+### Operations
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `shutdown_timeout_secs` | Graceful shutdown timeout | 30 |
+| `startup_checks` | Run startup validation | true |
+| `min_disk_space_mb` | Minimum free disk space | 1024 |
+
+### Observability
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `log_level` | Log level (trace/debug/info/warn/error) | "info" |
+| `log_format` | Log format (json/text) | "json" |
+| `metrics_enabled` | Enable Prometheus metrics | true |
+| `metrics_addr` | Metrics endpoint | "127.0.0.1:9090" |
+
+## Running the Node
+
+```bash
+# Development mode
+cargo run --release -- run --config config.yaml
+
+# With specific genesis
+cargo run --release -- run --config config.yaml --genesis genesis.json
+```
+
+## Environment Variables
+
+Override config with environment variables:
+
+```bash
+EVOLVE_CHAIN_ID=42 \
+EVOLVE_RPC_HTTP_ADDR="0.0.0.0:8545" \
+EVOLVE_LOG_LEVEL="debug" \
+cargo run --release -- run
+```
+
+## Startup Checks
+
+When `startup_checks: true`, the node validates:
+
+- Sufficient disk space
+- Valid configuration
+- Database integrity
+- Genesis file (if specified)
+
+## Graceful Shutdown
+
+On SIGTERM/SIGINT:
+
+1. Stop accepting new requests
+2. Complete in-flight requests
+3. Flush pending writes
+4. Close database connections
+
+Timeout controlled by `shutdown_timeout_secs`.

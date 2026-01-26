@@ -1,0 +1,92 @@
+# Running the Testapp
+
+The `testapp` crate is a complete example application demonstrating all Evolve features.
+
+## Run the Dev Node
+
+```bash
+cd crates/app/testapp
+cargo run -- run
+```
+
+This starts:
+- JSON-RPC server at `http://localhost:8545`
+- Block production with configurable interval
+- In-memory or persistent storage
+
+## Configuration
+
+Create a `config.yaml`:
+
+```yaml
+chain:
+  chain_id: 1
+  gas:
+    storage_get_charge: 10
+    storage_set_charge: 10
+    storage_remove_charge: 10
+
+storage:
+  path: "./data"
+  cache_size: 1GB
+  write_buffer_size: 64MB
+
+rpc:
+  enabled: true
+  http_addr: "127.0.0.1:8545"
+  client_version: "evolve/0.1.0"
+
+grpc:
+  enabled: false
+  addr: "127.0.0.1:9545"
+  max_message_size: 4MB
+
+operations:
+  shutdown_timeout_secs: 30
+  startup_checks: true
+  min_disk_space_mb: 1024
+
+observability:
+  log_level: "info"
+  log_format: "json"
+  metrics_enabled: true
+```
+
+## Connect a Wallet
+
+1. Open MetaMask or any Ethereum wallet
+2. Add a custom network:
+   - **RPC URL**: `http://localhost:8545`
+   - **Chain ID**: `1` (or your configured chain_id)
+   - **Currency Symbol**: `ETH`
+
+## Interact via JSON-RPC
+
+```bash
+# Get block number
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+
+# Send transaction
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_sendRawTransaction","params":["0x..."],"id":1}'
+```
+
+## What's Included
+
+The testapp demonstrates:
+
+| Feature | Description |
+|---------|-------------|
+| Token module | Fungible token with mint/burn/transfer |
+| Scheduler | Begin/end block hooks |
+| Gas metering | EIP-1559 gas pricing |
+| Transaction validation | ECDSA signature verification |
+| WebSocket subscriptions | `newHeads` and log filtering |
+
+## Next Steps
+
+- [Core Concepts](/concepts/accounts) - Understand the account model
+- [Building Modules](/modules/architecture) - Create your own modules

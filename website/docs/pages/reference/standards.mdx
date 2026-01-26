@@ -1,0 +1,113 @@
+# Standards
+
+Evolve provides interface standards for common patterns.
+
+## Fungible Asset
+
+The standard interface for fungible tokens:
+
+```rust
+pub trait FungibleAsset {
+    /// Get total supply
+    fn total_supply(&self, env: &impl Env) -> SdkResult<u128>;
+
+    /// Get balance of account
+    fn balance_of(&self, env: &impl Env, account: AccountId) -> SdkResult<u128>;
+
+    /// Transfer tokens
+    fn transfer(
+        &self,
+        env: &impl Env,
+        to: AccountId,
+        amount: u128,
+    ) -> SdkResult<()>;
+
+    /// Transfer from another account (with allowance)
+    fn transfer_from(
+        &self,
+        env: &impl Env,
+        from: AccountId,
+        to: AccountId,
+        amount: u128,
+    ) -> SdkResult<()>;
+
+    /// Approve spender
+    fn approve(
+        &self,
+        env: &impl Env,
+        spender: AccountId,
+        amount: u128,
+    ) -> SdkResult<()>;
+
+    /// Get allowance
+    fn allowance(
+        &self,
+        env: &impl Env,
+        owner: AccountId,
+        spender: AccountId,
+    ) -> SdkResult<u128>;
+}
+```
+
+## Authentication
+
+The standard interface for account authentication:
+
+```rust
+pub trait Authentication {
+    /// Verify a signature
+    fn verify(
+        &self,
+        env: &impl Env,
+        message: &[u8],
+        signature: &[u8],
+    ) -> SdkResult<bool>;
+
+    /// Get the public key
+    fn public_key(&self, env: &impl Env) -> SdkResult<Vec<u8>>;
+}
+```
+
+## Implementing Standards
+
+```rust
+use evolve_standards::FungibleAsset;
+
+#[account_impl(MyToken)]
+pub mod my_token {
+    // Implement standard methods
+    #[query]
+    fn total_supply(env: &impl Env) -> SdkResult<u128> {
+        TOTAL_SUPPLY.get(env)?.ok_or(ERR_NOT_INITIALIZED)
+    }
+
+    #[query]
+    fn balance_of(env: &impl Env, account: AccountId) -> SdkResult<u128> {
+        Ok(BALANCES.get(env, account)?.unwrap_or(0))
+    }
+
+    #[exec]
+    fn transfer(env: &impl Env, to: AccountId, amount: u128) -> SdkResult<()> {
+        // Implementation
+    }
+
+    // ... other methods
+}
+```
+
+## Querying Standard Interfaces
+
+```rust
+// Call any token that implements FungibleAsset
+let balance: u128 = env.do_query(
+    token_id,
+    &BalanceOfMsg { account: user },
+)?;
+```
+
+## Benefits
+
+1. **Interoperability** - Modules can interact without knowing implementations
+2. **Composability** - Build complex systems from standard components
+3. **Tooling** - Wallets and explorers can work with any compliant token
+4. **Testing** - Mock implementations for testing

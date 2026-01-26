@@ -1,0 +1,161 @@
+# Transactions
+
+Evolve supports Ethereum-compatible transactions with EIP-2718 typed transactions and EIP-1559 gas pricing.
+
+## Transaction Types
+
+### Legacy Transactions (Type 0)
+
+```rust
+LegacyTransaction {
+    nonce: u64,
+    gas_price: u128,
+    gas_limit: u64,
+    to: Option<Address>,
+    value: u128,
+    data: Vec<u8>,
+    v: u64,
+    r: [u8; 32],
+    s: [u8; 32],
+}
+```
+
+### EIP-1559 Transactions (Type 2)
+
+```rust
+Eip1559Transaction {
+    chain_id: u64,
+    nonce: u64,
+    max_priority_fee_per_gas: u128,
+    max_fee_per_gas: u128,
+    gas_limit: u64,
+    to: Option<Address>,
+    value: u128,
+    data: Vec<u8>,
+    access_list: Vec<AccessListItem>,
+    v: u64,
+    r: [u8; 32],
+    s: [u8; 32],
+}
+```
+
+## Sending Transactions
+
+### Using ethers.js
+
+```javascript
+const tx = await wallet.sendTransaction({
+    to: recipientAddress,
+    value: ethers.parseEther("1.0"),
+    maxFeePerGas: ethers.parseGwei("20"),
+    maxPriorityFeePerGas: ethers.parseGwei("2"),
+});
+
+await tx.wait();
+```
+
+### Using curl
+
+```bash
+curl -X POST http://localhost:8545 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "eth_sendRawTransaction",
+    "params": ["0x...signed_tx_hex..."],
+    "id": 1
+  }'
+```
+
+## Transaction Lifecycle
+
+```
+1. User signs transaction
+       │
+       ▼
+2. Submit via JSON-RPC (eth_sendRawTransaction)
+       │
+       ▼
+3. Mempool validation
+   - Signature verification
+   - Nonce check
+   - Balance check
+       │
+       ▼
+4. Block inclusion
+   - Ordered by gas price
+       │
+       ▼
+5. STF processing
+   - Validate
+   - Execute
+   - Post-tx handler (fees)
+       │
+       ▼
+6. State committed
+```
+
+## Gas Model
+
+### EIP-1559 Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `base_fee` | Protocol-set minimum fee (adjusts per block) |
+| `max_fee_per_gas` | Maximum total fee user will pay |
+| `max_priority_fee_per_gas` | Tip to block producer |
+
+### Effective Gas Price
+
+```
+effective_gas_price = min(max_fee_per_gas, base_fee + max_priority_fee_per_gas)
+```
+
+### Gas Costs
+
+| Operation | Cost |
+|-----------|------|
+| Storage read (per byte) | 10 gas |
+| Storage write (per byte) | 100 gas |
+| Storage delete (per byte) | 50 gas |
+| Compute (per unit) | 1 gas |
+
+## ECDSA Signatures
+
+Evolve uses standard Ethereum ECDSA signatures:
+
+```rust
+use evolve_tx::ecdsa::{recover_signer, sign_message};
+
+// Recover signer from signature
+let signer = recover_signer(&message_hash, &signature)?;
+
+// Sign a message
+let signature = sign_message(&private_key, &message_hash)?;
+```
+
+## RLP Encoding
+
+Transactions are RLP encoded per Ethereum standards:
+
+```rust
+use evolve_tx::rlp::{encode, decode};
+
+// Encode transaction
+let encoded = encode(&transaction)?;
+
+// Decode transaction
+let decoded: Transaction = decode(&bytes)?;
+```
+
+## Account/Address Mapping
+
+Evolve maps between AccountId (u128) and Ethereum Address (20 bytes):
+
+```rust
+// AccountId to Address
+let address = Address::from_account_id(account_id);
+
+// Address to AccountId
+let account_id = address.to_account_id();
+```

@@ -1,0 +1,166 @@
+# Creating Modules
+
+This guide walks through creating a complete module from scratch.
+
+## Module Structure
+
+A typical module consists of:
+
+```rust
+// 1. Storage definitions
+static BALANCE: Map<AccountId, u128> = Map::new(b"balance");
+static TOTAL_SUPPLY: Item<u128> = Item::new(b"supply");
+
+// 2. Account implementation
+#[account_impl(MyToken)]
+pub mod my_token {
+    use super::*;
+
+    #[init]
+    fn initialize(env: &impl Env, initial_supply: u128) -> SdkResult<()> {
+        // ...
+    }
+
+    #[exec]
+    fn transfer(env: &impl Env, to: AccountId, amount: u128) -> SdkResult<()> {
+        // ...
+    }
+
+    #[query]
+    fn balance_of(env: &impl Env, account: AccountId) -> SdkResult<u128> {
+        // ...
+    }
+}
+```
+
+## Step 1: Define Storage
+
+Choose the appropriate collection type:
+
+| Type | Use Case |
+|------|----------|
+| `Item<T>` | Single value (config, counter) |
+| `Map<K, V>` | Key-value lookup (balances, allowances) |
+| `Vector<T>` | Ordered list (history, logs) |
+| `Queue<T>` | FIFO processing |
+| `UnorderedMap<K, V>` | Large datasets |
+
+```rust
+use evolve_collections::{Item, Map, Vector};
+
+// Each field needs a unique prefix
+static CONFIG: Item<Config> = Item::new(b"config");
+static BALANCES: Map<AccountId, u128> = Map::new(b"bal");
+static HISTORY: Vector<Transfer> = Vector::new(b"hist");
+```
+
+## Step 2: Define Types
+
+Types must implement serialization:
+
+```rust
+use borsh::{BorshSerialize, BorshDeserialize};
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct Config {
+    pub admin: AccountId,
+    pub paused: bool,
+}
+
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct Transfer {
+    pub from: AccountId,
+    pub to: AccountId,
+    pub amount: u128,
+}
+```
+
+## Step 3: Implement Functions
+
+### Initialization (`#[init]`)
+
+Called once when the account is created:
+
+```rust
+#[init]
+fn initialize(env: &impl Env, admin: AccountId) -> SdkResult<()> {
+    CONFIG.set(env, Config { admin, paused: false })?;
+    Ok(())
+}
+```
+
+### Execution (`#[exec]`)
+
+State-mutating operations:
+
+```rust
+#[exec]
+fn transfer(env: &impl Env, to: AccountId, amount: u128) -> SdkResult<()> {
+    let sender = env.sender();
+
+    // Read and validate
+    let sender_balance = BALANCES.get(env, sender)?.unwrap_or(0);
+    if sender_balance < amount {
+        return Err(SdkError::insufficient_funds());
+    }
+
+    // Update state
+    BALANCES.set(env, sender, sender_balance - amount)?;
+    let to_balance = BALANCES.get(env, to)?.unwrap_or(0);
+    BALANCES.set(env, to, to_balance + amount)?;
+
+    // Emit event
+    env.emit_event("transfer", &Transfer { from: sender, to, amount })?;
+
+    Ok(())
+}
+```
+
+### Queries (`#[query]`)
+
+Read-only operations:
+
+```rust
+#[query]
+fn balance_of(env: &impl Env, account: AccountId) -> SdkResult<u128> {
+    Ok(BALANCES.get(env, account)?.unwrap_or(0))
+}
+```
+
+## Step 4: Register the Module
+
+Register your account code in the STF:
+
+```rust
+use evolve_stf::StfBuilder;
+
+let stf = StfBuilder::new()
+    .register_account::<MyToken>()
+    .build();
+```
+
+## Step 5: Test
+
+Use MockEnv for unit tests:
+
+```rust
+#[test]
+fn test_transfer() {
+    let env = MockEnv::builder()
+        .with_caller(AccountId::new(1))
+        .build();
+
+    // Initialize
+    my_token::initialize(&env, AccountId::new(1)).unwrap();
+
+    // Set initial balance
+    BALANCES.set(&env, AccountId::new(1), 1000).unwrap();
+
+    // Transfer
+    my_token::transfer(&env, AccountId::new(2), 100).unwrap();
+
+    // Verify
+    assert_eq!(my_token::balance_of(&env, AccountId::new(1)).unwrap(), 900);
+    assert_eq!(my_token::balance_of(&env, AccountId::new(2)).unwrap(), 100);
+}
+```

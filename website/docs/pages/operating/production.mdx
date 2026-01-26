@@ -1,0 +1,223 @@
+# Production Deployment
+
+Guidelines for running Evolve in production.
+
+## Hardware Requirements
+
+### Minimum
+
+| Resource | Specification |
+|----------|---------------|
+| CPU | 4 cores |
+| RAM | 16 GB |
+| Storage | 500 GB SSD |
+| Network | 100 Mbps |
+
+### Recommended
+
+| Resource | Specification |
+|----------|---------------|
+| CPU | 8+ cores |
+| RAM | 32+ GB |
+| Storage | 1+ TB NVMe SSD |
+| Network | 1 Gbps |
+
+## Configuration
+
+### Production config.yaml
+
+```yaml
+chain:
+  chain_id: 1
+
+storage:
+  path: "/var/lib/evolve/data"
+  cache_size: 8GB
+  write_buffer_size: 256MB
+
+rpc:
+  enabled: true
+  http_addr: "0.0.0.0:8545"
+  ws_addr: "0.0.0.0:8546"
+  max_connections: 1000
+  request_timeout_secs: 60
+
+operations:
+  shutdown_timeout_secs: 60
+  startup_checks: true
+  min_disk_space_mb: 10240
+
+observability:
+  log_level: "info"
+  log_format: "json"
+  metrics_enabled: true
+  metrics_addr: "0.0.0.0:9090"
+```
+
+## Systemd Service
+
+Create `/etc/systemd/system/evolve.service`:
+
+```ini
+[Unit]
+Description=Evolve Node
+After=network.target
+
+[Service]
+Type=simple
+User=evolve
+Group=evolve
+WorkingDirectory=/var/lib/evolve
+ExecStart=/usr/local/bin/evolve run --config /etc/evolve/config.yaml
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable evolve
+sudo systemctl start evolve
+```
+
+## Security
+
+### Firewall
+
+```bash
+# Allow RPC (if needed externally)
+sudo ufw allow 8545/tcp
+
+# Allow metrics (internal only)
+sudo ufw allow from 10.0.0.0/8 to any port 9090
+```
+
+### Reverse Proxy (nginx)
+
+```nginx
+upstream evolve {
+    server 127.0.0.1:8545;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name rpc.example.com;
+
+    ssl_certificate /etc/letsencrypt/live/rpc.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/rpc.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://evolve;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+}
+```
+
+## Monitoring
+
+### Prometheus
+
+Scrape config:
+
+```yaml
+scrape_configs:
+  - job_name: 'evolve'
+    static_configs:
+      - targets: ['localhost:9090']
+```
+
+### Key Metrics
+
+| Metric | Description |
+|--------|-------------|
+| `evolve_block_height` | Current block height |
+| `evolve_tx_count` | Transaction count |
+| `evolve_storage_size_bytes` | Database size |
+| `evolve_rpc_requests_total` | RPC request count |
+| `evolve_rpc_latency_seconds` | RPC latency histogram |
+
+### Alerts
+
+```yaml
+groups:
+  - name: evolve
+    rules:
+      - alert: EvolveStopped
+        expr: increase(evolve_block_height[5m]) == 0
+        for: 5m
+        labels:
+          severity: critical
+
+      - alert: EvolveHighLatency
+        expr: histogram_quantile(0.99, evolve_rpc_latency_seconds_bucket) > 1
+        for: 5m
+        labels:
+          severity: warning
+```
+
+## Backup
+
+### Database Backup
+
+```bash
+# Stop node first for consistent backup
+sudo systemctl stop evolve
+
+# Backup data directory
+tar -czf evolve-backup-$(date +%Y%m%d).tar.gz /var/lib/evolve/data
+
+# Restart node
+sudo systemctl start evolve
+```
+
+### Automated Backups
+
+```bash
+#!/bin/bash
+# /etc/cron.daily/evolve-backup
+
+BACKUP_DIR="/var/backups/evolve"
+DATA_DIR="/var/lib/evolve/data"
+RETENTION_DAYS=7
+
+# Create backup
+tar -czf "$BACKUP_DIR/evolve-$(date +%Y%m%d).tar.gz" "$DATA_DIR"
+
+# Cleanup old backups
+find "$BACKUP_DIR" -name "evolve-*.tar.gz" -mtime +$RETENTION_DAYS -delete
+```
+
+## Troubleshooting
+
+### Check Logs
+
+```bash
+journalctl -u evolve -f
+```
+
+### Check Status
+
+```bash
+curl http://localhost:8545 \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
+### Common Issues
+
+| Issue | Solution |
+|-------|----------|
+| Out of disk space | Increase storage, enable pruning |
+| Connection refused | Check firewall, verify bind address |
+| High memory usage | Reduce cache_size |
+| Slow sync | Check network, increase resources |
