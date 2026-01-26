@@ -5,6 +5,7 @@ export default defineConfig({
   description: 'Modular Rust SDK for building blockchain applications with Ethereum compatibility',
   logoUrl: '/logo.svg',
   iconUrl: '/favicon.ico',
+  outDir: './dist',
 
   socials: [
     {
