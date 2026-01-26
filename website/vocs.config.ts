@@ -56,8 +56,15 @@ export default defineConfig({
         { text: 'Collections', link: '/reference/collections' },
         { text: 'Standards', link: '/reference/standards' },
         { text: 'Pre-built Modules', link: '/reference/prebuilt' },
-        { text: 'Schema Introspection', link: '/reference/schema-introspection' },
-        { text: 'gRPC API', link: '/reference/grpc' },
+      ],
+    },
+    {
+      text: 'APIs',
+      collapsed: false,
+      items: [
+        { text: 'JSON-RPC', link: '/apis/json-rpc' },
+        { text: 'gRPC', link: '/apis/grpc' },
+        { text: 'Schema Introspection', link: '/apis/schema-introspection' },
       ],
     },
     {
@@ -65,7 +72,6 @@ export default defineConfig({
       collapsed: true,
       items: [
         { text: 'Transactions', link: '/ethereum/transactions' },
-        { text: 'JSON-RPC', link: '/ethereum/json-rpc' },
         { text: 'Wallet Integration', link: '/ethereum/wallets' },
       ],
     },
