@@ -6,8 +6,13 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[features]
+default = []
+error-decode = ["linkme", "evolve_core/error-decode"]
+
 [dependencies]
 evolve_core = { workspace = true }
+linkme = { version = "0.3", default-features = false, optional = true }
 evolve_stf_traits = { workspace = true }
 
 # Alloy ecosystem

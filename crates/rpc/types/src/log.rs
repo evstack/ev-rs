@@ -37,6 +37,7 @@ pub struct RpcLog {
 
 impl RpcLog {
     /// Create a new log entry.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         address: Address,
         topics: Vec<B256>,

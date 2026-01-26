@@ -2,6 +2,9 @@
 //!
 //! Thread-safe in-memory transaction pool with gas price ordering.
 
+// Mempool is not part of consensus - transactions are not committed to state.
+#![allow(clippy::disallowed_types)]
+
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::sync::Arc;

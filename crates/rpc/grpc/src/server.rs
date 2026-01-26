@@ -108,7 +108,7 @@ impl<S: StateProvider> GrpcServer<S> {
                 .send_compressed(tonic::codec::CompressionEncoding::Gzip);
         }
 
-        log::info!("Starting gRPC server on {}", addr);
+        tracing::info!("Starting gRPC server on {}", addr);
 
         Server::builder()
             .add_service(execution_server)
@@ -152,7 +152,7 @@ impl<S: StateProvider> GrpcServer<S> {
                 .send_compressed(tonic::codec::CompressionEncoding::Gzip);
         }
 
-        log::info!("Starting gRPC server on {}", addr);
+        tracing::info!("Starting gRPC server on {}", addr);
 
         Server::builder()
             .add_service(execution_server)

@@ -1,5 +1,8 @@
 //! Genesis file parsing and reference resolution.
 
+// Genesis processing is deterministic per-file; HashMap order doesn't affect output.
+#![allow(clippy::disallowed_types)]
+
 use crate::error::GenesisError;
 use crate::registry::MessageRegistry;
 use crate::types::GenesisTx;
@@ -56,20 +59,15 @@ fn default_sender() -> SenderSpec {
 }
 
 /// Specification for the sender of a genesis transaction.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Default, Serialize)]
 pub enum SenderSpec {
     /// Use the system account
+    #[default]
     System,
     /// Reference a previously created account (starts with $)
     Reference(String),
     /// Use a specific account ID
     AccountId(u128),
-}
-
-impl Default for SenderSpec {
-    fn default() -> Self {
-        Self::System
-    }
 }
 
 impl<'de> serde::Deserialize<'de> for SenderSpec {
@@ -155,8 +153,7 @@ impl GenesisFile {
 
             // Validate references point to earlier transactions
             if let SenderSpec::Reference(ref r) = tx.sender {
-                if r.starts_with('$') {
-                    let ref_id = &r[1..];
+                if let Some(ref_id) = r.strip_prefix('$') {
                     if !seen_ids.contains_key(ref_id) {
                         return Err(GenesisError::InvalidReference(ref_id.to_string(), idx));
                     }
@@ -164,8 +161,7 @@ impl GenesisFile {
             }
 
             if let RecipientSpec::Reference(ref r) = tx.recipient {
-                if r.starts_with('$') {
-                    let ref_id = &r[1..];
+                if let Some(ref_id) = r.strip_prefix('$') {
                     if !seen_ids.contains_key(ref_id) {
                         return Err(GenesisError::InvalidReference(ref_id.to_string(), idx));
                     }

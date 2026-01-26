@@ -19,7 +19,7 @@ tokio = { workspace = true, features = ["sync", "rt-multi-thread"] }
 tokio-stream = "0.1"
 async-trait.workspace = true
 futures.workspace = true
-log.workspace = true
+tracing = { workspace = true }
 thiserror = "2"
 
 # For alloy types

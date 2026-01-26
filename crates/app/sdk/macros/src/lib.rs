@@ -3,11 +3,11 @@ extern crate proc_macro;
 use heck::ToUpperCamelCase;
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use sha2::{Digest, Sha256};
 use syn::{
     parse_macro_input, spanned::Spanned, Attribute, FnArg, Ident, ImplItem, Item, ItemImpl,
     ItemMod, ItemTrait, Pat, ReturnType, Signature, TraitItem, Type, TypePath,
 };
+use tiny_keccak::{Hasher, Keccak};
 
 /// This attribute macro generates code for smart contracts in the Evolve SDK, including:
 /// 1) Message types (e.g. `InitializeMsg`, `TransferMsg`, etc.) that define contract interfaces
@@ -431,8 +431,6 @@ fn parse_function_kind(attrs: &[Attribute]) -> Result<Option<FunctionKind>, syn:
 
         match ident.to_string().as_str() {
             "exec" => {
-                // If the user wrote `#[exec]` => parse_is_payable returns false
-                // If the user wrote `#[exec(payable)]` => returns true
                 let is_payable = parse_is_payable(attr)?;
                 return Ok(Some(FunctionKind::Exec {
                     payable: is_payable,
@@ -549,10 +547,10 @@ fn generate_msg_struct(info: &FunctionInfo) -> proc_macro2::TokenStream {
         quote! { pub #ident: #ty, }
     });
 
-    // Generate an 8-byte ID from the function name
+    // Generate function ID using keccak256 of function name
     let fn_id = compute_function_id(&fn_name_str);
 
-    match info.kind {
+    match &info.kind {
         FunctionKind::Init { .. } => quote! {
             #[derive(::borsh::BorshSerialize, ::borsh::BorshDeserialize, ::core::clone::Clone)]
             pub struct #msg_name {
@@ -575,15 +573,23 @@ fn generate_msg_struct(info: &FunctionInfo) -> proc_macro2::TokenStream {
     }
 }
 
-/// Computes a deterministic function ID based on SHA-256 hash of the function name.
-/// Used for message dispatch in the runtime.
+/// Computes a deterministic function ID using keccak256 hash of the function name.
+///
+/// The function ID is computed as keccak256(function_name)[0..4] interpreted as
+/// big-endian u32, then extended to u64. This matches Ethereum's function selector
+/// format, enabling Ethereum transaction routing.
+///
+/// Note: Ethereum selectors use the full signature with types (e.g., "transfer(address,uint256)"),
+/// but we use just the function name for simplicity. For full Ethereum ABI compatibility,
+/// users can define functions with names matching Solidity function signatures.
 fn compute_function_id(fn_name: &str) -> u64 {
-    let mut hasher = Sha256::new();
-    hasher.update(fn_name.as_bytes());
-    let hash = hasher.finalize();
-    let mut arr = [0u8; 8];
-    arr.copy_from_slice(&hash[..8]);
-    u64::from_le_bytes(arr)
+    let mut keccak = Keccak::v256();
+    let mut output = [0u8; 32];
+    keccak.update(fn_name.as_bytes());
+    keccak.finalize(&mut output);
+    // Take first 4 bytes as big-endian u32, extend to u64
+    let selector = u32::from_be_bytes([output[0], output[1], output[2], output[3]]);
+    selector as u64
 }
 
 // -----------------------------------------
@@ -681,6 +687,8 @@ fn type_to_schema_tokens(ty: &Type) -> proc_macro2::TokenStream {
 /// Generates the TokenStream to construct a FunctionSchema for a given function.
 fn generate_function_schema_tokens(info: &FunctionInfo) -> proc_macro2::TokenStream {
     let fn_name_str = info.fn_name.to_string();
+
+    // Generate function ID using keccak256 of function name
     let fn_id = compute_function_id(&fn_name_str);
 
     let kind = match &info.kind {
@@ -884,7 +892,7 @@ fn generate_exec_match_arm(info: &FunctionInfo) -> proc_macro2::TokenStream {
     let args = info.params.iter().map(|(n, _)| quote!(msg.#n));
 
     // If not payable, we do the check. We'll inject it right after decoding `msg`.
-    let funds_check = match info.kind {
+    let funds_check = match &info.kind {
         FunctionKind::Exec { payable } if !payable => {
             quote! {
                 if !env.funds().is_empty() {
@@ -998,7 +1006,7 @@ fn generate_exec_wrapper(info: &FunctionInfo) -> proc_macro2::TokenStream {
     let return_ty = &info.return_type;
 
     // If payable, add an extra param for `funds`.
-    let (funds_param, funds_arg) = match info.kind {
+    let (funds_param, funds_arg) = match &info.kind {
         FunctionKind::Exec { payable: true } => (
             quote!(funds: ::std::vec::Vec<::evolve_core::FungibleAsset>,),
             quote!(funds),

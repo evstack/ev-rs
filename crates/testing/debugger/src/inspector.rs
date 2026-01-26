@@ -2,6 +2,9 @@
 //!
 //! Provides tools for examining state at specific points in the trace.
 
+// Debugging code - determinism requirements do not apply.
+#![allow(clippy::disallowed_types)]
+
 use crate::trace::{ExecutionTrace, StateSnapshot, TraceEvent};
 use evolve_core::AccountId;
 use std::collections::HashMap;

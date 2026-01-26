@@ -1,5 +1,8 @@
 //! Run simulation command.
 
+// Testing CLI - determinism requirements do not apply.
+#![allow(clippy::disallowed_types)]
+
 use evolve_debugger::{save_trace, StateSnapshot, TraceBuilder, TraceFormat};
 use evolve_simulator::{MetricsConfig, SimConfig, Simulator, StorageConfig, TimeConfig};
 use std::path::PathBuf;

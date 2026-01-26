@@ -318,7 +318,7 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
             .add_raw(data)
             .map_err(|e| RpcError::InvalidTransaction(e.to_string()))?;
 
-        log::info!("Transaction submitted to mempool: {}", hash);
+        tracing::info!("Transaction submitted to mempool: {}", hash);
 
         Ok(hash)
     }

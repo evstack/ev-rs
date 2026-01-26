@@ -4,7 +4,6 @@ members = [
     "crates/rpc/eth-jsonrpc",
     "crates/rpc/grpc",
     "crates/rpc/chain-index",
-    "crates/app/operations",
     "crates/app/stf",
     "crates/app/tx",
     "crates/app/mempool",
@@ -51,7 +50,6 @@ evolve_stf = { path = "crates/app/stf" }
 evolve_genesis = { path = "crates/app/genesis" }
 evolve_tx = { path = "crates/app/tx" }
 evolve_mempool = { path = "crates/app/mempool" }
-evolve_operations = { path = "crates/app/operations" }
 
 evolve_rpc_types = { path = "crates/rpc/types" }
 evolve_eth_jsonrpc = { path = "crates/rpc/eth-jsonrpc" }
@@ -78,7 +76,8 @@ commonware-codec = "0.0.65"
 borsh = { features = ["derive"], version = "1.5.5" }
 clap = { version = "4.5.31", features = ["derive"] }
 fixed = { version = "1.29", features = ["borsh", "serde"] }
-log = { version = "0.4.27" }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tokio = { version = "1.44.2", features = ["full"] }
 futures = "0.3.31"
 base64 = "0.22.1"

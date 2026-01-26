@@ -1,3 +1,8 @@
+//! Mock environment for testing collections.
+
+// Testing code - determinism requirements do not apply.
+#![allow(clippy::disallowed_types)]
+
 use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageSetRequest,
     STORAGE_ACCOUNT_ID,

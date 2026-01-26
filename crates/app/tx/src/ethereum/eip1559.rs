@@ -93,6 +93,11 @@ impl SignedEip1559Tx {
     pub fn access_list(&self) -> &alloy_eips::eip2930::AccessList {
         &self.tx().access_list
     }
+
+    /// Encode the signed transaction to RLP bytes.
+    pub fn rlp_encode(&self, out: &mut Vec<u8>) {
+        self.inner.rlp_encode(out);
+    }
 }
 
 impl TypedTransaction for SignedEip1559Tx {

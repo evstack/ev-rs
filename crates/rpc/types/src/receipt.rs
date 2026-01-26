@@ -51,6 +51,7 @@ impl RpcReceipt {
     pub const STATUS_FAILURE: u64 = 0;
 
     /// Create a receipt for a successful transaction.
+    #[allow(clippy::too_many_arguments)]
     pub fn success(
         tx_hash: B256,
         tx_index: u64,
@@ -81,6 +82,7 @@ impl RpcReceipt {
     }
 
     /// Create a receipt for a failed transaction.
+    #[allow(clippy::too_many_arguments)]
     pub fn failure(
         tx_hash: B256,
         tx_index: u64,

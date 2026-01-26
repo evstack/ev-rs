@@ -134,6 +134,7 @@ pub struct GenesisResult {
 }
 
 #[cfg(test)]
+#[allow(clippy::disallowed_types)]
 mod tests {
     use super::*;
     use borsh::{BorshDeserialize, BorshSerialize};

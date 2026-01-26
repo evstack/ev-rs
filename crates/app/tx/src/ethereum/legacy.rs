@@ -72,6 +72,11 @@ impl SignedLegacyTx {
     pub fn signature(&self) -> &alloy_primitives::PrimitiveSignature {
         self.inner.signature()
     }
+
+    /// Encode the signed transaction to RLP bytes.
+    pub fn rlp_encode(&self, out: &mut Vec<u8>) {
+        self.inner.rlp_encode(out);
+    }
 }
 
 impl TypedTransaction for SignedLegacyTx {

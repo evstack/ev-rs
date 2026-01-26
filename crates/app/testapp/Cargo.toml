@@ -18,15 +18,17 @@ evolve_stf = { workspace = true, features = ["testing"] }
 
 evolve_scheduler.workspace = true
 evolve_token.workspace = true
-evolve_operations.workspace = true
 evolve_server.workspace = true
 evolve_storage.workspace = true
 evolve_node.workspace = true
+evolve_mempool.workspace = true
+evolve_tx.workspace = true
+alloy-primitives.workspace = true
 
 borsh.workspace = true
-log.workspace = true
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 tokio.workspace = true
-slog = "2.7"
 
 # TODO: Move evolve_testing to dev-dependencies once storage engine is fully implemented
 # This dependency is currently required in main dependencies for testing infrastructure
@@ -37,12 +39,20 @@ evolve_debugger.workspace = true
 sha2.workspace = true
 
 commonware-runtime.workspace = true
-simple_logger = { version = "5.0.0" }
 
 [dev-dependencies]
 tempfile = "3.8"
 criterion = "0.5"
 serde_json = "1.0"
+alloy-consensus = { workspace = true, features = ["k256"] }
+alloy-primitives = { workspace = true }
+async-trait = { workspace = true }
+evolve_mempool = { workspace = true }
+evolve_tx = { workspace = true }
+k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
+rand = "0.8"
+hex = "0.4"
+tiny-keccak = { version = "2.0", features = ["keccak"] }
 
 [[bench]]
 name = "stf_bench"

@@ -29,6 +29,9 @@
 //! println!("Reproduce with: {}", sim.seed_info().reproduction_command());
 //! ```
 
+// Testing code - determinism requirements do not apply.
+#![allow(clippy::disallowed_types)]
+
 pub mod metrics;
 pub mod seed;
 pub mod storage;

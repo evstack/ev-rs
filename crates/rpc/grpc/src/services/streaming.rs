@@ -47,7 +47,7 @@ impl StreamingService for StreamingServiceImpl {
         let stream = BroadcastStream::new(rx).filter_map(|result| match result {
             Ok(block) => Some(Ok(rpc_block_to_header(&block))),
             Err(err) => {
-                log::warn!("gRPC newHeads subscriber error: {}", err);
+                tracing::warn!("gRPC newHeads subscriber error: {}", err);
                 None // Skip errors (lag or closed)
             }
         });
@@ -95,7 +95,7 @@ impl StreamingService for StreamingServiceImpl {
                     Some(Ok(rpc_log_to_proto(&log)))
                 }
                 Err(err) => {
-                    log::warn!("gRPC logs subscriber error: {}", err);
+                    tracing::warn!("gRPC logs subscriber error: {}", err);
                     None
                 }
             }
@@ -113,7 +113,7 @@ impl StreamingService for StreamingServiceImpl {
         let stream = BroadcastStream::new(rx).filter_map(|result| match result {
             Ok(hash) => Some(Ok(b256_to_proto(hash))),
             Err(err) => {
-                log::warn!("gRPC pendingTx subscriber error: {}", err);
+                tracing::warn!("gRPC pendingTx subscriber error: {}", err);
                 None
             }
         });
@@ -147,7 +147,7 @@ impl StreamingService for StreamingServiceImpl {
                 Some(Ok(rpc_sync_status_to_proto(&rpc_status)))
             }
             Err(err) => {
-                log::warn!("gRPC syncing subscriber error: {}", err);
+                tracing::warn!("gRPC syncing subscriber error: {}", err);
                 None
             }
         });

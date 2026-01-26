@@ -1,3 +1,8 @@
+//! Mock implementations for testing.
+
+// Testing code - determinism requirements do not apply.
+#![allow(clippy::disallowed_types)]
+
 use evolve_core::{AccountCode, ErrorCode, ReadonlyKV};
 use evolve_stf_traits::{
     AccountsCodeStorage, StateChange, WritableAccountsCodeStorage, WritableKV,

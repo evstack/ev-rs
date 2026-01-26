@@ -10,7 +10,8 @@ description = "Reusable dev-node runner for Evolve applications."
 
 [dependencies]
 commonware-runtime = { workspace = true }
-log = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
 borsh = { workspace = true }
 tokio = { workspace = true }
 alloy-primitives = { workspace = true }

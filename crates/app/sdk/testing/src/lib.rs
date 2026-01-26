@@ -1,3 +1,8 @@
+//! Testing utilities for Evolve SDK.
+
+// Testing code - determinism requirements do not apply.
+#![allow(clippy::disallowed_types)]
+
 pub mod server_mocks;
 
 use evolve_core::encoding::{Decodable, Encodable};

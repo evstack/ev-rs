@@ -8,9 +8,15 @@ use evolve_testapp::{
     GenesisAccounts, PLACEHOLDER_ACCOUNT,
 };
 use evolve_testing::server_mocks::AccountStorageMock;
+use tracing_subscriber::{fmt, EnvFilter};
 
 fn main() {
-    simple_logger::init_with_level(log::Level::Info).expect("failed to init logger");
+    // Initialize tracing with env filter (RUST_LOG=info by default)
+    fmt()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
+        .init();
 
     let command = std::env::args().nth(1).unwrap_or_else(|| "run".to_string());
 

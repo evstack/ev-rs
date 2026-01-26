@@ -3,6 +3,9 @@
 //! This module provides Prometheus-compatible metrics for the storage layer,
 //! tracking read/write latencies, cache performance, and batch operations.
 
+// Instant is used for performance metrics, not consensus-affecting logic.
+#![allow(clippy::disallowed_types)]
+
 use prometheus_client::encoding::text::encode;
 use prometheus_client::metrics::counter::Counter;
 use prometheus_client::metrics::gauge::Gauge;

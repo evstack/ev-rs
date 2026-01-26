@@ -3,6 +3,9 @@
 //! This module provides a storage implementation that can inject faults
 //! (read failures, write failures) for testing error handling paths.
 
+// Testing code - determinism requirements do not apply.
+#![allow(clippy::disallowed_types)]
+
 use crate::seed::SeededRng;
 use evolve_core::{define_error, ErrorCode, ReadonlyKV};
 use evolve_stf_traits::{StateChange, WritableKV};

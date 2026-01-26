@@ -176,7 +176,7 @@ pub fn run_dev_node_with_rpc<
     BuildStorageFut:
         Future<Output = Result<S, Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
 {
-    log::info!("=== Evolve Dev Node ===");
+    tracing::info!("=== Evolve Dev Node ===");
     let data_dir = data_dir.as_ref();
     std::fs::create_dir_all(data_dir).expect("failed to create data directory");
 
@@ -217,12 +217,12 @@ pub fn run_dev_node_with_rpc<
 
             let (genesis_result, initial_height) = match load_chain_state::<G, _>(&storage) {
                 Some(state) => {
-                    log::info!("Resuming from existing state at height {}", state.height);
-                    log::info!("Genesis state: {:?}", state.genesis_result);
+                    tracing::info!("Resuming from existing state at height {}", state.height);
+                    tracing::info!("Genesis state: {:?}", state.genesis_result);
                     (state.genesis_result, state.height)
                 }
                 None => {
-                    log::info!("No existing state found, running genesis...");
+                    tracing::info!("No existing state found, running genesis...");
                     let bootstrap_stf = (build_genesis_stf)();
                     let output =
                         (run_genesis)(&bootstrap_stf, &codes, &storage).expect("genesis failed");
@@ -231,7 +231,7 @@ pub fn run_dev_node_with_rpc<
                         .await
                         .expect("genesis commit failed");
 
-                    log::info!("Genesis complete. Result: {:?}", output.genesis_result);
+                    tracing::info!("Genesis complete. Result: {:?}", output.genesis_result);
                     (output.genesis_result, 1)
                 }
             };
@@ -257,7 +257,7 @@ pub fn run_dev_node_with_rpc<
 
                 // Initialize from existing data
                 if let Err(e) = chain_index.initialize() {
-                    log::warn!("Failed to initialize chain index: {:?}", e);
+                    tracing::warn!("Failed to initialize chain index: {:?}", e);
                 }
 
                 // Create subscription manager for real-time events
@@ -284,7 +284,7 @@ pub fn run_dev_node_with_rpc<
                     client_version: rpc_config.client_version.clone(),
                 };
 
-                log::info!("Starting JSON-RPC server on {}", rpc_config.http_addr);
+                tracing::info!("Starting JSON-RPC server on {}", rpc_config.http_addr);
                 let handle = evolve_eth_jsonrpc::start_server(server_config, state_provider)
                     .await
                     .expect("failed to start RPC server");
@@ -300,13 +300,13 @@ pub fn run_dev_node_with_rpc<
                         subscriptions,
                     ));
 
-                log::info!(
+                tracing::info!(
                     "Block interval: {:?}, starting at height {}",
                     block_interval,
                     initial_height
                 );
 
-                log::info!("Starting block production... (Ctrl+C to stop)");
+                tracing::info!("Starting block production... (Ctrl+C to stop)");
 
                 // Run block production and Ctrl+C handling concurrently using Spawner pattern.
                 // When Ctrl+C is received, stop() triggers shutdown signal via context.stopped().
@@ -315,7 +315,7 @@ pub fn run_dev_node_with_rpc<
                         // Block production exited
                     }
                     _ = tokio::signal::ctrl_c() => {
-                        log::info!("Received Ctrl+C, initiating graceful shutdown...");
+                        tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                         context_for_shutdown
                             .stop(0, Some(Duration::from_secs(10)))
                             .await
@@ -325,16 +325,16 @@ pub fn run_dev_node_with_rpc<
 
                 // Save chain state
                 let final_height = dev.height();
-                log::info!("Stopped at height: {}", final_height);
+                tracing::info!("Stopped at height: {}", final_height);
 
                 let chain_state = ChainState {
                     height: final_height,
                     genesis_result,
                 };
                 if let Err(e) = save_chain_state(dev.storage(), &chain_state).await {
-                    log::error!("Failed to save chain state: {}", e);
+                    tracing::error!("Failed to save chain state: {}", e);
                 } else {
-                    log::info!("Saved chain state at height {}", final_height);
+                    tracing::info!("Saved chain state at height {}", final_height);
                 }
 
                 Some(handle)
@@ -343,13 +343,13 @@ pub fn run_dev_node_with_rpc<
                 let dev: Arc<DevConsensus<Stf, S, Codes, Tx, evolve_server::NoopChainIndex>> =
                     Arc::new(DevConsensus::new(stf, storage, codes, dev_config));
 
-                log::info!(
+                tracing::info!(
                     "Block interval: {:?}, starting at height {}",
                     block_interval,
                     initial_height
                 );
 
-                log::info!("Starting block production... (Ctrl+C to stop)");
+                tracing::info!("Starting block production... (Ctrl+C to stop)");
 
                 // Run block production and Ctrl+C handling concurrently using Spawner pattern
                 tokio::select! {
@@ -357,7 +357,7 @@ pub fn run_dev_node_with_rpc<
                         // Block production exited
                     }
                     _ = tokio::signal::ctrl_c() => {
-                        log::info!("Received Ctrl+C, initiating graceful shutdown...");
+                        tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                         context_for_shutdown
                             .stop(0, Some(Duration::from_secs(10)))
                             .await
@@ -366,16 +366,16 @@ pub fn run_dev_node_with_rpc<
                 }
 
                 let final_height = dev.height();
-                log::info!("Stopped at height: {}", final_height);
+                tracing::info!("Stopped at height: {}", final_height);
 
                 let chain_state = ChainState {
                     height: final_height,
                     genesis_result,
                 };
                 if let Err(e) = save_chain_state(dev.storage(), &chain_state).await {
-                    log::error!("Failed to save chain state: {}", e);
+                    tracing::error!("Failed to save chain state: {}", e);
                 } else {
-                    log::info!("Saved chain state at height {}", final_height);
+                    tracing::info!("Saved chain state at height {}", final_height);
                 }
 
                 None
@@ -383,9 +383,9 @@ pub fn run_dev_node_with_rpc<
 
             // Stop RPC server if running
             if let Some(handle) = rpc_handle {
-                log::info!("Stopping RPC server...");
+                tracing::info!("Stopping RPC server...");
                 handle.stop().expect("failed to stop RPC server");
-                log::info!("RPC server stopped");
+                tracing::info!("RPC server stopped");
             }
         }
     });
@@ -425,7 +425,7 @@ pub fn init_dev_node<
     BuildStorageFut:
         Future<Output = Result<S, Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
 {
-    log::info!("=== Evolve Dev Node (init) ===");
+    tracing::info!("=== Evolve Dev Node (init) ===");
     let data_dir = data_dir.as_ref();
     std::fs::create_dir_all(data_dir).expect("failed to create data directory");
 
@@ -457,7 +457,7 @@ pub fn init_dev_node<
                 .expect("failed to create storage");
 
             if load_chain_state::<G, _>(&storage).is_some() {
-                log::error!("State already initialized; refusing to re-run genesis");
+                tracing::error!("State already initialized; refusing to re-run genesis");
                 return;
             }
 
@@ -469,7 +469,7 @@ pub fn init_dev_node<
                 .await
                 .expect("genesis commit failed");
 
-            log::info!("Genesis complete. Result: {:?}", output.genesis_result);
+            tracing::info!("Genesis complete. Result: {:?}", output.genesis_result);
         }
     });
 }

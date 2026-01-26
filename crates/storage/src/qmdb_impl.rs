@@ -17,6 +17,9 @@
 //! - commit(metadata) → (Durable, Range) - returns tuple
 //! - into_merkleized() → Clean
 
+// Instant is used for performance metrics, not consensus-affecting logic.
+#![allow(clippy::disallowed_types)]
+
 use crate::cache::{CachedValue, ShardedDbCache};
 use crate::metrics::OptionalMetrics;
 use crate::types::{
@@ -93,13 +96,13 @@ impl From<ErrorCode> for StorageError {
 
 /// Maps QMDB errors to evolve error codes
 fn map_qmdb_error(err: impl std::fmt::Display) -> ErrorCode {
-    log::error!("QMDB error: {err}");
+    tracing::error!("QMDB error: {err}");
     crate::types::ERR_ADB_ERROR
 }
 
 /// Maps concurrency errors to evolve error codes
 fn map_concurrency_error(err: impl std::fmt::Display) -> ErrorCode {
-    log::error!("Concurrency error: {err}");
+    tracing::error!("Concurrency error: {err}");
     crate::types::ERR_CONCURRENCY_ERROR
 }
 
@@ -403,7 +406,7 @@ where
                 QmdbState::Mutable(_) => "Mutable",
                 QmdbState::Transitioning => "Transitioning",
             };
-            log::debug!(
+            tracing::debug!(
                 "get_async_uncached: state={}, key_len={}",
                 state_name,
                 key.len()
@@ -426,7 +429,7 @@ where
                     Some(data) => Ok(Some(data)),
                     None => {
                         // Invalid length prefix - treat as corrupted/absent
-                        log::warn!("Invalid value chunk format, treating as absent");
+                        tracing::warn!("Invalid value chunk format, treating as absent");
                         Ok(None)
                     }
                 }

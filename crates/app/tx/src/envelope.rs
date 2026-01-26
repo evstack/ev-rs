@@ -43,6 +43,26 @@ pub enum TxEnvelope {
 }
 
 impl TxEnvelope {
+    /// Encode the transaction to RLP bytes.
+    ///
+    /// Returns the same format that `decode` accepts:
+    /// - Legacy: RLP-encoded signed transaction
+    /// - EIP-1559: Type prefix (0x02) followed by RLP-encoded signed transaction
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            TxEnvelope::Legacy(tx) => {
+                let mut buf = Vec::new();
+                tx.rlp_encode(&mut buf);
+                buf
+            }
+            TxEnvelope::Eip1559(tx) => {
+                let mut buf = vec![tx_type::EIP1559];
+                tx.rlp_encode(&mut buf);
+                buf
+            }
+        }
+    }
+
     /// Decode a transaction from RLP-encoded bytes.
     ///
     /// Handles both legacy (untyped) and typed (EIP-2718) transactions.

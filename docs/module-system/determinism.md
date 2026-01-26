@@ -33,8 +33,8 @@ let map: Map<Key, Value> = Map::new(0);
 use std::time::{Instant, SystemTime};
 let now = SystemTime::now();
 
-// GOOD - use block time from BlockInfo module
-let block_time = block_info.get_time_unix_ms(env)?;
+// GOOD - use block time from environment or a block info account
+let block_time = env.block_time_ms();
 ```
 
 ### 3. Random Number Generation
@@ -93,8 +93,8 @@ The workspace is configured to warn/deny common non-deterministic patterns. Add 
 disallowed-types = [
     { path = "std::collections::HashMap", reason = "Non-deterministic iteration order" },
     { path = "std::collections::HashSet", reason = "Non-deterministic iteration order" },
-    { path = "std::time::Instant", reason = "Non-deterministic - use BlockInfo" },
-    { path = "std::time::SystemTime", reason = "Non-deterministic - use BlockInfo" },
+    { path = "std::time::Instant", reason = "Non-deterministic - use env.block_time_ms()" },
+    { path = "std::time::SystemTime", reason = "Non-deterministic - use env.block_time_ms()" },
 ]
 ```
 
@@ -115,12 +115,12 @@ All Evolve collections are deterministic by design:
 When you need "randomness" or unique values:
 
 ```rust
-// Use the Unique module for unique IDs
-let unique_id = unique_ref.next_unique_id(env)?;
+// Use a counter stored in your module for unique IDs
+let unique_id = self.counter.update(|c| Ok(c + 1), env)?;
 
-// Use block info for time-based logic
-let block_height = block_info.get_height(env)?;
-let block_time = block_info.get_time_unix_ms(env)?;
+// Use block info from environment for time-based logic
+let block_height = env.block_height();
+let block_time = env.block_time_ms();
 ```
 
 ## Testing for Determinism

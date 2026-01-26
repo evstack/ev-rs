@@ -149,9 +149,9 @@ impl<S: Storage> PersistentChainIndex<S> {
     pub fn initialize(&self) -> ChainIndexResult<()> {
         if let Some(latest) = self.load_latest_block_number()? {
             self.cache.set_latest_block_number(latest);
-            log::info!("Chain index initialized at block {}", latest);
+            tracing::info!("Chain index initialized at block {}", latest);
         } else {
-            log::info!("Chain index initialized (empty)");
+            tracing::info!("Chain index initialized (empty)");
         }
         Ok(())
     }
@@ -396,7 +396,7 @@ impl<S: Storage + 'static> ChainIndex for PersistentChainIndex<S> {
         self.cache
             .insert_block_with_data(block, transactions, receipts);
 
-        log::debug!("Stored block {} with hash {:?}", block_number, block_hash);
+        tracing::debug!("Stored block {} with hash {:?}", block_number, block_hash);
 
         Ok(())
     }

@@ -30,6 +30,9 @@
 //! });
 //! ```
 
+// Dev mode server - SystemTime used for block timestamps in non-production context.
+#![allow(clippy::disallowed_types)]
+
 use crate::block::{Block, BlockBuilder};
 use crate::error::ServerError;
 use alloy_primitives::{Address, B256};
@@ -386,9 +389,9 @@ where
                 build_index_data(&block, &result, &metadata);
 
             if let Err(e) = index.store_block(stored_block.clone(), stored_txs, stored_receipts) {
-                log::warn!("Failed to index block {}: {:?}", height, e);
+                tracing::warn!("Failed to index block {}: {:?}", height, e);
             } else {
-                log::debug!("Indexed block {}", height);
+                tracing::debug!("Indexed block {}", height);
 
                 // Publish new block to subscribers
                 if let Some(ref subs) = self.subscriptions {
@@ -398,7 +401,7 @@ where
             }
         }
 
-        log::info!(
+        tracing::info!(
             "Produced block {} with {} txs, {} gas used",
             height,
             tx_count,
@@ -446,22 +449,22 @@ where
         let mut ticker = tokio::time::interval(interval);
         ticker.tick().await; // First tick is immediate
 
-        log::info!("Block production started (interval: {:?})", interval);
+        tracing::info!("Block production started (interval: {:?})", interval);
 
         loop {
             tokio::select! {
                 result = &mut stopped => {
                     let code = result.unwrap_or(0);
-                    log::info!("Block production received shutdown signal (code: {})", code);
+                    tracing::info!("Block production received shutdown signal (code: {})", code);
                     break;
                 }
                 _ = ticker.tick() => {
                     match self.produce_block().await {
                         Ok(block) => {
-                            log::debug!("Auto-produced block {}", block.height);
+                            tracing::debug!("Auto-produced block {}", block.height);
                         }
                         Err(e) => {
-                            log::error!("Failed to produce block: {}", e);
+                            tracing::error!("Failed to produce block: {}", e);
                             // Continue trying - dev mode should be resilient
                         }
                     }
@@ -469,7 +472,7 @@ where
             }
         }
 
-        log::info!("Block production stopped at height {}", self.height());
+        tracing::info!("Block production stopped at height {}", self.height());
     }
 }
 
@@ -549,7 +552,7 @@ where
         let mut ticker = tokio::time::interval(interval);
         ticker.tick().await; // First tick is immediate
 
-        log::info!(
+        tracing::info!(
             "Block production with mempool started (interval: {:?})",
             interval
         );
@@ -558,7 +561,7 @@ where
             tokio::select! {
                 result = &mut stopped => {
                     let code = result.unwrap_or(0);
-                    log::info!("Block production received shutdown signal (code: {})", code);
+                    tracing::info!("Block production received shutdown signal (code: {})", code);
                     break;
                 }
                 _ = ticker.tick() => {
@@ -571,7 +574,7 @@ where
                     match result {
                         Ok(block) => {
                             if block.tx_count > 0 {
-                                log::info!(
+                                tracing::info!(
                                     "Produced block {} with {} txs ({} successful, {} failed)",
                                     block.height,
                                     block.tx_count,
@@ -579,11 +582,11 @@ where
                                     block.failed_txs
                                 );
                             } else {
-                                log::debug!("Produced empty block {}", block.height);
+                                tracing::debug!("Produced empty block {}", block.height);
                             }
                         }
                         Err(e) => {
-                            log::error!("Failed to produce block: {}", e);
+                            tracing::error!("Failed to produce block: {}", e);
                             // Continue trying - dev mode should be resilient
                         }
                     }
@@ -591,7 +594,7 @@ where
             }
         }
 
-        log::info!("Block production stopped at height {}", self.height());
+        tracing::info!("Block production stopped at height {}", self.height());
     }
 }
 

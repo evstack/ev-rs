@@ -654,7 +654,7 @@ impl<S: StateProvider> EthPubSubApiServer for EthRpcServer<S> {
             }
         });
 
-        log::debug!("Created subscription {} for {}", sub_id, kind);
+        tracing::debug!("Created subscription {} for {}", sub_id, kind);
         Ok(())
     }
 }
@@ -667,7 +667,7 @@ impl<S: StateProvider> EthRpcServer<S> {
         loop {
             tokio::select! {
                 _ = sink.closed() => {
-                    log::debug!("Subscription closed by client");
+                    tracing::debug!("Subscription closed by client");
                     break;
                 }
                 result = rx.recv() => {
@@ -679,7 +679,7 @@ impl<S: StateProvider> EthRpcServer<S> {
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            log::warn!("Subscription lagged by {} messages", n);
+                            tracing::warn!("Subscription lagged by {} messages", n);
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             break;
@@ -716,7 +716,7 @@ impl<S: StateProvider> EthRpcServer<S> {
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            log::warn!("Log subscription lagged by {} messages", n);
+                            tracing::warn!("Log subscription lagged by {} messages", n);
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             break;
@@ -748,7 +748,7 @@ impl<S: StateProvider> EthRpcServer<S> {
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            log::warn!("Pending tx subscription lagged by {} messages", n);
+                            tracing::warn!("Pending tx subscription lagged by {} messages", n);
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             break;
@@ -777,7 +777,7 @@ impl<S: StateProvider> EthRpcServer<S> {
                             }
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                            log::warn!("Sync subscription lagged by {} messages", n);
+                            tracing::warn!("Sync subscription lagged by {} messages", n);
                         }
                         Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                             break;

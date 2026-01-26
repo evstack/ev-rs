@@ -173,6 +173,7 @@ pub const fn crate_namespace() -> u8 {
 /* ───────────────────────────── Unit tests ──────────────────────────────── */
 
 #[cfg(all(test, feature = "error-decode"))]
+#[allow(clippy::disallowed_types)]
 mod test_duplicate_detection {
     use super::*;
     use std::collections::HashSet;

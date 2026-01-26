@@ -3,6 +3,9 @@
 //! This module captures a detailed log of all state changes and operations
 //! during simulation, enabling deterministic replay and debugging.
 
+// Debugging code - determinism requirements do not apply.
+#![allow(clippy::disallowed_types)]
+
 use evolve_core::AccountId;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

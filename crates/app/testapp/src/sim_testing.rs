@@ -1,4 +1,4 @@
-use crate::eoa::eoa_account::EoaAccountRef;
+use crate::eth_eoa::eth_eoa_account::EthEoaAccountRef;
 use crate::{
     build_stf, default_gas_config, do_genesis, install_account_codes, CustomStf, GenesisAccounts,
     TestTx, MINTER, PLACEHOLDER_ACCOUNT,
@@ -581,13 +581,23 @@ impl SimTestApp {
         self.sim.set_block_height(height);
     }
 
+    /// Create an EOA with a randomly generated Ethereum address.
     pub fn create_eoa(&mut self) -> AccountId {
+        let mut eth_address = [0u8; 20];
+        for byte in eth_address.iter_mut() {
+            *byte = self.sim.rng().gen::<u8>();
+        }
+        self.create_eoa_with_address(eth_address)
+    }
+
+    /// Create an EOA with a specific Ethereum address.
+    pub fn create_eoa_with_address(&mut self, eth_address: [u8; 20]) -> AccountId {
         let adapter = SimStorageAdapter::new(self.sim.storage());
         let block = BlockContext::new(self.sim.time().block_height(), 0);
         let (account_ref, state) = self
             .stf
             .system_exec(&adapter, &self.codes, block, |env| {
-                Ok(EoaAccountRef::initialize(env)?.0)
+                Ok(EthEoaAccountRef::initialize(eth_address, env)?.0)
             })
             .unwrap();
         self.sim

@@ -15,6 +15,11 @@
 //! Gas costs for storage operations are configured via [`StorageGasConfig`] when
 //! constructing the STF. See the [`gas`] module for details.
 
+// Instant is used for performance metrics, not consensus-affecting logic.
+#![allow(clippy::disallowed_types)]
+// Test module is in middle of file for logical grouping with model-based tests.
+#![allow(clippy::items_after_test_module)]
+
 pub mod errors;
 mod execution_scope;
 pub mod execution_state;

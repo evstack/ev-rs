@@ -419,5 +419,5 @@ See `docs/module-system/determinism.md` for full details.
 - `crates/app/sdk/core/src/lib.rs` - Core traits (`AccountCode`, `Environment`)
 - `crates/app/sdk/collections/src/` - Storage collections
 - `crates/app/sdk/x/token/src/lib.rs` - Reference implementation (Token)
-- `crates/app/sdk/x/escrow/src/lib.rs` - Another example (Escrow)
+- `crates/app/sdk/x/scheduler/src/lib.rs` - Block scheduling hooks (Scheduler)
 - `docs/module-system/` - Full documentation (architecture, storage, errors, testing, determinism)

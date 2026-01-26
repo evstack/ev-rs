@@ -1,3 +1,8 @@
+//! Property-based tests for collections.
+
+// Testing code - determinism requirements do not apply.
+#![allow(clippy::disallowed_types)]
+
 use crate::item::Item;
 use crate::map::Map;
 use crate::mocks::MockEnvironment;

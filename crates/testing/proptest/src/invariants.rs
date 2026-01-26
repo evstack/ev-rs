@@ -3,6 +3,9 @@
 //! Invariants are properties that must hold true at all times during
 //! system execution. They are checked after each block to detect violations.
 
+// Testing code - determinism requirements do not apply.
+#![allow(clippy::disallowed_types)]
+
 use evolve_core::{AccountId, ReadonlyKV};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

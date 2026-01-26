@@ -1,5 +1,8 @@
 //! Tests for schema generation via the account_impl macro.
 
+// Testing code - determinism requirements do not apply.
+#![allow(clippy::disallowed_types)]
+
 use std::collections::HashMap;
 use std::sync::Arc;
 

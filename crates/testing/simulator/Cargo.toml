@@ -9,6 +9,7 @@ description = "Deterministic simulation engine for Evolve SDK testing"
 
 [dependencies]
 evolve_core = { workspace = true }
+linkme = { version = "0.3", default-features = false, optional = true }
 evolve_stf_traits = { workspace = true }
 evolve_stf = { workspace = true, features = ["testing"] }
 evolve_testing = { workspace = true }
@@ -33,4 +34,4 @@ proptest = "1.4"
 
 [features]
 default = []
-error-decode = []  # For define_error! macro cfg compatibility
+error-decode = ["linkme", "evolve_core/error-decode"]

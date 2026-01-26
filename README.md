@@ -14,7 +14,7 @@ The goal of the project is to build a diverse ecosystem allowing applications to
 
 ## Features
 
-### Smart Contract Development
+### Account Development
 
 Define accounts with zero boilerplate using procedural macros:
 
@@ -80,14 +80,6 @@ Pre-built modules available out of the box:
 |--------|-------------|
 | `token` | Fungible token with mint/burn/transfer and supply management |
 | `scheduler` | Begin/end block hooks for scheduling block-level operations |
-| `gas` | Gas metering service |
-| `events` | Event emission system |
-| `escrow` | Asset escrow functionality |
-| `block_info` | Block header and metadata access |
-| `poa` | Proof of Authority validator management |
-| `unique` | Non-fungible asset management |
-| `ns` | Name service for account naming |
-| `share` | Share/LP token management |
 
 ## Crate Structure
 
@@ -279,13 +271,24 @@ observability:
 
 ## Claude Code Skills
 
-If you're using [Claude Code](https://claude.ai/claude-code), the following skills are available to help you work with this codebase:
+If you're using [Claude Code](https://claude.ai/claude-code), the following project-specific skills are available:
 
-| Skill | Command | Description |
-|-------|---------|-------------|
-| Code Review | `/code-review` | Review pull requests for correctness and style |
-| Commit | `/commit` | Create well-formatted git commits |
-| Fix Review | `/fix-review` | Verify commits address audit findings without introducing bugs |
+| Skill | Triggers | Description |
+|-------|----------|-------------|
+| **Module Development** | "write module", "create module", "account_impl" | Guide for writing Evolve modules with storage, events, and testing |
+| **Testing Guide** | "how to test", "TestApp", "SimTestApp" | Overview of testing infrastructure (MockEnv, TestApp, SimTestApp) |
+| **Simulator** | "use simulator", "deterministic test", "fault injection" | Deterministic simulation with time control and fault injection |
+| **Property Testing** | "property test", "proptest", "invariant testing" | Property-based testing with generators, invariants, and shrinking |
+| **Debugger** | "debug execution", "trace recording", "time travel debug" | Execution tracing and time-travel debugging for failing tests |
+| **STF Analysis** | "analyze STF", "check threading model", "find non-determinism" | Analyze State Transition Function for correctness issues |
+
+### Example Queries
+
+- **"How do I write a module?"** → Triggers `evolve-modules` skill with full guide
+- **"How do I test my module?"** → Triggers `evolve-testing` skill with TestApp/SimTestApp examples
+- **"Debug this failing test"** → Triggers `evolve-debugger` skill with trace recording instructions
+- **"Add property tests"** → Triggers `evolve-proptest` skill with generator and invariant examples
+- **"Analyze the STF for issues"** → Triggers `stf-analysis` skill with threading/determinism checklist
 
 ### Onboarding with Claude Code
 
@@ -294,8 +297,9 @@ When starting with the codebase, you can ask Claude Code to:
 1. **Explore the architecture**: "What is the codebase structure?" or "How does the STF work?"
 2. **Understand a module**: "Explain how the token module works"
 3. **Find code patterns**: "Where is transaction validation handled?"
-4. **Create new modules**: Use the SDK examples above as templates
-5. **Debug issues**: "Why is this test failing?" with the relevant error
+4. **Create new modules**: "How do I write a module?" for step-by-step guidance
+5. **Set up testing**: "How do I test my module?" for testing patterns
+6. **Debug issues**: "Debug this failing test" with trace recording
 
 Claude Code will use the Explore agent to navigate the codebase and provide context-aware answers.
 
