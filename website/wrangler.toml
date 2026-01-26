@@ -1,7 +1,0 @@
-# Cloudflare Pages configuration
-name = "evolve-docs"
-pages_build_output_dir = "dist"
-compatibility_date = "2025-01-26"
-
-[vars]
-NODE_VERSION = "22"

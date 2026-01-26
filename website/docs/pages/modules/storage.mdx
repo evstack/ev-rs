@@ -2,6 +2,72 @@
 
 Evolve provides type-safe, collision-free storage primitives for module state.
 
+## Storage Patterns
+
+There are two patterns for defining storage:
+
+### Static Storage (Simple)
+
+For straightforward modules, use static storage with byte prefixes:
+
+```rust
+use evolve_collections::{Item, Map};
+
+static CONFIG: Item<Config> = Item::new(b"config");
+static BALANCES: Map<AccountId, u128> = Map::new(b"bal");
+```
+
+### AccountState Derive (Recommended)
+
+For compile-time validation and struct-based organization:
+
+```rust
+#[derive(evolve_core::AccountState)]
+pub struct MyModule {
+    #[storage(0)]
+    pub counter: Item<u64>,
+    #[storage(1)]
+    pub balances: Map<AccountId, u128>,
+    #[storage(2)]
+    pub metadata: Item<String>,
+}
+```
+
+Benefits of AccountState:
+- **Compile-time validation** - Duplicate prefixes are caught at build time
+- **Refactor safety** - Reordering fields doesn't change storage layout
+- **Migration safety** - Adding new fields doesn't corrupt existing data
+
+### Multi-Prefix Collections
+
+Some collections require multiple prefixes:
+
+| Collection | Prefixes | Example |
+|------------|----------|---------|
+| `Item<T>` | 1 | `Item::new(0)` |
+| `Map<K,V>` | 1 | `Map::new(0)` |
+| `Vector<T>` | 2 | `Vector::new(0, 1)` |
+| `Queue<T>` | 2 | `Queue::new(0, 1)` |
+| `UnorderedMap<K,V>` | 4 | `UnorderedMap::new(0, 1, 2, 3)` |
+
+For multi-prefix collections, use manual initialization:
+
+```rust
+pub struct ComplexModule {
+    validators: UnorderedMap<AccountId, Validator>,
+    changes: Vector<Change>,
+}
+
+impl ComplexModule {
+    pub const fn new() -> Self {
+        Self {
+            validators: UnorderedMap::new(0, 1, 2, 3),
+            changes: Vector::new(4, 5),
+        }
+    }
+}
+```
+
 ## Collection Types
 
 ### Item
@@ -191,10 +257,25 @@ let balance = BALANCES.get(env, specific_account)?;
 // let all = BALANCES.iter(env)?.collect::<Vec<_>>();
 ```
 
+## Helper Fields
+
+For stateless helper types (like `EventsEmitter`), use `#[skip_storage]`:
+
+```rust
+#[derive(evolve_core::AccountState)]
+pub struct MyModule {
+    #[storage(0)]
+    pub data: Item<Data>,
+    #[skip_storage]
+    pub events: EventsEmitter,  // Initialized with Type::new()
+}
+```
+
 ## Size Limits
 
 | Limit | Value |
 |-------|-------|
 | Max key size | 254 bytes |
 | Max value size | 1 MB |
-| Max overlay entries | 100,000 |
+| Max overlay entries | 100,000 per transaction |
+| Max events | 10,000 per execution |

@@ -162,6 +162,38 @@ fn test_with_simulation() {
 }
 ```
 
+## Testing Determinism
+
+Run the same test multiple times and verify identical results:
+
+```rust
+#[test]
+fn test_determinism() {
+    for _ in 0..100 {
+        let result = execute_module_logic();
+        assert_eq!(result, EXPECTED_VALUE);
+    }
+}
+```
+
+## Testing Overflow Protection
+
+```rust
+#[test]
+fn test_overflow_protection() {
+    let mut env = setup_env();
+    let module = MyModule::default();
+
+    // Set balance near u128::MAX
+    module.set_balance(u128::MAX - 10, &mut env).unwrap();
+
+    // Adding 100 should overflow
+    let result = module.add_balance(100, &mut env);
+
+    assert!(matches!(result, Err(e) if e == ERR_OVERFLOW));
+}
+```
+
 ## Best Practices
 
 1. **Test both success and failure paths**
@@ -169,3 +201,4 @@ fn test_with_simulation() {
 3. **Test authorization for all privileged functions**
 4. **Test edge cases** (zero, max values, empty collections)
 5. **Test determinism** by running tests multiple times
+6. **Test overflow protection** for all arithmetic operations
