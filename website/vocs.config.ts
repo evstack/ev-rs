@@ -69,11 +69,19 @@ export default defineConfig({
       ],
     },
     {
+      text: 'Clients',
+      collapsed: false,
+      items: [
+        { text: 'Building a Client', link: '/clients/building-a-client' },
+      ],
+    },
+    {
       text: 'Ethereum Compatibility',
       collapsed: true,
       items: [
         { text: 'Transactions', link: '/ethereum/transactions' },
         { text: 'Wallet Integration', link: '/ethereum/wallets' },
+        { text: 'JSON-RPC API', link: '/apis/json-rpc' },
       ],
     },
     {

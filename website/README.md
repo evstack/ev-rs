@@ -45,7 +45,24 @@ website/
 
 ## Deployment
 
-Build outputs to `dist/`. Deploy to any static hosting:
+Build outputs to `dist/`. Deploy to any static hosting.
+
+### Cloudflare Pages
+
+**Via Git integration (recommended):**
+1. Connect repo to Cloudflare Pages
+2. Set build command: `bun run build`
+3. Set output directory: `dist`
+4. Set root directory: `website`
+5. Leave deploy command blank
+
+**Via CLI:**
+```bash
+bun run build
+npx wrangler pages deploy dist --project-name=evolve-docs
+```
+
+### Other Platforms
 
 - Vercel: `bunx vercel`
 - Netlify: Point to `dist/` directory
