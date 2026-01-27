@@ -31,5 +31,8 @@ pub use api::{EthApiServer, EthPubSubApiServer, NetApiServer, Web3ApiServer};
 pub use error::{RpcError, RpcResult};
 pub use health::HealthStatus;
 pub use metrics_middleware::{encode_metrics, MetricsLayer, MetricsService};
-pub use server::{start_server, EthRpcServer, NoopStateProvider, RpcServerConfig, StateProvider};
+pub use server::{
+    start_server, start_server_with_subscriptions, EthRpcServer, NoopStateProvider,
+    RpcServerConfig, StateProvider,
+};
 pub use subscriptions::{SharedSubscriptionManager, SubscriptionKind, SubscriptionManager};

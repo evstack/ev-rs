@@ -11,7 +11,7 @@ use evolve_core::{
     AccountId, BlockContext, Environment, InvokeResponse, ReadonlyKV, SdkResult, ERR_ENCODING,
 };
 use evolve_fungible_asset::FungibleAssetMetadata;
-use evolve_mempool::MempoolTransaction;
+use evolve_mempool::TxContext;
 use evolve_scheduler::scheduler_account::{Scheduler, SchedulerRef};
 use evolve_scheduler::server::{SchedulerBeginBlocker, SchedulerEndBlocker};
 use evolve_server::Block;
@@ -40,9 +40,9 @@ impl PostTxExecution<TestTx> for NoOpPostTx {
 
 pub struct MempoolNoOpPostTx;
 
-impl PostTxExecution<MempoolTransaction> for MempoolNoOpPostTx {
+impl PostTxExecution<TxContext> for MempoolNoOpPostTx {
     fn after_tx_executed(
-        _tx: &MempoolTransaction,
+        _tx: &TxContext,
         _gas_consumed: u64,
         _tx_result: SdkResult<InvokeResponse>,
         _env: &mut dyn Environment,
@@ -60,12 +60,12 @@ pub type CustomStf = Stf<
     NoOpPostTx,
 >;
 
-/// STF type for MempoolTransaction (Ethereum transactions via mempool).
+/// STF type for TxContext (Ethereum transactions via mempool).
 pub type MempoolStf = Stf<
-    MempoolTransaction,
-    Block<MempoolTransaction>,
+    TxContext,
+    Block<TxContext>,
     SchedulerBeginBlocker,
-    AuthenticationTxValidator<MempoolTransaction>,
+    AuthenticationTxValidator<TxContext>,
     SchedulerEndBlocker,
     MempoolNoOpPostTx,
 >;
@@ -91,7 +91,7 @@ pub fn build_stf(gas_config: StorageGasConfig, scheduler_id: AccountId) -> Custo
     )
 }
 
-/// Build an STF for MempoolTransaction (Ethereum transactions).
+/// Build an STF for TxContext (Ethereum transactions).
 pub fn build_mempool_stf(gas_config: StorageGasConfig, scheduler_id: AccountId) -> MempoolStf {
     MempoolStf::new(
         SchedulerBeginBlocker::new(scheduler_id),

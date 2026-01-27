@@ -13,8 +13,9 @@ use alloy_primitives::{Address, B256};
 use tokio::sync::RwLock;
 
 use crate::error::{MempoolError, MempoolResult};
-use crate::tx::MempoolTransaction;
-use evolve_tx::{EcdsaVerifier, TxEnvelope, TypedTransaction};
+use crate::tx::TxContext;
+use evolve_stf_traits::TxDecoder;
+use evolve_tx::{SignatureVerifierRegistry, TxEnvelope, TypedTransaction, TypedTxDecoder};
 
 /// A transaction ordered by gas price (highest first).
 #[derive(Clone)]
@@ -60,15 +61,17 @@ impl Ord for GasPricedTx {
 /// ordered by effective gas price for block production.
 pub struct Mempool {
     /// Transactions indexed by hash.
-    by_hash: HashMap<B256, Arc<MempoolTransaction>>,
+    by_hash: HashMap<B256, Arc<TxContext>>,
     /// Priority queue ordered by gas price (highest first).
     by_gas_price: BinaryHeap<GasPricedTx>,
     /// Transactions by sender, ordered by nonce.
     by_sender: HashMap<Address, BTreeMap<u64, B256>>,
     /// Chain ID for validation.
     chain_id: u64,
-    /// Signature/chain ID verifier.
-    verifier: EcdsaVerifier,
+    /// Transaction decoder (type filtering).
+    decoder: TypedTxDecoder,
+    /// Signature/chain ID verifier registry.
+    verifier: SignatureVerifierRegistry,
     /// Current base fee for effective gas price calculation.
     base_fee: u128,
 }
@@ -81,7 +84,8 @@ impl Mempool {
             by_gas_price: BinaryHeap::new(),
             by_sender: HashMap::new(),
             chain_id,
-            verifier: EcdsaVerifier::new(chain_id),
+            decoder: TypedTxDecoder::ethereum(),
+            verifier: SignatureVerifierRegistry::ethereum(chain_id),
             base_fee: 0,
         }
     }
@@ -93,7 +97,8 @@ impl Mempool {
             by_gas_price: BinaryHeap::new(),
             by_sender: HashMap::new(),
             chain_id,
-            verifier: EcdsaVerifier::new(chain_id),
+            decoder: TypedTxDecoder::ethereum(),
+            verifier: SignatureVerifierRegistry::ethereum(chain_id),
             base_fee,
         }
     }
@@ -130,9 +135,17 @@ impl Mempool {
     /// Decodes, validates signature/chain ID, and inserts into the pool.
     /// Returns the transaction hash on success.
     pub fn add_raw(&mut self, raw: &[u8]) -> MempoolResult<B256> {
-        // Decode the transaction
-        let envelope =
-            TxEnvelope::decode(raw).map_err(|e| MempoolError::DecodeFailed(format!("{:?}", e)))?;
+        // Decode the transaction with type filtering
+        let mut input = raw;
+        let envelope = self
+            .decoder
+            .decode(&mut input)
+            .map_err(|e| MempoolError::DecodeFailed(format!("{:?}", e)))?;
+        if !input.is_empty() {
+            return Err(MempoolError::DecodeFailed(
+                "trailing bytes after transaction decode".to_string(),
+            ));
+        }
 
         self.add_envelope(envelope)
     }
@@ -141,7 +154,7 @@ impl Mempool {
     pub fn add_envelope(&mut self, envelope: TxEnvelope) -> MempoolResult<B256> {
         // Verify chain ID
         self.verifier
-            .verify_chain_id_for_tx(&envelope)
+            .verify(&envelope)
             .map_err(|_| match envelope.chain_id() {
                 Some(id) => MempoolError::InvalidChainId {
                     expected: self.chain_id,
@@ -158,7 +171,7 @@ impl Mempool {
         }
 
         // Create mempool transaction
-        let tx = MempoolTransaction::new(envelope, self.base_fee)
+        let tx = TxContext::new(envelope, self.base_fee)
             .ok_or(MempoolError::ContractCreationNotSupported)?;
 
         let sender = tx.sender_address();
@@ -183,7 +196,7 @@ impl Mempool {
     }
 
     /// Get a transaction by hash.
-    pub fn get(&self, hash: &B256) -> Option<Arc<MempoolTransaction>> {
+    pub fn get(&self, hash: &B256) -> Option<Arc<TxContext>> {
         self.by_hash.get(hash).cloned()
     }
 
@@ -195,7 +208,7 @@ impl Mempool {
     /// Remove a transaction by hash.
     ///
     /// Returns the removed transaction if it existed.
-    pub fn remove(&mut self, hash: &B256) -> Option<Arc<MempoolTransaction>> {
+    pub fn remove(&mut self, hash: &B256) -> Option<Arc<TxContext>> {
         let tx = self.by_hash.remove(hash)?;
 
         // Remove from sender index
@@ -225,7 +238,7 @@ impl Mempool {
     ///
     /// Returns transactions ordered by effective gas price (highest first),
     /// skipping any that have been removed.
-    pub fn select(&mut self, limit: usize) -> Vec<Arc<MempoolTransaction>> {
+    pub fn select(&mut self, limit: usize) -> Vec<Arc<TxContext>> {
         let mut selected = Vec::with_capacity(limit);
 
         while selected.len() < limit {
@@ -245,7 +258,7 @@ impl Mempool {
     }
 
     /// Peek at the highest priority transaction without removing it.
-    pub fn peek(&self) -> Option<Arc<MempoolTransaction>> {
+    pub fn peek(&self) -> Option<Arc<TxContext>> {
         // We can't easily peek with stale entry handling, so just get from hash map
         // This is O(n) but peek is rarely used
         self.by_gas_price

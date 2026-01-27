@@ -17,6 +17,7 @@ tokio = { workspace = true }
 alloy-primitives = { workspace = true }
 
 evolve_core = { workspace = true }
+evolve_mempool = { workspace = true }
 evolve_server = { workspace = true }
 evolve_stf_traits = { workspace = true }
 evolve_storage = { workspace = true }

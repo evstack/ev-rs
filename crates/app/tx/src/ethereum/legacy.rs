@@ -5,6 +5,7 @@ use alloy_primitives::{keccak256, Address, B256, U256};
 use evolve_core::{InvokeRequest, SdkResult};
 
 use crate::error::ERR_SIGNATURE_RECOVERY;
+use crate::ethereum::invoke_request_from_input;
 use crate::traits::TypedTransaction;
 
 /// A signed legacy Ethereum transaction with cached sender.
@@ -117,9 +118,10 @@ impl TypedTransaction for SignedLegacyTx {
     }
 
     fn to_invoke_requests(&self) -> Vec<InvokeRequest> {
-        // For now, return empty - this will be implemented when we define
-        // how Ethereum calldata maps to InvokeRequest
-        // TODO: Define calldata -> InvokeRequest encoding
-        vec![]
+        if self.to().is_none() {
+            return vec![];
+        }
+
+        vec![invoke_request_from_input(self.input())]
     }
 }

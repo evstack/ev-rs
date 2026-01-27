@@ -32,7 +32,7 @@ pub use dev::{DevConfig, DevConsensus, NoopChainIndex, ProducedBlock, StfExecuto
 pub use error::ServerError;
 pub use evolve_mempool::{
     new_shared_mempool, new_shared_mempool_with_base_fee, Mempool, MempoolError, MempoolResult,
-    MempoolTransaction, SharedMempool,
+    SharedMempool, TxContext,
 };
 pub use persistence::{load_chain_state, save_chain_state, ChainState, CHAIN_STATE_KEY};
 

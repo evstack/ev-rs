@@ -40,7 +40,7 @@ use commonware_runtime::Spawner;
 use evolve_chain_index::{build_index_data, BlockMetadata, ChainIndex};
 use evolve_core::ReadonlyKV;
 use evolve_eth_jsonrpc::SharedSubscriptionManager;
-use evolve_mempool::{MempoolTransaction, SharedMempool};
+use evolve_mempool::{SharedMempool, TxContext};
 use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::results::BlockResult;
 use evolve_stf_traits::{AccountsCodeStorage, PostTxExecution, Transaction, TxValidator};
@@ -224,6 +224,30 @@ impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             config,
             state: DevState::new(initial_height),
             mempool: None,
+            chain_index: Some(chain_index),
+            subscriptions: Some(subscriptions),
+            _tx: std::marker::PhantomData,
+        }
+    }
+
+    /// Create a new dev consensus engine with RPC support and a mempool.
+    pub fn with_rpc_and_mempool(
+        stf: Stf,
+        storage: S,
+        codes: Codes,
+        config: DevConfig,
+        chain_index: Arc<I>,
+        subscriptions: SharedSubscriptionManager,
+        mempool: SharedMempool,
+    ) -> Self {
+        let initial_height = config.initial_height;
+        Self {
+            stf,
+            storage,
+            codes,
+            config,
+            state: DevState::new(initial_height),
+            mempool: Some(mempool),
             chain_index: Some(chain_index),
             subscriptions: Some(subscriptions),
             _tx: std::marker::PhantomData,
@@ -476,15 +500,15 @@ where
     }
 }
 
-/// Specialized implementation for MempoolTransaction-based block production.
+/// Specialized implementation for TxContext-based block production.
 ///
 /// When using the mempool, the DevConsensus should be instantiated with
-/// `Tx = MempoolTransaction` to enable automatic transaction sourcing.
-impl<Stf, S, Codes, I> DevConsensus<Stf, S, Codes, MempoolTransaction, I>
+/// `Tx = TxContext` to enable automatic transaction sourcing.
+impl<Stf, S, Codes, I> DevConsensus<Stf, S, Codes, TxContext, I>
 where
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
-    Stf: StfExecutor<MempoolTransaction, S, Codes> + Send + Sync + 'static,
+    Stf: StfExecutor<TxContext, S, Codes> + Send + Sync + 'static,
     I: ChainIndex + 'static,
 {
     /// Produce a block with transactions from the mempool.
@@ -511,8 +535,8 @@ where
         // Get transaction hashes before converting (for removal after block production)
         let tx_hashes: Vec<_> = selected.iter().map(|tx| tx.hash()).collect();
 
-        // Convert Arc<MempoolTransaction> to MempoolTransaction
-        let transactions: Vec<MempoolTransaction> = selected
+        // Convert Arc<TxContext> to TxContext
+        let transactions: Vec<TxContext> = selected
             .into_iter()
             .map(|arc_tx| (*arc_tx).clone())
             .collect();

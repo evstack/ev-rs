@@ -809,6 +809,27 @@ pub async fn start_server<S: StateProvider>(
     Ok(handle)
 }
 
+/// Start the RPC server with a shared subscription manager.
+pub async fn start_server_with_subscriptions<S: StateProvider>(
+    config: RpcServerConfig,
+    state: S,
+    subscriptions: SharedSubscriptionManager,
+) -> Result<ServerHandle, Box<dyn std::error::Error + Send + Sync>> {
+    let server = Server::builder().build(config.http_addr).await?;
+
+    let eth_rpc = EthRpcServer::with_subscription_manager(config, state, subscriptions);
+    let mut module = RpcModule::new(());
+
+    module.merge(EthApiServer::into_rpc(eth_rpc.clone()))?;
+    module.merge(Web3ApiServer::into_rpc(eth_rpc.clone()))?;
+    module.merge(NetApiServer::into_rpc(eth_rpc.clone()))?;
+    module.merge(EvolveApiServer::into_rpc(eth_rpc.clone()))?;
+    module.merge(EthPubSubApiServer::into_rpc(eth_rpc))?;
+
+    let handle = server.start(module);
+    Ok(handle)
+}
+
 // Need Clone for the RPC server to be used in multiple places
 impl<S: StateProvider> Clone for EthRpcServer<S> {
     fn clone(&self) -> Self {

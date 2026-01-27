@@ -35,4 +35,4 @@ mod tx;
 
 pub use error::{MempoolError, MempoolResult};
 pub use pool::{new_shared_mempool, new_shared_mempool_with_base_fee, Mempool, SharedMempool};
-pub use tx::MempoolTransaction;
+pub use tx::TxContext;

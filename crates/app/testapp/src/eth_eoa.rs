@@ -1,6 +1,6 @@
 //! Ethereum-compatible EOA account for mempool transactions.
 //!
-//! This account type authenticates `MempoolTransaction` by verifying that the
+//! This account type authenticates `TxContext` by verifying that the
 //! recovered sender address matches the account's Ethereum address.
 //!
 //! # Authentication Model
@@ -22,7 +22,7 @@ pub mod eth_eoa_account {
     use evolve_collections::item::Item;
     use evolve_core::{Environment, Message, SdkResult};
     use evolve_macros::{exec, init, query};
-    use evolve_mempool::MempoolTransaction;
+    use evolve_mempool::TxContext;
 
     /// An Ethereum-compatible externally owned account.
     ///
@@ -84,7 +84,7 @@ pub mod eth_eoa_account {
     impl AuthenticationInterface for EthEoaAccount {
         /// Authenticate a transaction.
         ///
-        /// For MempoolTransaction (Ethereum transactions):
+        /// For TxContext (Ethereum transactions):
         /// 1. Verifies the recovered sender address matches this account's address
         /// 2. Increments nonce
         ///
@@ -92,8 +92,8 @@ pub mod eth_eoa_account {
         /// - Just increments nonce (test mode, no signature verification)
         #[exec]
         fn authenticate(&self, tx: Message, env: &mut dyn Environment) -> SdkResult<()> {
-            // Try to decode as MempoolTransaction for full verification
-            if let Ok(mempool_tx) = tx.get::<MempoolTransaction>() {
+            // Try to decode as TxContext for full verification
+            if let Ok(mempool_tx) = tx.get::<TxContext>() {
                 // Get the sender address from the recovered signature
                 let sender_bytes: [u8; 20] = mempool_tx.sender_address().into();
 

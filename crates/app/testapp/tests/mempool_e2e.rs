@@ -11,8 +11,8 @@ use alloy_consensus::{SignableTransaction, TxEip1559};
 use alloy_primitives::{Bytes, PrimitiveSignature, TxKind, U256};
 use async_trait::async_trait;
 use evolve_core::{AccountId, ErrorCode, ReadonlyKV};
-use evolve_mempool::new_shared_mempool;
-use evolve_server::{DevConfig, DevConsensus, NoopChainIndex};
+use evolve_node::build_dev_node_with_mempool;
+use evolve_server::DevConfig;
 use evolve_storage::{CommitHash, Operation};
 use evolve_testapp::{
     build_mempool_stf, default_gas_config, do_eth_genesis, install_account_codes,
@@ -22,7 +22,7 @@ use evolve_tx::account_id_to_address;
 use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::RwLock;
 use tiny_keccak::{Hasher, Keccak};
 
 // ============================================================================
@@ -286,7 +286,7 @@ async fn test_token_transfer_e2e() {
     init_storage.init_eth_eoa_storage(alice_account_id, alice_address.into());
     init_storage.init_eth_eoa_storage(bob_account_id, bob_address.into());
 
-    // Build STF for MempoolTransaction
+    // Build STF for TxContext
     let gas_config = default_gas_config();
     let stf = build_mempool_stf(gas_config.clone(), AccountId::new(0));
 
@@ -308,23 +308,15 @@ async fn test_token_transfer_e2e() {
     // Rebuild STF with correct scheduler ID
     let stf = build_mempool_stf(gas_config, genesis_accounts.scheduler);
 
-    // Create mempool
-    let mempool = new_shared_mempool(chain_id);
-
-    // Create DevConsensus with mempool
     let config = DevConfig {
         block_interval: None, // Manual block production
         gas_limit: 30_000_000,
         initial_height: 1,
         chain_id,
     };
-    let dev: Arc<DevConsensus<_, _, _, _, NoopChainIndex>> = Arc::new(DevConsensus::with_mempool(
-        stf,
-        storage,
-        codes,
-        config,
-        mempool.clone(),
-    ));
+    let handles = build_dev_node_with_mempool(stf, storage, codes, config);
+    let dev = handles.dev;
+    let mempool = handles.mempool;
 
     // Read initial state
     let alice_nonce_before = read_nonce(dev.storage(), alice_account_id);
