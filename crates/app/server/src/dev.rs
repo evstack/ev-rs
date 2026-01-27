@@ -388,10 +388,12 @@ where
             .batch(operations)
             .await
             .map_err(|e| ServerError::Storage(format!("batch failed: {:?}", e)))?;
-        self.storage
+        let commit_hash = self
+            .storage
             .commit()
             .await
             .map_err(|e| ServerError::Storage(format!("commit failed: {:?}", e)))?;
+        let state_root = B256::from_slice(commit_hash.as_bytes());
 
         // Update state
         *self.state.last_hash.write().await = block_hash;
@@ -402,7 +404,7 @@ where
             let metadata = BlockMetadata::new(
                 block_hash,
                 parent_hash,
-                B256::ZERO, // TODO: Compute actual state root
+                state_root,
                 timestamp,
                 self.config.gas_limit,
                 Address::ZERO, // No miner in dev mode

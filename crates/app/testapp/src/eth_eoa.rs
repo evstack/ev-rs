@@ -88,7 +88,7 @@ pub mod eth_eoa_account {
         /// 1. Verifies the recovered sender address matches this account's address
         /// 2. Increments nonce
         ///
-        /// For other transaction types (e.g., TestTx):
+        /// For other transaction types:
         /// - Just increments nonce (test mode, no signature verification)
         #[exec]
         fn authenticate(&self, tx: Message, env: &mut dyn Environment) -> SdkResult<()> {
@@ -103,7 +103,7 @@ pub mod eth_eoa_account {
                     return Err(evolve_core::ErrorCode::new(0x51)); // Sender mismatch
                 }
             }
-            // For other tx types (TestTx, etc.), skip verification (test mode)
+            // For other tx types, skip verification (test mode)
 
             // Increment nonce
             self.nonce.update(|v| Ok(v.unwrap_or_default() + 1), env)?;

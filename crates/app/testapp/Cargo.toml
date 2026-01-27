@@ -24,6 +24,10 @@ evolve_node.workspace = true
 evolve_mempool.workspace = true
 evolve_tx.workspace = true
 alloy-primitives.workspace = true
+alloy-consensus = { workspace = true, features = ["k256"] }
+k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
+rand = "0.8"
+tiny-keccak = { version = "2.0", features = ["keccak"] }
 
 borsh.workspace = true
 tracing = { workspace = true }
@@ -44,15 +48,11 @@ commonware-runtime.workspace = true
 tempfile = "3.8"
 criterion = "0.5"
 serde_json = "1.0"
-alloy-consensus = { workspace = true, features = ["k256"] }
 alloy-primitives = { workspace = true }
 async-trait = { workspace = true }
 evolve_mempool = { workspace = true }
 evolve_tx = { workspace = true }
-k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
-rand = "0.8"
 hex = "0.4"
-tiny-keccak = { version = "2.0", features = ["keccak"] }
 
 [[bench]]
 name = "stf_bench"

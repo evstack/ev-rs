@@ -1,18 +1,15 @@
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
-use evolve_debugger::{StateSnapshot, TraceBuilder};
-use evolve_fungible_asset::TransferMsg;
-use evolve_server::Block;
+use evolve_debugger::ExecutionTrace;
 use evolve_simulator::SimConfig;
 use evolve_testapp::sim_testing::SimTestApp;
-use evolve_testapp::TestTx;
 
-fn make_transfer_block(
-    height: u64,
+fn make_transfer_txs(
+    app: &mut SimTestApp,
     tx_count: usize,
     atom_id: evolve_core::AccountId,
     alice: evolve_core::AccountId,
     bob: evolve_core::AccountId,
-) -> Block<TestTx> {
+) -> Vec<Vec<u8>> {
     let mut txs = Vec::with_capacity(tx_count);
     for i in 0..tx_count {
         let (sender, recipient) = if i % 2 == 0 {
@@ -20,49 +17,33 @@ fn make_transfer_block(
         } else {
             (bob, alice)
         };
-        let request = evolve_core::InvokeRequest::new(&TransferMsg {
-            to: recipient,
-            amount: 1,
-        })
-        .expect("request");
-        txs.push(TestTx {
-            sender,
-            recipient: atom_id,
-            request,
-            gas_limit: 100_000,
-            funds: Vec::new(),
-        });
+        let raw = app
+            .build_token_transfer_tx(sender, atom_id, recipient, 1, 100_000)
+            .expect("build tx");
+        txs.push(raw);
     }
 
-    Block::for_testing(height, txs)
+    txs
 }
 
-fn make_cold_transfer_block(
-    height: u64,
+fn make_cold_transfer_txs(
+    app: &mut SimTestApp,
     tx_count: usize,
     atom_id: evolve_core::AccountId,
     accounts: &[evolve_core::AccountId],
-) -> Block<TestTx> {
+) -> Vec<Vec<u8>> {
     let mut txs = Vec::with_capacity(tx_count);
     let count = accounts.len();
     for i in 0..tx_count {
         let sender = accounts[i % count];
         let recipient = accounts[(i + 1) % count];
-        let request = evolve_core::InvokeRequest::new(&TransferMsg {
-            to: recipient,
-            amount: 1,
-        })
-        .expect("request");
-        txs.push(TestTx {
-            sender,
-            recipient: atom_id,
-            request,
-            gas_limit: 100_000,
-            funds: Vec::new(),
-        });
+        let raw = app
+            .build_token_transfer_tx(sender, atom_id, recipient, 1, 100_000)
+            .expect("build tx");
+        txs.push(raw);
     }
 
-    Block::for_testing(height, txs)
+    txs
 }
 
 fn bench_apply_block(c: &mut Criterion) {
@@ -71,16 +52,17 @@ fn bench_apply_block(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(tx_count), &tx_count, |b, &n| {
             b.iter_batched(
                 || {
-                    let app = SimTestApp::with_config(SimConfig::replay(), 42);
+                    let mut app = SimTestApp::with_config(SimConfig::replay(), 42);
                     let accounts = app.accounts();
-                    let height = app.simulator().time().block_height();
-                    let block =
-                        make_transfer_block(height, n, accounts.atom, accounts.alice, accounts.bob);
-                    (app, block)
+                    let txs =
+                        make_transfer_txs(&mut app, n, accounts.atom, accounts.alice, accounts.bob);
+                    (app, txs)
                 },
-                |(mut app, block)| {
-                    app.apply_block(&block);
-                    app.next_block();
+                |(mut app, txs)| {
+                    for raw_tx in &txs {
+                        app.submit_raw_tx(raw_tx).expect("submit tx");
+                    }
+                    app.produce_block_from_mempool(n);
                 },
                 BatchSize::SmallInput,
             );
@@ -95,22 +77,15 @@ fn bench_apply_block_with_trace(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::from_parameter(tx_count), &tx_count, |b, &n| {
             b.iter_batched(
                 || {
-                    let app = SimTestApp::with_config(SimConfig::replay(), 42);
+                    let mut app = SimTestApp::with_config(SimConfig::replay(), 42);
                     let accounts = app.accounts();
-                    let height = app.simulator().time().block_height();
-                    let block =
-                        make_transfer_block(height, n, accounts.atom, accounts.alice, accounts.bob);
-                    let snapshot = StateSnapshot::from_data(
-                        app.simulator().storage().snapshot().data,
-                        app.simulator().time().block_height(),
-                        app.simulator().time().now_ms(),
-                    );
-                    let builder = TraceBuilder::new(app.simulator().seed_info().seed, snapshot);
-                    (app, block, builder)
+                    let txs =
+                        make_transfer_txs(&mut app, n, accounts.atom, accounts.alice, accounts.bob);
+                    (app, txs)
                 },
-                |(mut app, block, mut builder)| {
-                    app.apply_block_with_trace(&block, &mut builder);
-                    app.next_block();
+                |(mut app, txs)| {
+                    let (_results, _trace): (Vec<_>, ExecutionTrace) =
+                        app.run_blocks_with_trace(1, |_height, _app| txs.clone());
                 },
                 BatchSize::SmallInput,
             );
@@ -125,16 +100,17 @@ fn bench_apply_block_hot_cold(c: &mut Criterion) {
         group.bench_with_input(BenchmarkId::new("hot", tx_count), &tx_count, |b, &n| {
             b.iter_batched(
                 || {
-                    let app = SimTestApp::with_config(SimConfig::replay(), 42);
+                    let mut app = SimTestApp::with_config(SimConfig::replay(), 42);
                     let accounts = app.accounts();
-                    let height = app.simulator().time().block_height();
-                    let block =
-                        make_transfer_block(height, n, accounts.atom, accounts.alice, accounts.bob);
-                    (app, block)
+                    let txs =
+                        make_transfer_txs(&mut app, n, accounts.atom, accounts.alice, accounts.bob);
+                    (app, txs)
                 },
-                |(mut app, block)| {
-                    app.apply_block(&block);
-                    app.next_block();
+                |(mut app, txs)| {
+                    for raw_tx in &txs {
+                        app.submit_raw_tx(raw_tx).expect("submit tx");
+                    }
+                    app.produce_block_from_mempool(n);
                 },
                 BatchSize::SmallInput,
             );
@@ -151,13 +127,14 @@ fn bench_apply_block_hot_cold(c: &mut Criterion) {
                         app.mint_atom(account, 1000);
                         participants.push(account);
                     }
-                    let height = app.simulator().time().block_height();
-                    let block = make_cold_transfer_block(height, n, accounts.atom, &participants);
-                    (app, block)
+                    let txs = make_cold_transfer_txs(&mut app, n, accounts.atom, &participants);
+                    (app, txs)
                 },
-                |(mut app, block)| {
-                    app.apply_block(&block);
-                    app.next_block();
+                |(mut app, txs)| {
+                    for raw_tx in &txs {
+                        app.submit_raw_tx(raw_tx).expect("submit tx");
+                    }
+                    app.produce_block_from_mempool(n);
                 },
                 BatchSize::SmallInput,
             );

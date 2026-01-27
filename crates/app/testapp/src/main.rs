@@ -1,11 +1,14 @@
 //! Evolve Dev Node entrypoint.
 
 use evolve_core::ReadonlyKV;
-use evolve_node::{init_dev_node, run_dev_node, GenesisOutput, DEFAULT_DATA_DIR};
+use evolve_node::{
+    init_dev_node, run_dev_node_with_rpc_and_mempool,
+    run_dev_node_with_rpc_and_mempool_mock_storage, GenesisOutput, DEFAULT_DATA_DIR,
+};
 use evolve_storage::{QmdbStorage, Storage, StorageConfig};
 use evolve_testapp::{
-    build_stf, default_gas_config, do_genesis_inner, install_account_codes, CustomStf,
-    GenesisAccounts, PLACEHOLDER_ACCOUNT,
+    build_mempool_stf, default_gas_config, do_genesis_inner, install_account_codes,
+    GenesisAccounts, MempoolStf, PLACEHOLDER_ACCOUNT,
 };
 use evolve_testing::server_mocks::AccountStorageMock;
 use tracing_subscriber::{fmt, EnvFilter};
@@ -21,13 +24,22 @@ fn main() {
     let command = std::env::args().nth(1).unwrap_or_else(|| "run".to_string());
 
     match command.as_str() {
-        "run" => run_dev_node(
+        "run" => run_dev_node_with_rpc_and_mempool(
             DEFAULT_DATA_DIR,
             build_genesis_stf,
             build_stf_from_genesis,
             build_codes,
             run_genesis_output,
             build_storage,
+            evolve_node::RpcConfig::default(),
+        ),
+        "run-mock" => run_dev_node_with_rpc_and_mempool_mock_storage(
+            DEFAULT_DATA_DIR,
+            build_genesis_stf,
+            build_stf_from_genesis,
+            build_codes,
+            run_genesis_output,
+            evolve_node::RpcConfig::default(),
         ),
         "init" => init_dev_node(
             DEFAULT_DATA_DIR,
@@ -37,11 +49,11 @@ fn main() {
             build_storage,
         ),
         "help" | "--help" | "-h" => {
-            println!("Usage: evolve_testapp [run|init]");
+            println!("Usage: evolve_testapp [run|run-mock|init]");
         }
         other => {
             eprintln!("Unknown command: {other}");
-            eprintln!("Usage: evolve_testapp [run|init]");
+            eprintln!("Usage: evolve_testapp [run|run-mock|init]");
             std::process::exit(2);
         }
     }
@@ -53,16 +65,16 @@ fn build_codes() -> AccountStorageMock {
     codes
 }
 
-fn build_genesis_stf() -> CustomStf {
-    build_stf(default_gas_config(), PLACEHOLDER_ACCOUNT)
+fn build_genesis_stf() -> MempoolStf {
+    build_mempool_stf(default_gas_config(), PLACEHOLDER_ACCOUNT)
 }
 
-fn build_stf_from_genesis(genesis: &GenesisAccounts) -> CustomStf {
-    build_stf(default_gas_config(), genesis.scheduler)
+fn build_stf_from_genesis(genesis: &GenesisAccounts) -> MempoolStf {
+    build_mempool_stf(default_gas_config(), genesis.scheduler)
 }
 
 fn run_genesis_output<S: ReadonlyKV + Storage>(
-    stf: &CustomStf,
+    stf: &MempoolStf,
     codes: &AccountStorageMock,
     storage: &S,
 ) -> Result<GenesisOutput<GenesisAccounts>, Box<dyn std::error::Error + Send + Sync>> {

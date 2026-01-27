@@ -1,94 +1,30 @@
 use evolve_authentication::ERR_NOT_EOA;
-use evolve_core::runtime_api::{CreateAccountRequest, RUNTIME_ACCOUNT_ID};
-use evolve_core::{AccountId, InvokeRequest, Message};
-use evolve_fungible_asset::TransferMsg;
-use evolve_stf_traits::WritableKV;
-use evolve_testapp::{
-    build_stf, default_gas_config, do_genesis, install_account_codes, GenesisAccounts, TestTx,
-    PLACEHOLDER_ACCOUNT,
-};
-use evolve_testing::server_mocks::{AccountStorageMock, StorageMock};
-
-const ALICE: AccountId = AccountId::new(65536);
-const BOB: AccountId = AccountId::new(65537);
-
-// Helper function to set up common test state
-fn setup_test_environment() -> (
-    StorageMock,
-    AccountStorageMock,
-    evolve_testapp::CustomStf,
-    GenesisAccounts,
-) {
-    let mut codes = AccountStorageMock::new();
-    let mut storage = StorageMock::new();
-
-    install_account_codes(&mut codes);
-
-    let gas_config = default_gas_config();
-    // do genesis
-    let bootstrap_stf = build_stf(gas_config.clone(), PLACEHOLDER_ACCOUNT);
-    let (state, accounts) = do_genesis(&bootstrap_stf, &codes, &storage).unwrap();
-    let state_changes = state.into_changes().unwrap();
-    storage.apply_changes(state_changes).unwrap();
-
-    let stf = build_stf(gas_config, accounts.scheduler);
-    (storage, codes, stf, accounts)
-}
+use evolve_testapp::sim_testing::SimTestApp;
 
 #[test]
 fn test_successful_transaction() {
-    let (storage, codes, stf, accounts) = setup_test_environment();
-    let atom_id = accounts.atom;
+    let mut app = SimTestApp::default();
+    let accounts = app.accounts();
 
-    // create tx of alice sending money to bob
-    let ok_tx = TestTx {
-        sender: ALICE,
-        recipient: atom_id,
-        request: InvokeRequest::new(&TransferMsg {
-            to: BOB,
-            amount: 200,
-        })
-        .unwrap(),
-        gas_limit: 100_000,
-        funds: vec![],
-    };
-
-    // execute block with successful transaction
-    let block = evolve_server::Block::for_testing(1, vec![ok_tx]);
-    let (mut block_results, _new_state) = stf.apply_block(&storage, &codes, &block);
-
-    // extract and verify result
-    let ok_result = block_results.tx_results.pop().unwrap();
+    let result = app.submit_transfer_and_produce_block(accounts.alice, accounts.bob, 200, 100_000);
+    let ok_result = result.tx_results.first().expect("tx result");
     assert!(ok_result.response.is_ok(), "{:?}", ok_result.response);
 }
 
 #[test]
 fn test_not_eoa_transaction() {
-    let (storage, codes, stf, accounts) = setup_test_environment();
-    let atom_id = accounts.atom;
+    let mut app = SimTestApp::default();
+    let accounts = app.accounts();
 
-    // create a TX failing because not EOA account
-    let not_eoa = TestTx {
-        // we pretend sender is runtime; which is not EOA, so it cannot send Txs.
-        sender: RUNTIME_ACCOUNT_ID,
-        recipient: atom_id,
-        request: InvokeRequest::new(&CreateAccountRequest {
-            code_id: "".to_string(),
-            init_message: Message::new(&0).unwrap(),
-        })
-        .expect("REASON"),
-        gas_limit: 500_000,
-        funds: vec![],
-    };
-
-    // execute block with not EOA transaction
-    let block = evolve_server::Block::for_testing(1, vec![not_eoa]);
-    let (mut block_results, _new_state) = stf.apply_block(&storage, &codes, &block);
-
-    // extract and verify result
-    let not_eoa_result = block_results.tx_results.pop().unwrap();
-    assert_eq!(
-        not_eoa_result.response.expect_err("expected an error"),
-        ERR_NOT_EOA,
-    );
+    let sender = app.create_signer_with_code("Token");
+    let raw_tx = app
+        .build_token_transfer_tx(sender, accounts.atom, accounts.bob, 10, 100_000)
+        .expect("build tx");
+    app.submit_raw_tx(&raw_tx).expect("submit tx");
+    let result = app.produce_block_from_mempool(1);
+    let not_eoa_result = result.tx_results.first().expect("tx result");
+    match &not_eoa_result.response {
+        Err(err) => assert_eq!(*err, ERR_NOT_EOA),
+        Ok(resp) => panic!("expected error, got {:?}", resp),
+    }
 }

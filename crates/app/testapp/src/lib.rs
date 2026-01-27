@@ -1,15 +1,9 @@
 pub mod eth_eoa;
 pub mod sim_testing;
-pub mod testing;
-pub mod types;
 
 use crate::eth_eoa::eth_eoa_account::{EthEoaAccount, EthEoaAccountRef};
-pub use crate::types::TestTx;
-use borsh::BorshDeserialize;
 use evolve_authentication::AuthenticationTxValidator;
-use evolve_core::{
-    AccountId, BlockContext, Environment, InvokeResponse, ReadonlyKV, SdkResult, ERR_ENCODING,
-};
+use evolve_core::{AccountId, BlockContext, Environment, InvokeResponse, ReadonlyKV, SdkResult};
 use evolve_fungible_asset::FungibleAssetMetadata;
 use evolve_mempool::TxContext;
 use evolve_scheduler::scheduler_account::{Scheduler, SchedulerRef};
@@ -17,26 +11,11 @@ use evolve_scheduler::server::{SchedulerBeginBlocker, SchedulerEndBlocker};
 use evolve_server::Block;
 use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::{Stf, StorageGasConfig};
-use evolve_stf_traits::{
-    AccountsCodeStorage, PostTxExecution, TxDecoder, WritableAccountsCodeStorage,
-};
+use evolve_stf_traits::{AccountsCodeStorage, PostTxExecution, WritableAccountsCodeStorage};
 use evolve_token::account::{Token, TokenRef};
 use evolve_tx::address_to_account_id;
 
 pub const MINTER: AccountId = AccountId::new(100_002);
-
-pub struct NoOpPostTx;
-
-impl PostTxExecution<TestTx> for NoOpPostTx {
-    fn after_tx_executed(
-        _tx: &TestTx,
-        _gas_consumed: u64,
-        _tx_result: SdkResult<InvokeResponse>,
-        _env: &mut dyn Environment,
-    ) -> SdkResult<()> {
-        Ok(())
-    }
-}
 
 pub struct MempoolNoOpPostTx;
 
@@ -50,15 +29,6 @@ impl PostTxExecution<TxContext> for MempoolNoOpPostTx {
         Ok(())
     }
 }
-
-pub type CustomStf = Stf<
-    TestTx,
-    Block<TestTx>,
-    SchedulerBeginBlocker,
-    AuthenticationTxValidator<TestTx>,
-    SchedulerEndBlocker,
-    NoOpPostTx,
->;
 
 /// STF type for TxContext (Ethereum transactions via mempool).
 pub type MempoolStf = Stf<
@@ -81,16 +51,6 @@ pub fn default_gas_config() -> StorageGasConfig {
     }
 }
 
-pub fn build_stf(gas_config: StorageGasConfig, scheduler_id: AccountId) -> CustomStf {
-    CustomStf::new(
-        SchedulerBeginBlocker::new(scheduler_id),
-        SchedulerEndBlocker::new(scheduler_id),
-        AuthenticationTxValidator::new(),
-        NoOpPostTx,
-        gas_config,
-    )
-}
-
 /// Build an STF for TxContext (Ethereum transactions).
 pub fn build_mempool_stf(gas_config: StorageGasConfig, scheduler_id: AccountId) -> MempoolStf {
     MempoolStf::new(
@@ -100,15 +60,6 @@ pub fn build_mempool_stf(gas_config: StorageGasConfig, scheduler_id: AccountId) 
         MempoolNoOpPostTx,
         gas_config,
     )
-}
-
-#[derive(Clone)]
-pub struct TxDecoderImpl;
-
-impl TxDecoder<TestTx> for TxDecoderImpl {
-    fn decode(&self, bytes: &mut &[u8]) -> SdkResult<TestTx> {
-        TestTx::deserialize(bytes).map_err(|_| ERR_ENCODING)
-    }
 }
 
 /// List of accounts installed.
@@ -164,7 +115,7 @@ pub fn do_genesis_inner(env: &mut dyn Environment) -> SdkResult<GenesisAccounts>
 }
 
 pub fn do_genesis<'a, S: ReadonlyKV, A: AccountsCodeStorage>(
-    stf: &CustomStf,
+    stf: &MempoolStf,
     codes: &'a A,
     storage: &'a S,
 ) -> SdkResult<(ExecutionState<'a, S>, GenesisAccounts)> {

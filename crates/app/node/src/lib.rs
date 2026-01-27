@@ -26,7 +26,7 @@ use evolve_server::{
     load_chain_state, save_chain_state, ChainState, DevConfig, DevConsensus, CHAIN_STATE_KEY,
 };
 use evolve_stf_traits::{AccountsCodeStorage, StateChange, Transaction};
-use evolve_storage::{Operation, Storage, StorageConfig};
+use evolve_storage::{MockStorage, Operation, Storage, StorageConfig};
 use std::future::Future;
 
 /// Default data directory for persistent storage.
@@ -667,6 +667,49 @@ pub fn run_dev_node_with_rpc_and_mempool<
             }
         }
     });
+}
+
+/// Run the dev node with RPC and mempool using in-memory mock storage.
+pub fn run_dev_node_with_rpc_and_mempool_mock_storage<
+    Stf,
+    Codes,
+    G,
+    BuildGenesisStf,
+    BuildStf,
+    BuildCodes,
+    RunGenesis,
+>(
+    data_dir: impl AsRef<Path>,
+    build_genesis_stf: BuildGenesisStf,
+    build_stf: BuildStf,
+    build_codes: BuildCodes,
+    run_genesis: RunGenesis,
+    rpc_config: RpcConfig,
+) where
+    Codes: AccountsCodeStorage + Send + Sync + 'static,
+    Stf: StfExecutor<TxContext, MockStorage, Codes> + Send + Sync + 'static,
+    G: BorshSerialize + BorshDeserialize + Clone + Debug + Send + Sync + 'static,
+    BuildGenesisStf: Fn() -> Stf + Send + Sync + 'static,
+    BuildStf: Fn(&G) -> Stf + Send + Sync + 'static,
+    BuildCodes: Fn() -> Codes + Clone + Send + Sync + 'static,
+    RunGenesis: Fn(
+            &Stf,
+            &Codes,
+            &MockStorage,
+        ) -> Result<GenesisOutput<G>, Box<dyn std::error::Error + Send + Sync>>
+        + Send
+        + Sync
+        + 'static,
+{
+    run_dev_node_with_rpc_and_mempool(
+        data_dir,
+        build_genesis_stf,
+        build_stf,
+        build_codes,
+        run_genesis,
+        |_context, _config| async { Ok(MockStorage::new()) },
+        rpc_config,
+    )
 }
 
 /// Initialize genesis in the data directory and exit.
