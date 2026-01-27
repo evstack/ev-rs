@@ -121,7 +121,18 @@ crates/
 ### Prerequisites
 
 - Rust 1.86.0 or later
-- Cargo
+- [just](https://github.com/casey/just) - command runner for development tasks
+
+```bash
+# Install just (macOS)
+brew install just
+
+# Install just (cargo)
+cargo install just
+
+# Install just (other platforms)
+# See https://github.com/casey/just#installation
+```
 
 ### Build
 
@@ -130,17 +141,23 @@ crates/
 git clone https://github.com/01builders/evolve.git
 cd evolve
 
+# List all available commands
+just --list
+
 # Build the project
-cargo build
+just build
 
-# Run tests
-cargo test
+# Run all tests
+just test
 
-# Format code
-cargo fmt
+# Run quality checks (format, lint, check)
+just quality
 
-# Run lints
-cargo clippy
+# Run simulation tests
+just test-sim
+
+# Run CI checks locally
+just ci
 ```
 
 ### Creating Your First Module
@@ -192,17 +209,34 @@ pub mod counter {
 
 ### Running a Dev Node
 
-```rust
-use evolve_node::run_dev_node;
+```bash
+# Initialize the dev node (creates data directory and genesis)
+just node-init
 
-#[tokio::main]
-async fn main() {
-    let config = Config::load("config.yaml").unwrap();
-    run_dev_node(config, stf, genesis).await.unwrap();
-}
+# Run the dev node
+just node-run
+
+# Or reset and start fresh
+just node-reset
 ```
 
 Connect your wallet to `http://localhost:8545` (default RPC endpoint).
+
+### Running Simulations
+
+```bash
+# Run a simulation (100 blocks by default)
+just sim
+
+# Run with a specific seed for reproducibility
+just sim-seed 12345
+
+# Run with tracing enabled
+just sim-trace
+
+# Replay and debug a trace
+just sim-debug trace.json
+```
 
 ### Testing
 
