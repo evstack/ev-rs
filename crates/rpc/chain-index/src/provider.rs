@@ -5,7 +5,7 @@
 //! - `ChainIndex` for block/transaction/receipt queries
 //! - `Storage` for state queries (balance, nonce, code)
 //! - `Stf` for call/estimateGas execution
-//! - `Mempool` for transaction submission (optional)
+//! - `EthGateway` + `Mempool` for transaction submission (optional)
 
 use std::sync::Arc;
 
@@ -18,11 +18,12 @@ use evolve_core::schema::AccountSchema;
 use evolve_core::AccountCode;
 use evolve_eth_jsonrpc::error::RpcError;
 use evolve_eth_jsonrpc::StateProvider;
-use evolve_mempool::SharedMempool;
+use evolve_mempool::{Mempool, MempoolTx, SharedMempool};
 use evolve_rpc_types::block::BlockTransactions;
 use evolve_rpc_types::SyncStatus;
 use evolve_rpc_types::{CallRequest, LogFilter, RpcBlock, RpcLog, RpcReceipt, RpcTransaction};
 use evolve_stf_traits::AccountsCodeStorage;
+use evolve_tx_eth::{EthGateway, TxContext};
 
 /// State provider configuration.
 #[derive(Debug, Clone)]
@@ -51,7 +52,9 @@ pub struct ChainStateProvider<
     /// Account codes storage for schema introspection.
     account_codes: Arc<A>,
     /// Optional mempool for transaction submission.
-    mempool: Option<SharedMempool>,
+    mempool: Option<SharedMempool<Mempool<TxContext>>>,
+    /// Optional gateway for transaction decode/verify.
+    gateway: Option<EthGateway>,
 }
 
 /// No-op implementation of AccountsCodeStorage for when schema introspection is not needed.
@@ -79,6 +82,7 @@ impl<I: ChainIndex> ChainStateProvider<I, NoopAccountCodes> {
             config,
             account_codes: Arc::new(NoopAccountCodes),
             mempool: None,
+            gateway: None,
         }
     }
 }
@@ -95,6 +99,7 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
             config,
             account_codes,
             mempool: None,
+            gateway: None,
         }
     }
 
@@ -106,13 +111,15 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
         index: Arc<I>,
         config: ChainStateProviderConfig,
         account_codes: Arc<A>,
-        mempool: SharedMempool,
+        mempool: SharedMempool<Mempool<TxContext>>,
     ) -> Self {
+        let gateway = EthGateway::new(config.chain_id);
         Self {
             index,
             config,
             account_codes,
             mempool: Some(mempool),
+            gateway: Some(gateway),
         }
     }
 
@@ -132,7 +139,7 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
     }
 
     /// Get the mempool, if present.
-    pub fn mempool(&self) -> Option<&SharedMempool> {
+    pub fn mempool(&self) -> Option<&SharedMempool<Mempool<TxContext>>> {
         self.mempool.as_ref()
     }
 }
@@ -300,7 +307,7 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
     }
 
     async fn send_raw_transaction(&self, data: &[u8]) -> Result<B256, RpcError> {
-        // Check if mempool is available
+        // Check if mempool and gateway are available
         let mempool = match &self.mempool {
             Some(m) => m,
             None => {
@@ -310,12 +317,28 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
             }
         };
 
-        // Add the raw transaction to the mempool
-        // The mempool handles decoding and validation
-        let hash = mempool
+        let gateway = match &self.gateway {
+            Some(g) => g,
+            None => {
+                return Err(RpcError::NotImplemented(
+                    "sendRawTransaction: no gateway configured".to_string(),
+                ))
+            }
+        };
+
+        // Decode and verify the transaction via the gateway
+        let tx_context = gateway
+            .decode_and_verify(data)
+            .map_err(|e| RpcError::InvalidTransaction(e.to_string()))?;
+
+        // Get the transaction hash before adding to mempool
+        let hash = B256::from(tx_context.tx_id());
+
+        // Add to mempool
+        mempool
             .write()
             .await
-            .add_raw(data)
+            .add(tx_context)
             .map_err(|e| RpcError::InvalidTransaction(e.to_string()))?;
 
         tracing::info!("Transaction submitted to mempool: {}", hash);

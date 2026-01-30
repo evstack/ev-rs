@@ -31,8 +31,7 @@ pub use block::{Block, BlockBuilder, BlockHeader};
 pub use dev::{DevConfig, DevConsensus, NoopChainIndex, ProducedBlock, StfExecutor};
 pub use error::ServerError;
 pub use evolve_mempool::{
-    new_shared_mempool, new_shared_mempool_with_base_fee, Mempool, MempoolError, MempoolResult,
-    SharedMempool, TxContext,
+    new_shared_mempool, Mempool, MempoolError, MempoolResult, MempoolTx, SharedMempool,
 };
 pub use persistence::{load_chain_state, save_chain_state, ChainState, CHAIN_STATE_KEY};
 
@@ -45,3 +44,6 @@ pub use evolve_eth_jsonrpc::{
     SubscriptionManager,
 };
 pub use evolve_grpc::{GrpcServer, GrpcServerConfig};
+
+// Re-export TxContext from evolve_tx_eth for ETH-based servers
+pub use evolve_tx_eth::{EthGateway, TxContext};

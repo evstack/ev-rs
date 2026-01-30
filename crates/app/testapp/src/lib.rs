@@ -5,7 +5,6 @@ use crate::eth_eoa::eth_eoa_account::{EthEoaAccount, EthEoaAccountRef};
 use evolve_authentication::AuthenticationTxValidator;
 use evolve_core::{AccountId, BlockContext, Environment, InvokeResponse, ReadonlyKV, SdkResult};
 use evolve_fungible_asset::FungibleAssetMetadata;
-use evolve_mempool::TxContext;
 use evolve_scheduler::scheduler_account::{Scheduler, SchedulerRef};
 use evolve_scheduler::server::{SchedulerBeginBlocker, SchedulerEndBlocker};
 use evolve_server::Block;
@@ -13,7 +12,8 @@ use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::{Stf, StorageGasConfig};
 use evolve_stf_traits::{AccountsCodeStorage, PostTxExecution, WritableAccountsCodeStorage};
 use evolve_token::account::{Token, TokenRef};
-use evolve_tx::address_to_account_id;
+use evolve_tx_eth::address_to_account_id;
+use evolve_tx_eth::TxContext;
 
 pub const MINTER: AccountId = AccountId::new(100_002);
 

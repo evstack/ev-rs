@@ -8,7 +8,7 @@
 use libfuzzer_sys::fuzz_target;
 
 use alloy_consensus::transaction::RlpEcdsaTx;
-use evolve_tx::{tx_type, TxEnvelope, TypedTransaction};
+use evolve_tx_eth::{tx_type, TxEnvelope, TypedTransaction};
 
 fuzz_target!(|data: &[u8]| {
     // Try to decode

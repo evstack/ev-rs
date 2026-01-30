@@ -10,7 +10,7 @@
 
 use libfuzzer_sys::fuzz_target;
 
-use evolve_tx::{TxEnvelope, TypedTransaction};
+use evolve_tx_eth::{TxEnvelope, TypedTransaction};
 
 fuzz_target!(|data: &[u8]| {
     // Try to decode - errors are fine, panics are not

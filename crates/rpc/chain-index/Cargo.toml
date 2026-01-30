@@ -20,6 +20,7 @@ evolve_storage.workspace = true
 evolve_rpc_types.workspace = true
 evolve_eth_jsonrpc.workspace = true
 evolve_mempool.workspace = true
+evolve_tx_eth.workspace = true
 
 alloy-primitives = { version = "0.8", features = ["serde"] }
 borsh.workspace = true

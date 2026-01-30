@@ -15,6 +15,7 @@ evolve_chain_index = { workspace = true }
 evolve_eth_jsonrpc = { workspace = true }
 evolve_grpc = { workspace = true }
 evolve_mempool = { workspace = true }
+evolve_tx_eth = { workspace = true }
 
 alloy-primitives = { workspace = true }
 borsh = { workspace = true }

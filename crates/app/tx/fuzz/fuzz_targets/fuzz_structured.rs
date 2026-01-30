@@ -10,7 +10,7 @@ use arbitrary::Arbitrary;
 
 use alloy_consensus::{SignableTransaction, TxEip1559, TxLegacy};
 use alloy_primitives::{Address, Bytes, PrimitiveSignature, U256};
-use evolve_tx::{tx_type, EcdsaVerifier, TxEnvelope, TypedTransaction};
+use evolve_tx_eth::{tx_type, EcdsaVerifier, TxEnvelope, TypedTransaction};
 
 /// Fuzzable legacy transaction parameters
 #[derive(Debug, Arbitrary)]

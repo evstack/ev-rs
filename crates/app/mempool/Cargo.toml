@@ -7,12 +7,6 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-evolve_core = { workspace = true }
-evolve_stf_traits = { workspace = true }
-evolve_tx = { workspace = true }
-
-alloy-primitives = { workspace = true }
-
 tokio = { workspace = true }
 thiserror = "2"
 

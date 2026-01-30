@@ -1,0 +1,36 @@
+# X402 Demo - Docker Compose
+#
+# Prerequisites:
+#   1. Run Evolve node separately: cargo run -p evolve_testapp
+#   2. Or use EVOLVE_RPC_URL to point to an existing node
+#
+# Usage:
+#   docker compose up --build
+
+services:
+  server:
+    build:
+      context: ./server
+    ports:
+      - "3000:3000"
+    environment:
+      - PORT=3000
+      # Point to host machine's Evolve node (use host.docker.internal on Mac/Windows)
+      - EVOLVE_RPC_URL=${EVOLVE_RPC_URL:-http://host.docker.internal:8545}
+      - EVOLVE_NETWORK=evolve:1337
+      - RP_ID=localhost
+      - RP_ORIGIN=http://localhost:5173
+      - TREASURY_ADDRESS=0x0000000000000000000000000000000000000001
+      - FAUCET_PRIVATE_KEY=${FAUCET_PRIVATE_KEY:-}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://server:3000
+    depends_on:
+      - server

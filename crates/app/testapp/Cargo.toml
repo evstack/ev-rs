@@ -22,7 +22,7 @@ evolve_server.workspace = true
 evolve_storage.workspace = true
 evolve_node.workspace = true
 evolve_mempool.workspace = true
-evolve_tx.workspace = true
+evolve_tx_eth.workspace = true
 alloy-primitives.workspace = true
 alloy-consensus = { workspace = true, features = ["k256"] }
 k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
@@ -51,7 +51,7 @@ serde_json = "1.0"
 alloy-primitives = { workspace = true }
 async-trait = { workspace = true }
 evolve_mempool = { workspace = true }
-evolve_tx = { workspace = true }
+evolve_tx_eth = { workspace = true }
 hex = "0.4"
 
 [[bench]]

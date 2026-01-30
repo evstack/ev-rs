@@ -1,38 +1,57 @@
-//! In-memory transaction mempool for Evolve.
+//! Generic in-memory transaction mempool for Evolve.
 //!
-//! This crate provides a thread-safe mempool for pending Ethereum transactions,
-//! designed to work with the dev consensus engine.
+//! This crate provides a thread-safe, generic mempool that supports multiple
+//! transaction types with configurable ordering strategies.
 //!
 //! # Features
 //!
-//! - Decodes and validates Ethereum transactions (Legacy and EIP-1559)
-//! - Enforces chain ID for replay protection
-//! - Orders transactions by effective gas price
-//! - Thread-safe via `Arc<RwLock<Mempool>>`
+//! - Generic `Mempool<T>` where `T: MempoolTx` defines the transaction type
+//! - Configurable ordering via the `MempoolTx::OrderingKey` associated type
+//! - Built-in ordering strategies: `GasPriceOrdering` (ETH), `FifoOrdering` (micro)
+//! - `MempoolOps` trait for custom mempool implementations
+//! - Thread-safe via `Arc<RwLock<M>>` where `M: MempoolOps<T>`
 //!
 //! # Usage
 //!
 //! ```ignore
-//! use evolve_mempool::{new_shared_mempool, SharedMempool};
+//! use evolve_mempool::{Mempool, MempoolTx, MempoolOps, GasPriceOrdering};
 //!
-//! // Create a shared mempool for chain ID 1337
-//! let mempool: SharedMempool = new_shared_mempool(1337);
+//! // Implement MempoolTx for your transaction type
+//! impl MempoolTx for MyTx {
+//!     type OrderingKey = GasPriceOrdering;
 //!
-//! // Add a raw transaction (from RPC)
-//! let hash = mempool.write().await.add_raw(&raw_tx_bytes)?;
+//!     fn tx_id(&self) -> [u8; 32] { ... }
+//!     fn ordering_key(&self) -> Self::OrderingKey { ... }
+//! }
 //!
-//! // Select transactions for block production
-//! let txs = mempool.write().await.select(100);
-//!
-//! // Remove included transactions after block is produced
-//! let hashes: Vec<_> = txs.iter().map(|tx| tx.hash()).collect();
-//! mempool.write().await.remove_many(&hashes);
+//! // Create and use the mempool
+//! let mut pool: Mempool<MyTx> = Mempool::new();
+//! pool.add(verified_tx)?;
+//! let txs = pool.select(100);
 //! ```
+//!
+//! # Custom Mempool Implementations
+//!
+//! Implement `MempoolOps<T>` for custom backends (Redis, persistent, etc.):
+//!
+//! ```ignore
+//! impl MempoolOps<MyTx> for MyCustomMempool {
+//!     fn add(&mut self, tx: MyTx) -> Result<[u8; 32], MempoolError> { ... }
+//!     fn select(&mut self, limit: usize) -> Vec<Arc<MyTx>> { ... }
+//!     // ... other methods
+//! }
+//! ```
+//!
+//! # Architecture
+//!
+//! Transaction decoding and verification should happen in a "gateway" layer
+//! (e.g., `EthGateway` in `evolve_tx_eth`) before adding to the mempool.
+//! The mempool only handles storage and ordering of already-verified transactions.
 
 mod error;
 mod pool;
-mod tx;
+mod traits;
 
 pub use error::{MempoolError, MempoolResult};
-pub use pool::{new_shared_mempool, new_shared_mempool_with_base_fee, Mempool, SharedMempool};
-pub use tx::TxContext;
+pub use pool::{new_shared_mempool, shared_mempool_from, Mempool, SharedMempool};
+pub use traits::{FifoOrdering, GasPriceOrdering, MempoolOps, MempoolTx};

@@ -11,8 +11,8 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 arbitrary = { version = "1", features = ["derive"] }
 
-[dependencies.evolve_tx]
-path = ".."
+[dependencies.evolve_tx_eth]
+path = "../eth"
 
 [dependencies.alloy-primitives]
 version = "0.8"

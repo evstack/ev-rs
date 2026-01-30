@@ -18,7 +18,7 @@ use evolve_testapp::{
     build_mempool_stf, default_gas_config, do_eth_genesis, install_account_codes,
 };
 use evolve_testing::server_mocks::AccountStorageMock;
-use evolve_tx::account_id_to_address;
+use evolve_tx_eth::{account_id_to_address, EthGateway};
 use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use std::collections::BTreeMap;
@@ -272,8 +272,8 @@ async fn test_token_transfer_e2e() {
     install_account_codes(&mut codes);
 
     // Derive account IDs from Ethereum addresses
-    let alice_account_id = evolve_tx::address_to_account_id(alice_address);
-    let bob_account_id = evolve_tx::address_to_account_id(bob_address);
+    let alice_account_id = evolve_tx_eth::address_to_account_id(alice_address);
+    let bob_account_id = evolve_tx_eth::address_to_account_id(bob_address);
 
     // Create initial storage and pre-populate ETH EOA account data
     let init_storage = AsyncMockStorage::new();
@@ -370,8 +370,11 @@ async fn test_token_transfer_e2e() {
 
     // Submit transaction to mempool
     let tx_hash = {
+        let gateway = EthGateway::new(chain_id);
+        let tx_context = gateway.decode_and_verify(&raw_tx).expect("decode tx");
         let mut pool = mempool.write().await;
-        pool.add_raw(&raw_tx).expect("add tx to mempool")
+        let tx_id = pool.add(tx_context).expect("add tx to mempool");
+        alloy_primitives::B256::from(tx_id)
     };
     println!("\nSubmitted transaction: {:?}", tx_hash);
 

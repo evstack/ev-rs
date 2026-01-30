@@ -22,7 +22,7 @@ pub mod eth_eoa_account {
     use evolve_collections::item::Item;
     use evolve_core::{Environment, Message, SdkResult};
     use evolve_macros::{exec, init, query};
-    use evolve_mempool::TxContext;
+    use evolve_tx_eth::TxContext;
 
     /// An Ethereum-compatible externally owned account.
     ///

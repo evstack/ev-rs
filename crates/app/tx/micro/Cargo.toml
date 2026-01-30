@@ -1,0 +1,25 @@
+[package]
+name = "evolve_tx_micro"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Minimal transaction format for high-throughput environments"
+
+[dependencies]
+# Minimal deps - just what we need for addresses, hashes, signatures
+alloy-primitives = { workspace = true }
+
+# Ed25519 signatures - hardware wallet friendly
+ed25519-dalek = { version = "2.1", features = ["rand_core"] }
+
+# Mempool trait
+evolve_mempool = { workspace = true }
+
+[dev-dependencies]
+rand = "0.8"
+hex = "0.4"
+
+[lints]
+workspace = true

@@ -40,7 +40,7 @@ use commonware_runtime::Spawner;
 use evolve_chain_index::{build_index_data, BlockMetadata, ChainIndex};
 use evolve_core::ReadonlyKV;
 use evolve_eth_jsonrpc::SharedSubscriptionManager;
-use evolve_mempool::{SharedMempool, TxContext};
+use evolve_mempool::{Mempool, MempoolTx, SharedMempool};
 use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::results::BlockResult;
 use evolve_stf_traits::{AccountsCodeStorage, PostTxExecution, Transaction, TxValidator};
@@ -149,9 +149,9 @@ pub struct ProducedBlock {
 /// * `Stf` - The state transition function type
 /// * `S` - The storage backend (must be ReadonlyKV + Storage for async operations)
 /// * `Codes` - Account codes storage
-/// * `Tx` - Transaction type
+/// * `Tx` - Transaction type (must implement MempoolTx when using mempool)
 /// * `I` - Optional chain index for RPC queries
-pub struct DevConsensus<Stf, S, Codes, Tx, I = NoopChainIndex> {
+pub struct DevConsensus<Stf, S, Codes, Tx: MempoolTx, I = NoopChainIndex> {
     /// The STF for block execution.
     stf: Stf,
     /// Storage with async batch/commit operations.
@@ -163,7 +163,7 @@ pub struct DevConsensus<Stf, S, Codes, Tx, I = NoopChainIndex> {
     /// Internal state.
     state: DevState,
     /// Optional mempool for transaction sourcing.
-    mempool: Option<SharedMempool>,
+    mempool: Option<SharedMempool<Mempool<Tx>>>,
     /// Optional chain index for block/tx/receipt queries.
     chain_index: Option<Arc<I>>,
     /// Optional subscription manager for publishing events.
@@ -172,7 +172,7 @@ pub struct DevConsensus<Stf, S, Codes, Tx, I = NoopChainIndex> {
     _tx: std::marker::PhantomData<Tx>,
 }
 
-impl<Stf, S, Codes, Tx> DevConsensus<Stf, S, Codes, Tx, NoopChainIndex> {
+impl<Stf, S, Codes, Tx: MempoolTx> DevConsensus<Stf, S, Codes, Tx, NoopChainIndex> {
     /// Create a new dev consensus engine without RPC support.
     ///
     /// # Arguments
@@ -197,7 +197,7 @@ impl<Stf, S, Codes, Tx> DevConsensus<Stf, S, Codes, Tx, NoopChainIndex> {
     }
 }
 
-impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
+impl<Stf, S, Codes, Tx: MempoolTx, I> DevConsensus<Stf, S, Codes, Tx, I> {
     /// Create a new dev consensus engine with RPC support.
     ///
     /// # Arguments
@@ -238,7 +238,7 @@ impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
         config: DevConfig,
         chain_index: Arc<I>,
         subscriptions: SharedSubscriptionManager,
-        mempool: SharedMempool,
+        mempool: SharedMempool<Mempool<Tx>>,
     ) -> Self {
         let initial_height = config.initial_height;
         Self {
@@ -271,7 +271,7 @@ impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
         storage: S,
         codes: Codes,
         config: DevConfig,
-        mempool: SharedMempool,
+        mempool: SharedMempool<Mempool<Tx>>,
     ) -> Self {
         let initial_height = config.initial_height;
         Self {
@@ -288,7 +288,7 @@ impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
     }
 
     /// Get a reference to the mempool, if present.
-    pub fn mempool(&self) -> Option<&SharedMempool> {
+    pub fn mempool(&self) -> Option<&SharedMempool<Mempool<Tx>>> {
         self.mempool.as_ref()
     }
 
@@ -330,7 +330,7 @@ impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I> {
 
 impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I>
 where
-    Tx: Transaction + Send + Sync + 'static,
+    Tx: Transaction + MempoolTx + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
@@ -502,20 +502,20 @@ where
     }
 }
 
-/// Specialized implementation for TxContext-based block production.
+/// Implementation for mempool-based block production.
 ///
-/// When using the mempool, the DevConsensus should be instantiated with
-/// `Tx = TxContext` to enable automatic transaction sourcing.
-impl<Stf, S, Codes, I> DevConsensus<Stf, S, Codes, TxContext, I>
+/// Works with any transaction type that implements `MempoolTx`.
+impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I>
 where
+    Tx: Transaction + MempoolTx + Clone + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
-    Stf: StfExecutor<TxContext, S, Codes> + Send + Sync + 'static,
+    Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
     I: ChainIndex + 'static,
 {
     /// Produce a block with transactions from the mempool.
     ///
-    /// Selects up to `max_txs` transactions from the mempool, ordered by gas price,
+    /// Selects up to `max_txs` transactions from the mempool,
     /// produces a block, and removes the included transactions from the mempool.
     ///
     /// Returns an error if no mempool is configured.
@@ -535,10 +535,10 @@ where
         };
 
         // Get transaction hashes before converting (for removal after block production)
-        let tx_hashes: Vec<_> = selected.iter().map(|tx| tx.hash()).collect();
+        let tx_hashes: Vec<_> = selected.iter().map(|tx| tx.tx_id()).collect();
 
-        // Convert Arc<TxContext> to TxContext
-        let transactions: Vec<TxContext> = selected
+        // Convert Arc<Tx> to Tx
+        let transactions: Vec<Tx> = selected
             .into_iter()
             .map(|arc_tx| (*arc_tx).clone())
             .collect();

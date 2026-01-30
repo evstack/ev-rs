@@ -19,7 +19,7 @@ use commonware_runtime::{Runner as RunnerTrait, Spawner};
 use evolve_chain_index::{ChainStateProvider, ChainStateProviderConfig, PersistentChainIndex};
 use evolve_core::ReadonlyKV;
 use evolve_eth_jsonrpc::{start_server_with_subscriptions, RpcServerConfig, SubscriptionManager};
-use evolve_mempool::{new_shared_mempool, SharedMempool, TxContext};
+use evolve_mempool::{new_shared_mempool, Mempool, MempoolTx, SharedMempool};
 use evolve_rpc_types::SyncStatus;
 use evolve_server::StfExecutor;
 use evolve_server::{
@@ -27,6 +27,7 @@ use evolve_server::{
 };
 use evolve_stf_traits::{AccountsCodeStorage, StateChange, Transaction};
 use evolve_storage::{MockStorage, Operation, Storage, StorageConfig};
+use evolve_tx_eth::TxContext;
 use std::future::Future;
 
 /// Default data directory for persistent storage.
@@ -36,26 +37,29 @@ pub const DEFAULT_DATA_DIR: &str = "./data";
 pub const DEFAULT_RPC_ADDR: &str = "127.0.0.1:8545";
 
 /// Convenience handles for a dev node wired with a mempool.
-pub struct DevNodeMempoolHandles<Stf, S, Codes> {
+pub struct DevNodeMempoolHandles<Stf, S, Codes, Tx: MempoolTx> {
     /// Dev consensus engine wired to mempool transactions.
-    pub dev: Arc<DevConsensus<Stf, S, Codes, TxContext, evolve_server::NoopChainIndex>>,
+    pub dev: Arc<DevConsensus<Stf, S, Codes, Tx, evolve_server::NoopChainIndex>>,
     /// Shared mempool instance.
-    pub mempool: SharedMempool,
+    pub mempool: SharedMempool<Mempool<Tx>>,
 }
 
 /// Build a dev consensus + mempool pair for testing and tools.
-pub fn build_dev_node_with_mempool<Stf, Codes, S>(
+///
+/// Generic over transaction type `Tx`. For ETH transactions, use `TxContext`.
+pub fn build_dev_node_with_mempool<Stf, Codes, S, Tx>(
     stf: Stf,
     storage: S,
     codes: Codes,
     config: DevConfig,
-) -> DevNodeMempoolHandles<Stf, S, Codes>
+) -> DevNodeMempoolHandles<Stf, S, Codes, Tx>
 where
+    Tx: Transaction + MempoolTx + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
-    Stf: StfExecutor<TxContext, S, Codes> + Send + Sync + 'static,
+    Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
 {
-    let mempool = new_shared_mempool(config.chain_id);
+    let mempool: SharedMempool<Mempool<Tx>> = new_shared_mempool();
     let dev = Arc::new(DevConsensus::with_mempool(
         stf,
         storage,
@@ -144,7 +148,7 @@ pub fn run_dev_node<
     run_genesis: RunGenesis,
     build_storage: BuildStorage,
 ) where
-    Tx: Transaction + Send + Sync + 'static,
+    Tx: Transaction + MempoolTx + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
@@ -193,7 +197,7 @@ pub fn run_dev_node_with_rpc<
     build_storage: BuildStorage,
     rpc_config: RpcConfig,
 ) where
-    Tx: Transaction + Send + Sync + 'static,
+    Tx: Transaction + MempoolTx + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
@@ -429,9 +433,17 @@ pub fn run_dev_node_with_rpc<
 }
 
 /// Run the dev node with RPC and mempool-enabled transaction ingestion.
+///
+/// Generic over transaction type `Tx`. For ETH transactions, use
+/// `run_dev_node_with_rpc_and_mempool_eth` for convenience.
+///
+/// Note: When using a custom `Tx` type with RPC enabled, the RPC layer
+/// will still use `TxContext` for `eth_sendRawTransaction`. For custom
+/// transaction types, consider disabling RPC or providing a custom gateway.
 pub fn run_dev_node_with_rpc_and_mempool<
     Stf,
     Codes,
+    Tx,
     G,
     S,
     BuildGenesisStf,
@@ -449,9 +461,10 @@ pub fn run_dev_node_with_rpc_and_mempool<
     build_storage: BuildStorage,
     rpc_config: RpcConfig,
 ) where
+    Tx: Transaction + MempoolTx + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
-    Stf: StfExecutor<TxContext, S, Codes> + Send + Sync + 'static,
+    Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
     G: BorshSerialize + BorshDeserialize + Clone + Debug + Send + Sync + 'static,
     BuildGenesisStf: Fn() -> Stf + Send + Sync + 'static,
     BuildStf: Fn(&G) -> Stf + Send + Sync + 'static,
@@ -532,7 +545,167 @@ pub fn run_dev_node_with_rpc_and_mempool<
                 ..Default::default()
             };
 
-            let mempool = new_shared_mempool(rpc_config.chain_id);
+            let mempool: SharedMempool<Mempool<Tx>> = new_shared_mempool();
+
+            // Note: RPC with custom Tx types is not fully supported.
+            // The RPC layer requires TxContext for eth_sendRawTransaction.
+            // For custom Tx types, use run_dev_node_with_rpc_and_mempool_eth instead.
+            if rpc_config.enabled {
+                tracing::warn!(
+                    "RPC enabled with generic Tx type. eth_sendRawTransaction will not work. \
+                    Use run_dev_node_with_rpc_and_mempool_eth for ETH transactions with full RPC support."
+                );
+            }
+
+            let dev: Arc<DevConsensus<Stf, S, Codes, Tx, evolve_server::NoopChainIndex>> =
+                Arc::new(DevConsensus::with_mempool(stf, storage, codes, dev_config, mempool));
+
+            tracing::info!(
+                "Block interval: {:?}, starting at height {}",
+                block_interval,
+                initial_height
+            );
+
+            tracing::info!("Starting block production... (Ctrl+C to stop)");
+
+            let max_txs_per_block = 1000usize;
+            tokio::select! {
+                _ = dev.run_block_production_with_mempool(context_for_shutdown.clone(), max_txs_per_block) => {
+                }
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
+                    context_for_shutdown
+                        .stop(0, Some(Duration::from_secs(10)))
+                        .await
+                        .expect("shutdown failed");
+                }
+            }
+
+            let final_height = dev.height();
+            tracing::info!("Stopped at height: {}", final_height);
+
+            let chain_state = ChainState {
+                height: final_height,
+                genesis_result,
+            };
+            if let Err(e) = save_chain_state(dev.storage(), &chain_state).await {
+                tracing::error!("Failed to save chain state: {}", e);
+            } else {
+                tracing::info!("Saved chain state at height {}", final_height);
+            }
+        }
+    });
+}
+
+/// Run the dev node with RPC and mempool for ETH transactions (TxContext).
+///
+/// This is a convenience wrapper around `run_dev_node_with_rpc_and_mempool`
+/// that uses `TxContext` as the transaction type and sets up the full
+/// ETH JSON-RPC server with `eth_sendRawTransaction` support.
+pub fn run_dev_node_with_rpc_and_mempool_eth<
+    Stf,
+    Codes,
+    G,
+    S,
+    BuildGenesisStf,
+    BuildStf,
+    BuildCodes,
+    RunGenesis,
+    BuildStorage,
+    BuildStorageFut,
+>(
+    data_dir: impl AsRef<Path>,
+    build_genesis_stf: BuildGenesisStf,
+    build_stf: BuildStf,
+    build_codes: BuildCodes,
+    run_genesis: RunGenesis,
+    build_storage: BuildStorage,
+    rpc_config: RpcConfig,
+) where
+    Codes: AccountsCodeStorage + Send + Sync + 'static,
+    S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
+    Stf: StfExecutor<TxContext, S, Codes> + Send + Sync + 'static,
+    G: BorshSerialize + BorshDeserialize + Clone + Debug + Send + Sync + 'static,
+    BuildGenesisStf: Fn() -> Stf + Send + Sync + 'static,
+    BuildStf: Fn(&G) -> Stf + Send + Sync + 'static,
+    BuildCodes: Fn() -> Codes + Clone + Send + Sync + 'static,
+    RunGenesis: Fn(&Stf, &Codes, &S) -> Result<GenesisOutput<G>, Box<dyn std::error::Error + Send + Sync>>
+        + Send
+        + Sync
+        + 'static,
+    BuildStorage: Fn(RuntimeContext, StorageConfig) -> BuildStorageFut + Send + Sync + 'static,
+    BuildStorageFut:
+        Future<Output = Result<S, Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
+{
+    tracing::info!("=== Evolve Dev Node (ETH mempool) ===");
+    let data_dir = data_dir.as_ref();
+    std::fs::create_dir_all(data_dir).expect("failed to create data directory");
+
+    let storage_config = StorageConfig {
+        path: data_dir.to_path_buf(),
+        ..Default::default()
+    };
+
+    let runtime_config = TokioConfig::default()
+        .with_storage_directory(data_dir)
+        .with_worker_threads(4);
+
+    let runner = Runner::new(runtime_config);
+
+    let build_genesis_stf = Arc::new(build_genesis_stf);
+    let build_stf = Arc::new(build_stf);
+    let build_codes = Arc::new(build_codes);
+    let run_genesis = Arc::new(run_genesis);
+    let build_storage = Arc::new(build_storage);
+
+    runner.start(move |context| {
+        let build_genesis_stf = Arc::clone(&build_genesis_stf);
+        let build_stf = Arc::clone(&build_stf);
+        let build_codes = Arc::clone(&build_codes);
+        let run_genesis = Arc::clone(&run_genesis);
+        let build_storage = Arc::clone(&build_storage);
+        let rpc_config = rpc_config.clone();
+
+        async move {
+            let context_for_shutdown = context.clone();
+            let storage = (build_storage)(context, storage_config)
+                .await
+                .expect("failed to create storage");
+
+            let codes = build_codes();
+
+            let (genesis_result, initial_height) = match load_chain_state::<G, _>(&storage) {
+                Some(state) => {
+                    tracing::info!("Resuming from existing state at height {}", state.height);
+                    tracing::info!("Genesis state: {:?}", state.genesis_result);
+                    (state.genesis_result, state.height)
+                }
+                None => {
+                    tracing::info!("No existing state found, running genesis...");
+                    let bootstrap_stf = (build_genesis_stf)();
+                    let output =
+                        (run_genesis)(&bootstrap_stf, &codes, &storage).expect("genesis failed");
+
+                    commit_genesis(&storage, output.changes, &output.genesis_result)
+                        .await
+                        .expect("genesis commit failed");
+
+                    tracing::info!("Genesis complete. Result: {:?}", output.genesis_result);
+                    (output.genesis_result, 1)
+                }
+            };
+
+            let stf = (build_stf)(&genesis_result);
+
+            let block_interval = Duration::from_secs(1);
+            let dev_config = DevConfig {
+                block_interval: Some(block_interval),
+                initial_height,
+                chain_id: rpc_config.chain_id,
+                ..Default::default()
+            };
+
+            let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
 
             let rpc_handle = if rpc_config.enabled {
                 let storage_for_index = storage.clone();
@@ -669,7 +842,7 @@ pub fn run_dev_node_with_rpc_and_mempool<
     });
 }
 
-/// Run the dev node with RPC and mempool using in-memory mock storage.
+/// Run the dev node with RPC and ETH mempool using in-memory mock storage.
 pub fn run_dev_node_with_rpc_and_mempool_mock_storage<
     Stf,
     Codes,
@@ -701,7 +874,7 @@ pub fn run_dev_node_with_rpc_and_mempool_mock_storage<
         + Sync
         + 'static,
 {
-    run_dev_node_with_rpc_and_mempool(
+    run_dev_node_with_rpc_and_mempool_eth(
         data_dir,
         build_genesis_stf,
         build_stf,
@@ -731,7 +904,7 @@ pub fn init_dev_node<
     run_genesis: RunGenesis,
     build_storage: BuildStorage,
 ) where
-    Tx: Transaction + Send + Sync + 'static,
+    Tx: Transaction + MempoolTx + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,

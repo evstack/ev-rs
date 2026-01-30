@@ -9,7 +9,7 @@ use evolve_core::{
     Environment, FungibleAsset, InvokableMessage, Message, ReadonlyKV, SdkResult,
 };
 use evolve_debugger::{ExecutionTrace, StateSnapshot, TraceBuilder};
-use evolve_mempool::{new_shared_mempool, SharedMempool, TxContext};
+use evolve_mempool::{new_shared_mempool, Mempool, MempoolError, MempoolTx, SharedMempool};
 use evolve_server::Block;
 use evolve_simulator::{SimConfig, SimStorageAdapter, Simulator};
 use evolve_stf::gas::GasCounter;
@@ -17,7 +17,8 @@ use evolve_stf::results::BlockResult;
 use evolve_stf_traits::{Block as BlockTrait, StateChange, Transaction, WritableKV};
 use evolve_testing::server_mocks::AccountStorageMock;
 use evolve_token::account::TokenRef;
-use evolve_tx::{account_id_to_address, address_to_account_id};
+use evolve_tx_eth::{account_id_to_address, address_to_account_id};
+use evolve_tx_eth::{EthGateway, TxContext};
 use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
 use tiny_keccak::{Hasher, Keccak};
@@ -27,7 +28,7 @@ pub struct SimTestApp {
     codes: AccountStorageMock,
     stf: crate::MempoolStf,
     accounts: GenesisAccounts,
-    mempool: SharedMempool,
+    mempool: SharedMempool<Mempool<TxContext>>,
     chain_id: u64,
     signers: BTreeMap<AccountId, SigningKey>,
     nonces: BTreeMap<AccountId, u64>,
@@ -490,7 +491,7 @@ impl SimTestApp {
             .expect("apply genesis");
 
         let stf = build_mempool_stf(gas_config, accounts.scheduler);
-        let mempool = new_shared_mempool(SIM_CHAIN_ID);
+        let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
 
         let mut signers = BTreeMap::new();
         signers.insert(alice_id, alice_key);
@@ -598,12 +599,14 @@ impl SimTestApp {
         ))
     }
 
-    pub fn submit_raw_tx(
-        &mut self,
-        raw_tx: &[u8],
-    ) -> Result<alloy_primitives::B256, evolve_mempool::MempoolError> {
+    pub fn submit_raw_tx(&mut self, raw_tx: &[u8]) -> Result<alloy_primitives::B256, MempoolError> {
+        let gateway = EthGateway::new(self.chain_id);
+        let tx_context = gateway
+            .decode_and_verify(raw_tx)
+            .map_err(|e| MempoolError::DecodeFailed(e.to_string()))?;
         let mut pool = self.mempool.blocking_write();
-        pool.add_raw(raw_tx)
+        let tx_id = pool.add(tx_context)?;
+        Ok(alloy_primitives::B256::from(tx_id))
     }
 
     pub fn produce_block_from_mempool(&mut self, max_txs: usize) -> BlockResult {
@@ -612,7 +615,7 @@ impl SimTestApp {
             pool.select(max_txs)
         };
 
-        let tx_hashes: Vec<_> = selected.iter().map(|tx| tx.hash()).collect();
+        let tx_hashes: Vec<[u8; 32]> = selected.iter().map(|tx| tx.tx_id()).collect();
         let transactions: Vec<TxContext> = selected.into_iter().map(|tx| (*tx).clone()).collect();
 
         let height = self.sim.time().block_height();
@@ -809,7 +812,7 @@ impl SimTestApp {
                 pool.select(max_txs)
             };
 
-            let tx_hashes: Vec<_> = selected.iter().map(|tx| tx.hash()).collect();
+            let tx_hashes: Vec<[u8; 32]> = selected.iter().map(|tx| tx.tx_id()).collect();
             let transactions: Vec<TxContext> =
                 selected.into_iter().map(|tx| (*tx).clone()).collect();
 
