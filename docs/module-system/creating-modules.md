@@ -204,7 +204,7 @@ mod tests {
 To use the module in the test application, add it to code registration:
 
 ```rust
-// In crates/app/testapp/src/lib.rs
+// In bin/testapp/src/lib.rs
 pub fn install_account_codes(codes: &mut impl WritableAccountsCodeStorage) {
     codes.add_code(Token::new()).unwrap();
     codes.add_code(MyModule::new()).unwrap();  // Add your module

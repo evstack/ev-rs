@@ -58,5 +58,9 @@ hex = "0.4"
 name = "stf_bench"
 harness = false
 
+[[bin]]
+name = "testapp"
+path = "src/main.rs"
+
 [lints]
 workspace = true

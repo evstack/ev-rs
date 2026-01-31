@@ -101,14 +101,15 @@ crates/
 │   ├── server/            # Infrastructure: storage, RPC, indexing
 │   ├── node/              # Dev node runner with block production
 │   ├── genesis/           # Genesis file handling
-│   ├── operations/        # Config loading, shutdown, startup checks
-│   └── testapp/           # Example application
+│   └── operations/        # Config loading, shutdown, startup checks
 ├── storage/               # RocksDB-backed storage with caching
 ├── rpc/
 │   ├── types/             # Ethereum-compatible RPC types
 │   ├── eth-jsonrpc/       # JSON-RPC 2.0 server (eth_, net_, web3_)
 │   ├── grpc/              # gRPC server
 │   └── chain-index/       # Chain indexer
+├── bin/
+│   └── testapp/           # Example application
 └── testing/
     ├── simulator/         # Deterministic simulator with fault injection
     ├── proptest/          # Property testing integration

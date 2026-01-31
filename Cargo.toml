@@ -19,7 +19,7 @@ members = [
     "crates/app/sdk/testing",
     "crates/app/sdk/math",
     "crates/app/node",
-    "crates/app/testapp",
+    "bin/testapp",
     "crates/app/genesis",
     "crates/testing/simulator",
     "crates/testing/proptest",
