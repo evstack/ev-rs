@@ -1,11 +1,6 @@
 ---
-description: How to use the Evolve deterministic simulator for testing
-triggers:
-  - "use simulator"
-  - "create simulation"
-  - "deterministic test"
-  - "fault injection"
-  - "seed-based testing"
+name: evolve-simulator
+description: Use the Evolve deterministic simulator for testing with controlled time, storage, and randomness. Use when creating simulations, seed-based testing, fault injection, stress testing, or deterministic test reproduction.
 ---
 
 # Evolve Simulator

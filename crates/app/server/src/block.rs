@@ -164,6 +164,10 @@ impl<Tx> BlockTrait<Tx> for Block<Tx> {
     fn txs(&self) -> &[Tx] {
         &self.transactions
     }
+
+    fn gas_limit(&self) -> u64 {
+        self.header.gas_limit
+    }
 }
 
 /// Builder for creating blocks.

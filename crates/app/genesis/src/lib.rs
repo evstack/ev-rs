@@ -23,9 +23,10 @@ pub mod types;
 pub use error::GenesisError;
 pub use file::{GenesisFile, GenesisTxJson};
 pub use registry::MessageRegistry;
-pub use types::GenesisTx;
+pub use types::{ConsensusParams, GenesisTx, DEFAULT_BLOCK_GAS_LIMIT};
 
-use evolve_core::{AccountId, BlockContext, Environment, ReadonlyKV, SdkResult};
+use evolve_core::runtime_api::CONSENSUS_PARAMS_KEY;
+use evolve_core::{AccountId, BlockContext, Environment, Message, ReadonlyKV, SdkResult};
 use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::Stf;
 use evolve_stf_traits::{
@@ -51,16 +52,19 @@ pub const SYSTEM_ACCOUNT_ID: AccountId = AccountId::new(0);
 /// * `stf` - The state transition function
 /// * `storage` - Read-only storage backend
 /// * `codes` - Account code storage
+/// * `consensus_params` - Consensus parameters to store in state
 /// * `txs` - Ordered list of genesis transactions
 ///
 /// # Returns
 ///
 /// Returns the result state containing all state changes from genesis,
-/// along with results for each transaction.
+/// along with results for each transaction. The consensus parameters are
+/// stored at a well-known key so syncing nodes can read them.
 pub fn apply_genesis<'a, S, A, Tx, Block, BB, TV, EB, PT>(
     stf: &Stf<Tx, Block, BB, TV, EB, PT>,
     storage: &'a S,
     codes: &'a A,
+    consensus_params: &ConsensusParams,
     txs: Vec<GenesisTx>,
 ) -> Result<(ExecutionState<'a, S>, Vec<GenesisResult>), GenesisError>
 where
@@ -78,7 +82,7 @@ where
 
     // Run all genesis transactions in a single system_exec call
     // to ensure they share the same state
-    let (_, state) = stf
+    let (_, mut state) = stf
         .system_exec(
             storage,
             codes,
@@ -117,6 +121,15 @@ where
         });
     }
 
+    // Store consensus params in state at well-known key.
+    // This allows syncing nodes to read block gas limit for validation.
+    let params_bytes = borsh::to_vec(consensus_params).map_err(|e| {
+        GenesisError::Failed(format!("failed to serialize consensus params: {}", e))
+    })?;
+    state
+        .set(CONSENSUS_PARAMS_KEY, Message::from_bytes(params_bytes))
+        .map_err(|e| GenesisError::Failed(format!("failed to store consensus params: {:?}", e)))?;
+
     Ok((state, results))
 }
 
@@ -131,6 +144,31 @@ pub struct GenesisResult {
     pub success: bool,
     /// Error message if failed
     pub error: Option<String>,
+}
+
+/// Reads consensus parameters from storage.
+///
+/// This is used by syncing nodes to read the block gas limit and other
+/// consensus parameters that were set during genesis.
+///
+/// # Arguments
+///
+/// * `storage` - Read-only storage backend
+///
+/// # Returns
+///
+/// Returns the consensus parameters if found, or an error if not present
+/// or if deserialization fails.
+pub fn read_consensus_params<S: ReadonlyKV>(storage: &S) -> Result<ConsensusParams, GenesisError> {
+    use borsh::BorshDeserialize;
+
+    let bytes = storage
+        .get(CONSENSUS_PARAMS_KEY)
+        .map_err(|e| GenesisError::Failed(format!("failed to read consensus params: {:?}", e)))?
+        .ok_or_else(|| GenesisError::Failed("consensus params not found in state".to_string()))?;
+
+    ConsensusParams::try_from_slice(&bytes)
+        .map_err(|e| GenesisError::Failed(format!("failed to deserialize consensus params: {}", e)))
 }
 
 #[cfg(test)]
@@ -405,6 +443,7 @@ mod tests {
 
         let test_account_id = AccountId::new(100);
         let storage = setup_storage_with_account(test_account_id, "test_account");
+        let consensus_params = ConsensusParams::default();
 
         let txs = vec![GenesisTx::with_id(
             "test",
@@ -413,7 +452,7 @@ mod tests {
             InvokeRequest::new(&TestInitMsg { value: 42 }).unwrap(),
         )];
 
-        let result = apply_genesis(&stf, &storage, &codes, txs);
+        let result = apply_genesis(&stf, &storage, &codes, &consensus_params, txs);
         assert!(result.is_ok());
 
         let (_, results) = result.unwrap();
@@ -431,6 +470,7 @@ mod tests {
         let account1 = AccountId::new(100);
         let account2 = AccountId::new(101);
         let mut storage = setup_storage_with_account(account1, "test_account");
+        let consensus_params = ConsensusParams::default();
         // Add second account
         {
             use evolve_core::runtime_api::ACCOUNT_IDENTIFIER_PREFIX;
@@ -461,7 +501,7 @@ mod tests {
             ),
         ];
 
-        let result = apply_genesis(&stf, &storage, &codes, txs);
+        let result = apply_genesis(&stf, &storage, &codes, &consensus_params, txs);
         assert!(result.is_ok());
 
         let (_, results) = result.unwrap();
@@ -480,6 +520,7 @@ mod tests {
         let good_account = AccountId::new(100);
         let bad_account = AccountId::new(101);
         let after_bad = AccountId::new(102);
+        let consensus_params = ConsensusParams::default();
 
         let mut storage = setup_storage_with_account(good_account, "test_account");
         {
@@ -526,7 +567,7 @@ mod tests {
             ),
         ];
 
-        let result = apply_genesis(&stf, &storage, &codes, txs);
+        let result = apply_genesis(&stf, &storage, &codes, &consensus_params, txs);
         assert!(result.is_err());
 
         match result {
@@ -543,13 +584,36 @@ mod tests {
         let stf = setup_stf();
         let codes = CodeStore::new();
         let storage = InMemoryStorage::default();
+        let consensus_params = ConsensusParams::default();
 
         let txs: Vec<GenesisTx> = vec![];
 
-        let result = apply_genesis(&stf, &storage, &codes, txs);
+        let result = apply_genesis(&stf, &storage, &codes, &consensus_params, txs);
         assert!(result.is_ok());
 
         let (_, results) = result.unwrap();
         assert!(results.is_empty());
+    }
+
+    #[test]
+    fn test_consensus_params_stored_in_state() {
+        use evolve_stf_traits::WritableKV;
+
+        let stf = setup_stf();
+        let codes = CodeStore::new();
+        let mut storage = InMemoryStorage::default();
+        let consensus_params = ConsensusParams::new(50_000_000); // 50M gas limit
+
+        let txs: Vec<GenesisTx> = vec![];
+
+        let (state, _) = apply_genesis(&stf, &storage, &codes, &consensus_params, txs).unwrap();
+
+        // Apply the state changes to storage
+        let changes = state.into_changes().unwrap();
+        storage.apply_changes(changes).unwrap();
+
+        // Read back the consensus params
+        let read_params = read_consensus_params(&storage).unwrap();
+        assert_eq!(read_params.block_gas_limit, 50_000_000);
     }
 }

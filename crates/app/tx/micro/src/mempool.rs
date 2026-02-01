@@ -62,6 +62,12 @@ impl MicroTxContext {
     }
 }
 
+/// Fixed gas cost for micro transactions.
+///
+/// Micro transactions have a flat gas cost since they perform
+/// a single fixed operation (transfer).
+pub const MICRO_TX_GAS: u64 = 21_000;
+
 impl MempoolTx for MicroTxContext {
     type OrderingKey = FifoOrdering;
 
@@ -76,6 +82,10 @@ impl MempoolTx for MicroTxContext {
     fn sender_key(&self) -> Option<[u8; 20]> {
         // Micro transactions use pubkey-derived addresses
         Some(self.inner.sender().0 .0)
+    }
+
+    fn gas_limit(&self) -> u64 {
+        MICRO_TX_GAS
     }
 }
 

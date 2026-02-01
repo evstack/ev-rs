@@ -37,6 +37,11 @@ pub trait MempoolTx: Clone + Send + Sync + 'static {
     fn sender_key(&self) -> Option<[u8; 20]> {
         None
     }
+
+    /// Gas limit for this transaction.
+    ///
+    /// Used by `select_with_gas_budget` to fill blocks up to a gas limit.
+    fn gas_limit(&self) -> u64;
 }
 
 /// Trait for mempool implementations.
@@ -60,6 +65,24 @@ pub trait MempoolOps<Tx: MempoolTx>: Send + Sync {
     /// Returns transactions ordered by priority (implementation-defined).
     /// The returned transactions remain in the mempool until explicitly removed.
     fn select(&mut self, limit: usize) -> Vec<Arc<Tx>>;
+
+    /// Select transactions for block inclusion up to gas and count limits.
+    ///
+    /// Selects transactions in priority order until either:
+    /// - The cumulative gas would exceed `max_gas`
+    /// - The count reaches `max_txs`
+    /// - The mempool is exhausted
+    ///
+    /// Transactions that exceed the remaining gas budget are skipped (not selected),
+    /// allowing smaller transactions to fill the remaining space.
+    ///
+    /// # Arguments
+    /// * `max_gas` - Maximum cumulative gas (0 means no gas limit)
+    /// * `max_txs` - Maximum number of transactions (0 means no count limit)
+    ///
+    /// # Returns
+    /// Tuple of (selected transactions, total gas of selected transactions)
+    fn select_with_gas_budget(&mut self, max_gas: u64, max_txs: usize) -> (Vec<Arc<Tx>>, u64);
 
     /// Remove multiple transactions by their hashes.
     ///

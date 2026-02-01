@@ -1,0 +1,51 @@
+[package]
+name = "evolve_evnode"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "EVNode ExecutorService gRPC implementation for Evolve"
+
+[features]
+default = []
+testapp = ["dep:evolve_testapp"]
+
+[dependencies]
+# Workspace dependencies
+evolve_core.workspace = true
+evolve_stf.workspace = true
+evolve_stf_traits.workspace = true
+evolve_mempool.workspace = true
+evolve_server.workspace = true
+evolve_tx_eth.workspace = true
+
+# External dependencies
+tonic = { version = "0.12", features = ["gzip"] }
+prost = "0.13"
+prost-types = "0.13"
+tokio = { workspace = true, features = ["sync", "rt-multi-thread"] }
+async-trait.workspace = true
+tracing.workspace = true
+thiserror = "2"
+
+# For alloy types
+alloy-primitives.workspace = true
+
+# Optional: testapp integration
+evolve_testapp = { workspace = true, optional = true }
+
+[build-dependencies]
+tonic-build = "0.12"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = "0.3"
+evolve_testapp.workspace = true
+
+[[example]]
+name = "run_server"
+required-features = ["testapp"]
+
+[lints]
+workspace = true

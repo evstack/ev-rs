@@ -5,6 +5,10 @@ pub const ACCOUNT_IDENTIFIER_PREFIX: u8 = 0;
 pub const ACCOUNT_IDENTIFIER_SINGLETON_PREFIX: u8 = 1;
 pub const RUNTIME_ACCOUNT_ID: AccountId = AccountId(0);
 
+/// Storage key for consensus parameters.
+/// This is a well-known key that nodes read to validate blocks during sync.
+pub const CONSENSUS_PARAMS_KEY: &[u8] = b"consensus_params";
+
 #[derive(BorshDeserialize, BorshSerialize, Clone)]
 pub struct CreateAccountRequest {
     pub code_id: String,

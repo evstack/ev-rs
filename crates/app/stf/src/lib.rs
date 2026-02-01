@@ -1000,6 +1000,10 @@ where
     /// This is the main entry point for block processing. It executes the complete
     /// block lifecycle: begin-block, transaction processing, and end-block.
     ///
+    /// Transactions are processed until the block gas limit is reached. Any
+    /// transactions that would exceed the limit are skipped (not executed).
+    /// The `BlockResult.txs_skipped` field indicates how many were skipped.
+    ///
     /// # Arguments
     ///
     /// * `storage` - Read-only storage backend
@@ -1020,11 +1024,23 @@ where
         // run begin blocker.
         let begin_block_events = self.do_begin_block(&mut state, account_codes, block);
 
-        // apply txs.
+        // apply txs with gas limit enforcement.
         let txs = block.txs();
         let block_ctx = block.context();
+        let block_gas_limit = block.gas_limit();
         let mut tx_results = Vec::with_capacity(txs.len());
+        let mut cumulative_gas: u64 = 0;
+        let mut txs_skipped: usize = 0;
+
         for tx in txs {
+            // Check if adding this tx would exceed block gas limit.
+            // We use tx.gas_limit() as an upper bound estimate before execution.
+            // This prevents starting execution of a tx that definitely won't fit.
+            if cumulative_gas.saturating_add(tx.gas_limit()) > block_gas_limit {
+                txs_skipped += 1;
+                continue;
+            }
+
             // apply tx
             let tx_result: TxResult = self.apply_tx(
                 &mut state,
@@ -1033,7 +1049,16 @@ where
                 self.storage_gas_config.clone(),
                 block_ctx,
             );
+
+            cumulative_gas = cumulative_gas.saturating_add(tx_result.gas_used);
             tx_results.push(tx_result);
+
+            // If we've hit the limit after execution, stop processing more txs.
+            // This handles the case where actual gas used is less than gas_limit.
+            if cumulative_gas >= block_gas_limit {
+                txs_skipped += txs.len() - tx_results.len();
+                break;
+            }
         }
 
         let end_block_events = self.do_end_block(&mut state, account_codes, block_ctx);
@@ -1043,6 +1068,8 @@ where
                 begin_block_events,
                 tx_results,
                 end_block_events,
+                gas_used: cumulative_gas,
+                txs_skipped,
             },
             state,
         )
@@ -1064,10 +1091,19 @@ where
 
         let txs = block.txs();
         let block_ctx = block.context();
+        let block_gas_limit = block.gas_limit();
         let mut tx_results = Vec::with_capacity(txs.len());
         let mut tx_metrics = Vec::with_capacity(txs.len());
+        let mut cumulative_gas: u64 = 0;
+        let mut txs_skipped: usize = 0;
 
         for (index, tx) in txs.iter().enumerate() {
+            // Check if adding this tx would exceed block gas limit.
+            if cumulative_gas.saturating_add(tx.gas_limit()) > block_gas_limit {
+                txs_skipped += 1;
+                continue;
+            }
+
             let tx_start_metrics = state.metrics_snapshot();
             let tx_timer = Instant::now();
             let tx_result = self.apply_tx(
@@ -1086,7 +1122,15 @@ where
                 tx_result.gas_used,
                 delta,
             ));
+
+            cumulative_gas = cumulative_gas.saturating_add(tx_result.gas_used);
             tx_results.push(tx_result);
+
+            // If we've hit the limit after execution, stop processing more txs.
+            if cumulative_gas >= block_gas_limit {
+                txs_skipped += txs.len() - tx_results.len();
+                break;
+            }
         }
 
         let end_timer = Instant::now();
@@ -1109,6 +1153,8 @@ where
                 begin_block_events,
                 tx_results,
                 end_block_events,
+                gas_used: cumulative_gas,
+                txs_skipped,
             },
             state,
             metrics,

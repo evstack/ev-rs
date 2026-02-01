@@ -1,0 +1,44 @@
+[package]
+name = "evd"
+version = "0.1.0"
+edition = "2021"
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Evolve node daemon with gRPC execution layer"
+
+[[bin]]
+name = "evd"
+path = "src/main.rs"
+
+[dependencies]
+# Workspace dependencies
+evolve_core.workspace = true
+evolve_stf.workspace = true
+evolve_stf_traits.workspace = true
+evolve_mempool.workspace = true
+evolve_server.workspace = true
+evolve_storage.workspace = true
+evolve_node.workspace = true
+evolve_evnode = { workspace = true, features = ["testapp"] }
+evolve_testapp.workspace = true
+evolve_testing.workspace = true
+evolve_tx_eth.workspace = true
+evolve_tx_micro.workspace = true
+evolve_chain_index.workspace = true
+evolve_eth_jsonrpc.workspace = true
+evolve_rpc_types.workspace = true
+
+# External dependencies
+alloy-primitives.workspace = true
+commonware-runtime.workspace = true
+
+# External dependencies
+clap = { workspace = true }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+borsh.workspace = true
+
+[lints]
+workspace = true

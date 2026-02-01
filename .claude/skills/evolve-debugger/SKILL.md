@@ -1,13 +1,8 @@
 ---
-description: How to use the Evolve execution debugger for trace recording and replay
-triggers:
-  - "debug execution"
-  - "trace recording"
-  - "execution trace"
-  - "time travel debug"
-  - "replay execution"
-  - "debugger"
+name: evolve-debugger
+description: Use the Evolve execution debugger for trace recording, replay, and time-travel debugging. Use when debugging failing tests, recording execution traces, stepping through state changes, or analyzing execution flow.
 ---
+
 
 # Evolve Execution Debugger
 

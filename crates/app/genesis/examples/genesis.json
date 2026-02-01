@@ -1,6 +1,9 @@
 {
   "chain_id": "evolve-devnet",
   "genesis_time": 0,
+  "consensus_params": {
+    "block_gas_limit": 30000000
+  },
   "transactions": [
     {
       "id": "alice",

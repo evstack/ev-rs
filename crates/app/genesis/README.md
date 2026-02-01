@@ -64,6 +64,9 @@ Genesis files are JSON with this structure:
 {
   "chain_id": "evolve-mainnet",
   "genesis_time": 1704067200000,
+  "consensus_params": {
+    "block_gas_limit": 30000000
+  },
   "transactions": [
     {
       "id": "alice",
@@ -99,7 +102,16 @@ Genesis files are JSON with this structure:
 |-------|------|-------------|
 | `chain_id` | string | Network identifier |
 | `genesis_time` | u64 | Unix timestamp in milliseconds (optional, default 0) |
+| `consensus_params` | object | Consensus parameters (optional, uses defaults) |
 | `transactions` | array | Ordered list of genesis transactions |
+
+### Consensus Parameters
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `block_gas_limit` | u64 | Maximum gas per block (default: 30,000,000) |
+
+Consensus parameters are stored in state during genesis at a well-known key, allowing syncing nodes to read them for block validation.
 
 ### Transaction Fields
 
@@ -201,11 +213,28 @@ genesis.validate()?;
 let registry = build_registry();
 let txs = genesis.to_transactions(&registry)?;
 
-// Apply to state
-let (state, results) = apply_genesis(&stf, &storage, &codes, txs)?;
+// Apply to state (consensus params are stored automatically)
+let (state, results) = apply_genesis(
+    &stf,
+    &storage,
+    &codes,
+    &genesis.consensus_params,
+    txs,
+)?;
 
 // Commit state changes
 storage.apply_changes(state.into_changes()?)?;
+```
+
+### Reading Consensus Parameters
+
+Syncing nodes can read consensus parameters from state:
+
+```rust
+use evolve_genesis::read_consensus_params;
+
+let params = read_consensus_params(&storage)?;
+println!("Block gas limit: {}", params.block_gas_limit);
 ```
 
 ### Error Handling
@@ -216,7 +245,7 @@ Genesis execution stops at the first error. The `GenesisError::TransactionFailed
 - `error`: Error message from execution
 
 ```rust
-match apply_genesis(&stf, &storage, &codes, txs) {
+match apply_genesis(&stf, &storage, &codes, &genesis.consensus_params, txs) {
     Ok((state, results)) => { /* success */ }
     Err(GenesisError::TransactionFailed { index, id, error }) => {
         eprintln!("Genesis tx {} ({:?}) failed: {}", index, id, error);
@@ -266,7 +295,7 @@ let txs = genesis.to_transactions(&registry)?;
 
 // Optionally execute against in-memory storage
 let test_storage = InMemoryStorage::new();
-apply_genesis(&stf, &test_storage, &codes, txs)?;
+apply_genesis(&stf, &test_storage, &codes, &genesis.consensus_params, txs)?;
 ```
 
 ## Future Work

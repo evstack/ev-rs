@@ -1,12 +1,8 @@
 ---
-description: How to write property-based tests for Evolve SDK applications
-triggers:
-  - "property test"
-  - "proptest"
-  - "invariant testing"
-  - "fuzz testing"
-  - "test generators"
+name: evolve-proptest
+description: Write property-based tests for Evolve SDK using proptest. Use when writing property tests, invariant testing, fuzz testing, test generators, or finding edge cases.
 ---
+
 
 # Evolve Property-Based Testing
 

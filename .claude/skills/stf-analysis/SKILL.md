@@ -1,11 +1,6 @@
 ---
-description: Analyze State Transition Function implementations for correctness, threading issues, and simplification opportunities
-triggers:
-  - analyze STF
-  - analyze state transition
-  - check threading model
-  - find non-determinism
-  - simplify execution
+name: stf-analysis
+description: Analyze State Transition Function implementations for correctness, threading issues, non-determinism, and simplification opportunities. Use when analyzing STF code, checking threading model, finding non-determinism sources, or reviewing execution layer.
 ---
 
 # STF Analysis Skill

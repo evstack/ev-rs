@@ -21,6 +21,15 @@ pub trait Block<Tx> {
     fn context(&self) -> BlockContext;
     // TODO: make mut
     fn txs(&self) -> &[Tx];
+
+    /// Returns the maximum gas allowed for this block.
+    ///
+    /// The STF will stop processing transactions once cumulative gas
+    /// exceeds this limit. Defaults to `u64::MAX` (no limit) for
+    /// backwards compatibility.
+    fn gas_limit(&self) -> u64 {
+        u64::MAX
+    }
 }
 
 pub trait TxValidator<Tx> {

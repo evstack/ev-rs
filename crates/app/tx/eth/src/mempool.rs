@@ -106,6 +106,10 @@ impl MempoolTx for TxContext {
     fn sender_key(&self) -> Option<[u8; 20]> {
         Some(self.envelope.sender().0 .0)
     }
+
+    fn gas_limit(&self) -> u64 {
+        self.envelope.gas_limit()
+    }
 }
 
 impl Transaction for TxContext {

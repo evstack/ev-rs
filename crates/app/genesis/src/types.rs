@@ -1,6 +1,38 @@
 //! Core genesis types.
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use evolve_core::{AccountId, InvokeRequest};
+use serde::{Deserialize, Serialize};
+
+/// Default block gas limit (30 million).
+pub const DEFAULT_BLOCK_GAS_LIMIT: u64 = 30_000_000;
+
+/// Consensus parameters stored in genesis and state.
+///
+/// These parameters are critical for consensus - all nodes must agree on them
+/// to validate blocks correctly. They are set at genesis and stored in state
+/// so syncing nodes can read them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, BorshSerialize, BorshDeserialize)]
+pub struct ConsensusParams {
+    /// Maximum gas allowed per block.
+    /// Transactions that would exceed this limit are not included in the block.
+    pub block_gas_limit: u64,
+}
+
+impl Default for ConsensusParams {
+    fn default() -> Self {
+        Self {
+            block_gas_limit: DEFAULT_BLOCK_GAS_LIMIT,
+        }
+    }
+}
+
+impl ConsensusParams {
+    /// Create new consensus params with the given block gas limit.
+    pub fn new(block_gas_limit: u64) -> Self {
+        Self { block_gas_limit }
+    }
+}
 
 /// A genesis transaction.
 ///

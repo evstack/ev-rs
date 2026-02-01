@@ -1,15 +1,8 @@
 ---
-description: How to write modules for the Evolve SDK
-triggers:
-  - "write module"
-  - "create module"
-  - "account code"
-  - "account_impl"
-  - "module development"
-  - "new module"
-  - "AccountState"
-  - "storage prefix"
+name: evolve-modules
+description: Write modules for the Evolve SDK using AccountCode trait and account_impl macro. Use when creating modules, writing account code, using AccountState, storage prefixes, or developing new blockchain modules.
 ---
+
 
 # Writing Evolve Modules
 

@@ -5,7 +5,7 @@
 
 use crate::error::GenesisError;
 use crate::registry::MessageRegistry;
-use crate::types::GenesisTx;
+use crate::types::{ConsensusParams, GenesisTx};
 use crate::SYSTEM_ACCOUNT_ID;
 use evolve_core::AccountId;
 use serde::{Deserialize, Serialize};
@@ -21,6 +21,11 @@ pub struct GenesisFile {
     /// Optional genesis time as unix timestamp (milliseconds)
     #[serde(default)]
     pub genesis_time: u64,
+
+    /// Consensus parameters (block gas limit, etc.)
+    /// If not provided, defaults are used.
+    #[serde(default)]
+    pub consensus_params: ConsensusParams,
 
     /// Ordered list of genesis transactions
     pub transactions: Vec<GenesisTxJson>,

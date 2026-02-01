@@ -3,6 +3,7 @@ members = [
     "crates/rpc/types",
     "crates/rpc/eth-jsonrpc",
     "crates/rpc/grpc",
+    "crates/rpc/evnode",
     "crates/rpc/chain-index",
     "crates/app/stf",
     "crates/app/tx/eth",
@@ -20,6 +21,7 @@ members = [
     "crates/app/sdk/math",
     "crates/app/node",
     "bin/testapp",
+    "bin/evd",
     "crates/app/genesis",
     "crates/testing/simulator",
     "crates/testing/proptest",
@@ -56,6 +58,7 @@ evolve_mempool = { path = "crates/app/mempool" }
 evolve_rpc_types = { path = "crates/rpc/types" }
 evolve_eth_jsonrpc = { path = "crates/rpc/eth-jsonrpc" }
 evolve_grpc = { path = "crates/rpc/grpc" }
+evolve_evnode = { path = "crates/rpc/evnode" }
 evolve_chain_index = { path = "crates/rpc/chain-index" }
 
 evolve_testing = { path = "crates/app/sdk/testing" }
@@ -66,7 +69,7 @@ evolve_simulator = { path = "crates/testing/simulator" }
 evolve_proptest = { path = "crates/testing/proptest" }
 evolve_debugger = { path = "crates/testing/debugger" }
 evolve_node = { path = "crates/app/node" }
-
+evolve_testapp = { path = "bin/testapp" }
 
 # outside deps
 linkme = { version = "0.3", default-features = false }

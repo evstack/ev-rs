@@ -1,12 +1,6 @@
 ---
-description: Overview of the Evolve SDK testing infrastructure
-triggers:
-  - "how to test"
-  - "testing guide"
-  - "test infrastructure"
-  - "TestApp"
-  - "SimTestApp"
-  - "write tests"
+name: evolve-testing
+description: Overview of Evolve SDK testing infrastructure including TestApp, SimTestApp, MockEnv, and transaction generators. Use when writing tests, setting up test harnesses, using test infrastructure, or choosing between testing approaches.
 ---
 
 # Evolve Testing Infrastructure

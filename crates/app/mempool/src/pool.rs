@@ -208,6 +208,61 @@ impl<T: MempoolTx> Mempool<T> {
         selected
     }
 
+    /// Select transactions for block inclusion up to gas and count limits.
+    ///
+    /// Selects transactions in priority order until either:
+    /// - The cumulative gas would exceed `max_gas`
+    /// - The count reaches `max_txs`
+    /// - The mempool is exhausted
+    ///
+    /// Transactions that exceed the remaining gas budget are skipped,
+    /// allowing smaller transactions to fill the remaining space.
+    ///
+    /// # Arguments
+    /// * `max_gas` - Maximum cumulative gas (0 means no gas limit)
+    /// * `max_txs` - Maximum number of transactions (0 means no count limit)
+    ///
+    /// # Returns
+    /// Tuple of (selected transactions, total gas of selected transactions)
+    pub fn select_with_gas_budget(&mut self, max_gas: u64, max_txs: usize) -> (Vec<Arc<T>>, u64) {
+        let capacity = if max_txs > 0 { max_txs } else { self.len() };
+        let mut selected = Vec::with_capacity(capacity);
+        let mut total_gas: u64 = 0;
+
+        // Collect entries we pop but don't select (too large for remaining budget)
+        let mut skipped_entries = Vec::new();
+
+        while max_txs == 0 || selected.len() < max_txs {
+            match self.by_priority.pop() {
+                Some(entry) => {
+                    // Check if transaction still exists (may have been removed)
+                    if let Some(tx) = self.by_hash.get(&entry.hash) {
+                        let tx_gas = tx.gas_limit();
+
+                        // Check if this tx fits in remaining gas budget
+                        if max_gas == 0 || total_gas.saturating_add(tx_gas) <= max_gas {
+                            total_gas = total_gas.saturating_add(tx_gas);
+                            selected.push(tx.clone());
+                        } else {
+                            // Tx too large for remaining budget - skip it
+                            // but keep track to re-add to heap later
+                            skipped_entries.push(entry);
+                        }
+                    }
+                    // If not found, the entry was stale - continue to next
+                }
+                None => break, // Heap is empty
+            }
+        }
+
+        // Re-add skipped entries back to the priority queue
+        for entry in skipped_entries {
+            self.by_priority.push(entry);
+        }
+
+        (selected, total_gas)
+    }
+
     /// Peek at the highest priority transaction without removing it.
     pub fn peek(&self) -> Option<Arc<T>> {
         self.by_priority
@@ -240,6 +295,10 @@ impl<T: MempoolTx> MempoolOps<T> for Mempool<T> {
 
     fn select(&mut self, limit: usize) -> Vec<Arc<T>> {
         Mempool::select(self, limit)
+    }
+
+    fn select_with_gas_budget(&mut self, max_gas: u64, max_txs: usize) -> (Vec<Arc<T>>, u64) {
+        Mempool::select_with_gas_budget(self, max_gas, max_txs)
     }
 
     fn remove_many(&mut self, hashes: &[[u8; 32]]) {
@@ -298,6 +357,24 @@ mod tests {
         gas_price: u128,
         nonce: u64,
         sender: [u8; 20],
+        gas_limit: u64,
+    }
+
+    impl TestGasTx {
+        fn new(id: u8, gas_price: u128, nonce: u64, sender: [u8; 20]) -> Self {
+            Self {
+                id: [id; 32],
+                gas_price,
+                nonce,
+                sender,
+                gas_limit: 21000, // Default gas limit
+            }
+        }
+
+        fn with_gas_limit(mut self, gas_limit: u64) -> Self {
+            self.gas_limit = gas_limit;
+            self
+        }
     }
 
     impl MempoolTx for TestGasTx {
@@ -314,6 +391,10 @@ mod tests {
         fn sender_key(&self) -> Option<[u8; 20]> {
             Some(self.sender)
         }
+
+        fn gas_limit(&self) -> u64 {
+            self.gas_limit
+        }
     }
 
     /// Test transaction with FIFO ordering.
@@ -321,6 +402,7 @@ mod tests {
     struct TestFifoTx {
         id: [u8; 32],
         timestamp: u64,
+        gas_limit: u64,
     }
 
     impl MempoolTx for TestFifoTx {
@@ -332,6 +414,10 @@ mod tests {
 
         fn ordering_key(&self) -> Self::OrderingKey {
             FifoOrdering::new(self.timestamp)
+        }
+
+        fn gas_limit(&self) -> u64 {
+            self.gas_limit
         }
     }
 
@@ -346,12 +432,7 @@ mod tests {
     fn test_mempool_add_and_get() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
-        let tx = TestGasTx {
-            id: [1u8; 32],
-            gas_price: 100,
-            nonce: 0,
-            sender: [0xAAu8; 20],
-        };
+        let tx = TestGasTx::new(1, 100, 0, [0xAAu8; 20]);
 
         let id = pool.add(tx.clone()).unwrap();
         assert_eq!(id, [1u8; 32]);
@@ -366,12 +447,7 @@ mod tests {
     fn test_mempool_duplicate_rejected() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
-        let tx = TestGasTx {
-            id: [1u8; 32],
-            gas_price: 100,
-            nonce: 0,
-            sender: [0xAAu8; 20],
-        };
+        let tx = TestGasTx::new(1, 100, 0, [0xAAu8; 20]);
 
         pool.add(tx.clone()).unwrap();
         let result = pool.add(tx);
@@ -382,12 +458,7 @@ mod tests {
     fn test_mempool_remove() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
-        let tx = TestGasTx {
-            id: [1u8; 32],
-            gas_price: 100,
-            nonce: 0,
-            sender: [0xAAu8; 20],
-        };
+        let tx = TestGasTx::new(1, 100, 0, [0xAAu8; 20]);
 
         pool.add(tx).unwrap();
         assert_eq!(pool.len(), 1);
@@ -403,24 +474,9 @@ mod tests {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
         // Add transactions with different gas prices
-        let low = TestGasTx {
-            id: [1u8; 32],
-            gas_price: 50,
-            nonce: 0,
-            sender: [0xAAu8; 20],
-        };
-        let high = TestGasTx {
-            id: [2u8; 32],
-            gas_price: 100,
-            nonce: 0,
-            sender: [0xBBu8; 20],
-        };
-        let medium = TestGasTx {
-            id: [3u8; 32],
-            gas_price: 75,
-            nonce: 0,
-            sender: [0xCCu8; 20],
-        };
+        let low = TestGasTx::new(1, 50, 0, [0xAAu8; 20]);
+        let high = TestGasTx::new(2, 100, 0, [0xBBu8; 20]);
+        let medium = TestGasTx::new(3, 75, 0, [0xCCu8; 20]);
 
         pool.add(low).unwrap();
         pool.add(high).unwrap();
@@ -443,14 +499,17 @@ mod tests {
         let newer = TestFifoTx {
             id: [1u8; 32],
             timestamp: 3000,
+            gas_limit: 21000,
         };
         let oldest = TestFifoTx {
             id: [2u8; 32],
             timestamp: 1000,
+            gas_limit: 21000,
         };
         let middle = TestFifoTx {
             id: [3u8; 32],
             timestamp: 2000,
+            gas_limit: 21000,
         };
 
         pool.add(newer).unwrap();
@@ -471,12 +530,7 @@ mod tests {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
         for i in 0..10 {
-            let tx = TestGasTx {
-                id: [i; 32],
-                gas_price: (i as u128) * 10,
-                nonce: 0,
-                sender: [i; 20],
-            };
+            let tx = TestGasTx::new(i, (i as u128) * 10, 0, [i; 20]);
             pool.add(tx).unwrap();
         }
 
@@ -493,18 +547,8 @@ mod tests {
     fn test_stale_entries_skipped() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
-        let tx1 = TestGasTx {
-            id: [1u8; 32],
-            gas_price: 100,
-            nonce: 0,
-            sender: [0xAAu8; 20],
-        };
-        let tx2 = TestGasTx {
-            id: [2u8; 32],
-            gas_price: 50,
-            nonce: 0,
-            sender: [0xBBu8; 20],
-        };
+        let tx1 = TestGasTx::new(1, 100, 0, [0xAAu8; 20]);
+        let tx2 = TestGasTx::new(2, 50, 0, [0xBBu8; 20]);
 
         pool.add(tx1).unwrap();
         pool.add(tx2).unwrap();
@@ -524,18 +568,8 @@ mod tests {
 
         let sender = [0xAAu8; 20];
 
-        let tx1 = TestGasTx {
-            id: [1u8; 32],
-            gas_price: 100,
-            nonce: 0,
-            sender,
-        };
-        let tx2 = TestGasTx {
-            id: [2u8; 32],
-            gas_price: 100,
-            nonce: 1,
-            sender,
-        };
+        let tx1 = TestGasTx::new(1, 100, 0, sender);
+        let tx2 = TestGasTx::new(2, 100, 1, sender);
 
         pool.add(tx1).unwrap();
         pool.add(tx2).unwrap();
@@ -550,24 +584,9 @@ mod tests {
 
         let sender = [0xAAu8; 20];
 
-        let tx1 = TestGasTx {
-            id: [1u8; 32],
-            gas_price: 100,
-            nonce: 0,
-            sender,
-        };
-        let tx2 = TestGasTx {
-            id: [2u8; 32],
-            gas_price: 100,
-            nonce: 1,
-            sender,
-        };
-        let tx3 = TestGasTx {
-            id: [3u8; 32],
-            gas_price: 100,
-            nonce: 2,
-            sender,
-        };
+        let tx1 = TestGasTx::new(1, 100, 0, sender);
+        let tx2 = TestGasTx::new(2, 100, 1, sender);
+        let tx3 = TestGasTx::new(3, 100, 2, sender);
 
         pool.add(tx1).unwrap();
         pool.add(tx2).unwrap();
@@ -585,12 +604,7 @@ mod tests {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
         for i in 0..5 {
-            let tx = TestGasTx {
-                id: [i; 32],
-                gas_price: 100,
-                nonce: i as u64,
-                sender: [0xAAu8; 20],
-            };
+            let tx = TestGasTx::new(i, 100, i as u64, [0xAAu8; 20]);
             pool.add(tx).unwrap();
         }
 
@@ -598,5 +612,118 @@ mod tests {
         pool.clear();
         assert_eq!(pool.len(), 0);
         assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn test_select_with_gas_budget_respects_limit() {
+        let mut pool: Mempool<TestGasTx> = Mempool::new();
+
+        // Add 3 txs with 10k gas each
+        for i in 0..3 {
+            let tx = TestGasTx::new(i, 100, i as u64, [0xAAu8; 20]).with_gas_limit(10_000);
+            pool.add(tx).unwrap();
+        }
+
+        // Request max 25k gas - should get 2 txs (20k total)
+        let (selected, total_gas) = pool.select_with_gas_budget(25_000, 0);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(total_gas, 20_000);
+    }
+
+    #[test]
+    fn test_select_with_gas_budget_respects_count() {
+        let mut pool: Mempool<TestGasTx> = Mempool::new();
+
+        // Add 5 txs with 10k gas each
+        for i in 0..5 {
+            let tx = TestGasTx::new(i, 100, i as u64, [0xAAu8; 20]).with_gas_limit(10_000);
+            pool.add(tx).unwrap();
+        }
+
+        // Request max 2 txs with unlimited gas
+        let (selected, total_gas) = pool.select_with_gas_budget(0, 2);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(total_gas, 20_000);
+    }
+
+    #[test]
+    fn test_select_with_gas_budget_skips_large_txs() {
+        let mut pool: Mempool<TestGasTx> = Mempool::new();
+
+        // Add txs with different gas limits, highest gas price first
+        // tx1: high gas price, large gas limit (won't fit after tx2)
+        let tx1 = TestGasTx::new(1, 100, 0, [0xAAu8; 20]).with_gas_limit(50_000);
+        // tx2: medium gas price, small gas limit
+        let tx2 = TestGasTx::new(2, 80, 0, [0xBBu8; 20]).with_gas_limit(10_000);
+        // tx3: low gas price, small gas limit (will fit in remaining)
+        let tx3 = TestGasTx::new(3, 60, 0, [0xCCu8; 20]).with_gas_limit(10_000);
+
+        pool.add(tx1).unwrap();
+        pool.add(tx2).unwrap();
+        pool.add(tx3).unwrap();
+
+        // Request max 60k gas - tx1 (50k) + tx2 (10k) = 60k, tx3 skipped
+        let (selected, total_gas) = pool.select_with_gas_budget(60_000, 0);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(total_gas, 60_000);
+        assert_eq!(selected[0].gas_price, 100); // tx1
+        assert_eq!(selected[1].gas_price, 80); // tx2
+    }
+
+    #[test]
+    fn test_select_with_gas_budget_fills_remaining_space() {
+        let mut pool: Mempool<TestGasTx> = Mempool::new();
+
+        // Add: large tx (50k), small tx (10k), small tx (10k)
+        let tx1 = TestGasTx::new(1, 100, 0, [0xAAu8; 20]).with_gas_limit(50_000);
+        let tx2 = TestGasTx::new(2, 80, 0, [0xBBu8; 20]).with_gas_limit(10_000);
+        let tx3 = TestGasTx::new(3, 60, 0, [0xCCu8; 20]).with_gas_limit(10_000);
+
+        pool.add(tx1).unwrap();
+        pool.add(tx2).unwrap();
+        pool.add(tx3).unwrap();
+
+        // Request max 25k gas - tx1 doesn't fit, tx2 (10k) + tx3 (10k) = 20k
+        let (selected, total_gas) = pool.select_with_gas_budget(25_000, 0);
+        assert_eq!(selected.len(), 2);
+        assert_eq!(total_gas, 20_000);
+        // tx1 was skipped because it's too large
+        assert_eq!(selected[0].gas_price, 80); // tx2
+        assert_eq!(selected[1].gas_price, 60); // tx3
+    }
+
+    #[test]
+    fn test_select_with_gas_budget_zero_means_no_limit() {
+        let mut pool: Mempool<TestGasTx> = Mempool::new();
+
+        for i in 0..5 {
+            let tx = TestGasTx::new(i, 100, i as u64, [0xAAu8; 20]).with_gas_limit(10_000);
+            pool.add(tx).unwrap();
+        }
+
+        // Both limits at 0 means no limits
+        let (selected, total_gas) = pool.select_with_gas_budget(0, 0);
+        assert_eq!(selected.len(), 5);
+        assert_eq!(total_gas, 50_000);
+    }
+
+    #[test]
+    fn test_select_with_gas_budget_skipped_txs_remain_in_pool() {
+        let mut pool: Mempool<TestGasTx> = Mempool::new();
+
+        // Add one large tx and one small tx
+        let tx1 = TestGasTx::new(1, 100, 0, [0xAAu8; 20]).with_gas_limit(50_000);
+        let tx2 = TestGasTx::new(2, 80, 0, [0xBBu8; 20]).with_gas_limit(10_000);
+
+        pool.add(tx1).unwrap();
+        pool.add(tx2).unwrap();
+
+        // First selection: max 15k gas - only tx2 fits
+        let (selected, _) = pool.select_with_gas_budget(15_000, 0);
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].gas_price, 80);
+
+        // tx1 should still be in pool (it was skipped, not removed)
+        assert!(pool.contains(&[1u8; 32]));
     }
 }
