@@ -83,12 +83,3 @@ Example:
 ```
 
 This prevents accounts from accidentally (or maliciously) accessing each other's state.
-
-## No Sudo Model
-
-There is no privileged escalation in Evolve. All execution is account-driven:
-
-- No "admin" accounts with special powers
-- No way to bypass account code
-- All state changes go through the account's execute method
-- System accounts are explicitly defined and limited in scope

@@ -6,7 +6,6 @@ The goal of the project is to build a diverse ecosystem allowing applications to
 
 ## Core Principles
 
-- **No Sudo Model**: All execution is account-driven; no privileged escalation exists
 - **Everything is an Account**: Storage, execution, and queries are namespaced by AccountId
 - **Macro-Driven Development**: `#[account_impl]`, `#[init]`, `#[exec]`, `#[query]` eliminate boilerplate
 - **Deterministic Execution**: Sequential block processing with checkpoint/rollback for atomicity

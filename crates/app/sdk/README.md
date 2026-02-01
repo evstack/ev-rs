@@ -11,13 +11,6 @@ implement `AccountCode` manually; Evolve’s macros handle it for you.
 In Evolve, every entity is an account. Each account is defined by an identifier (`AccountID`) and the `AccountCode` that
 governs its behavior. An account’s state is encapsulated behind its unique `AccountID`.
 
-### No Sudo
-
-In Evolve, there is no concept of “sudo.” Whenever something is executed, it is because one account (which could be the
-runtime itself, using a well-known account ID) has requested it. The account receiving the request then decides whether
-or not to process it. This design ensures that each account retains complete control over permissions, making it harder
-to inadvertently break invariants.
-
 ### Composition and Extensibility
 
 Accounts in Evolve can be composed into higher-level primitives or “pre-compiles.” The SDK aims to keep its API and
@@ -35,7 +28,7 @@ Below is a **merged** guide on creating an account in Evolve with `init`, `exec`
 details about **auto-generated references** (`AccountRef`) and the broader set of **collection types** available. This
 single document covers:
 
-1. **Core Principles** (No sudo, macro-based trait implementation)
+1. **Core Principles** (macro-based trait implementation)
 2. **Collection Types** (e.g., `Item`, `Map`, etc.)
 3. **AccountRef Generation** (client interface for inter-account communication)
 4. **Step-by-Step Explanation** of the example code
@@ -46,7 +39,6 @@ single document covers:
 
 Evolve is an SDK designed for building powerful and flexible blockchain applications in Rust.
 
-- **No Sudo**: There is no concept of a “super-user.” Every transaction or method call is triggered by an account.
 - **Macros for AccountCode**: You don’t directly implement `AccountCode`; instead, Evolve provides macros—`#[init]`,
   `#[exec]`, and `#[query]`—that automatically generate the necessary trait logic.
 - **Everything Is an Account**: Each account is defined by an `AccountID` plus the logic (the “code”) behind it. State
@@ -311,10 +303,6 @@ pub mod pool {
       ** method signatures for `init`, `exec`, and `query`.
     - This reference is how other accounts (or user-facing code) interact with your account.
 
-4. **No Sudo**
-    - Every action must be requested by an account (or the special runtime account). There is no privileged
-      “super-user.”
-
-5. **Flexibility and Extensibility**
+4. **Flexibility and Extensibility**
     - Core Evolve interfaces are intentionally minimal. For more specialized behaviors (e.g., block info, validators),
       you can create additional accounts that each implement specific logic.
