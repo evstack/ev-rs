@@ -106,6 +106,11 @@ test-verbose:
 test-one name:
     cargo test --workspace {{name}} -- --nocapture
 
+# Run long-running simulation tests (ignored by default)
+[group('test')]
+test-long:
+    cargo test -p evolve-testapp --test simulation_long_tests -- --ignored --nocapture
+
 # ============================================================================
 # DEV NODE (testapp)
 # ============================================================================
