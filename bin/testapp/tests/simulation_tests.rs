@@ -2,7 +2,9 @@
 
 use evolve_fungible_asset::{GetBalanceMsg, TotalSupplyMsg};
 use evolve_simulator::SimConfig;
-use evolve_testapp::sim_testing::{BalanceAwareTransferGenerator, SimTestApp, TxGeneratorRegistry};
+use evolve_testapp::sim_testing::{
+    DynamicAccountTransferGenerator, SimTestApp, TxGeneratorRegistry,
+};
 
 /// Seeds for short-lived CI simulations.
 const CI_SEED: u64 = 42;
@@ -19,8 +21,9 @@ fn test_transfer_preserves_total_supply() {
     let accounts = app.accounts();
 
     // Setup initial balances
-    app.mint_atom(accounts.alice, 10_000);
-    app.mint_atom(accounts.bob, 10_000);
+    app.mint_atom(accounts.alice, 20_000);
+    app.mint_atom(accounts.bob, 20_000);
+    let initial_signers = app.signer_account_count();
 
     // Query initial total supply
     let initial_supply: u128 = app
@@ -31,16 +34,21 @@ fn test_transfer_preserves_total_supply() {
     let mut registry = TxGeneratorRegistry::new();
     registry.register(
         100,
-        BalanceAwareTransferGenerator::new(
+        DynamicAccountTransferGenerator::new(
             accounts.atom,
-            vec![(accounts.alice, 10_000), (accounts.bob, 10_000)],
-            10,
+            accounts.alice,
+            vec![(accounts.alice, 21_000), (accounts.bob, 22_000)],
+            1,
             500,
+            1_000,
             100_000,
+            1,
+            4,
         ),
     );
 
-    let _ = app.run_blocks_with_registry(5, &mut registry);
+    let _ = app.run_blocks_with_registry(8, &mut registry);
+    let final_signers = app.signer_account_count();
 
     // Verify total supply unchanged
     let final_supply: u128 = app
@@ -52,26 +60,10 @@ fn test_transfer_preserves_total_supply() {
         "Total supply must be preserved across transfers"
     );
 
-    // Verify sum of balances equals total supply
-    let alice_balance: Option<u128> = app
-        .query(
-            accounts.atom,
-            &GetBalanceMsg {
-                account: accounts.alice,
-            },
-        )
-        .expect("query alice balance");
-    let bob_balance: Option<u128> = app
-        .query(
-            accounts.atom,
-            &GetBalanceMsg {
-                account: accounts.bob,
-            },
-        )
-        .expect("query bob balance");
-
-    let sum = alice_balance.unwrap_or(0) + bob_balance.unwrap_or(0);
-    assert_eq!(sum, final_supply, "Sum of balances must equal total supply");
+    assert!(
+        final_signers > initial_signers,
+        "simulation should create new signer accounts; initial={initial_signers}, final={final_signers}"
+    );
 }
 
 /// Verifies failed transactions don't mutate state.

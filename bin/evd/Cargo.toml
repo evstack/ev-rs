@@ -24,7 +24,6 @@ evolve_evnode = { workspace = true, features = ["testapp"] }
 evolve_testapp.workspace = true
 evolve_testing.workspace = true
 evolve_tx_eth.workspace = true
-evolve_tx_micro.workspace = true
 evolve_chain_index.workspace = true
 evolve_eth_jsonrpc.workspace = true
 evolve_rpc_types.workspace = true

@@ -425,6 +425,138 @@ impl TxGenerator for RoundRobinTransferGenerator {
     }
 }
 
+/// Generates transfers while periodically creating and funding new EOA accounts.
+/// New accounts are then included in future transfer traffic.
+pub struct DynamicAccountTransferGenerator {
+    token_account: AccountId,
+    faucet: AccountId,
+    participants: Vec<AccountId>,
+    balances: BTreeMap<AccountId, u128>,
+    min_amount: u128,
+    max_amount: u128,
+    funding_amount: u128,
+    gas_limit: u64,
+    create_every_n_blocks: u64,
+    max_new_accounts: usize,
+    created_accounts: usize,
+}
+
+impl DynamicAccountTransferGenerator {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        token_account: AccountId,
+        faucet: AccountId,
+        initial_balances: Vec<(AccountId, u128)>,
+        min_amount: u128,
+        max_amount: u128,
+        funding_amount: u128,
+        gas_limit: u64,
+        create_every_n_blocks: u64,
+        max_new_accounts: usize,
+    ) -> Self {
+        let participants = initial_balances
+            .iter()
+            .map(|(account, _)| *account)
+            .collect();
+        let balances = initial_balances.into_iter().collect();
+        Self {
+            token_account,
+            faucet,
+            participants,
+            balances,
+            min_amount,
+            max_amount,
+            funding_amount,
+            gas_limit,
+            create_every_n_blocks: create_every_n_blocks.max(1),
+            max_new_accounts,
+            created_accounts: 0,
+        }
+    }
+
+    fn record_transfer(&mut self, from: AccountId, to: AccountId, amount: u128) {
+        if let Some(balance) = self.balances.get_mut(&from) {
+            *balance = balance.saturating_sub(amount);
+        }
+        *self.balances.entry(to).or_insert(0) += amount;
+    }
+
+    fn maybe_create_and_fund(&mut self, height: u64, app: &mut SimTestApp) -> Option<Vec<u8>> {
+        if self.created_accounts >= self.max_new_accounts {
+            return None;
+        }
+        if height % self.create_every_n_blocks != 0 {
+            return None;
+        }
+
+        let faucet_balance = self.balances.get(&self.faucet).copied().unwrap_or(0);
+        if faucet_balance < self.funding_amount {
+            return None;
+        }
+
+        let new_account = app.create_eoa();
+        self.participants.push(new_account);
+        self.balances.insert(new_account, 0);
+        self.created_accounts = self.created_accounts.saturating_add(1);
+        self.record_transfer(self.faucet, new_account, self.funding_amount);
+        app.build_token_transfer_tx(
+            self.faucet,
+            self.token_account,
+            new_account,
+            self.funding_amount,
+            self.gas_limit,
+        )
+    }
+}
+
+impl TxGenerator for DynamicAccountTransferGenerator {
+    fn generate_tx(&mut self, height: u64, app: &mut SimTestApp) -> Option<Vec<u8>> {
+        if let Some(tx) = self.maybe_create_and_fund(height, app) {
+            return Some(tx);
+        }
+
+        if self.participants.len() < 2 || self.min_amount > self.max_amount {
+            return None;
+        }
+
+        let funded: Vec<_> = self
+            .participants
+            .iter()
+            .filter(|account| self.balances.get(account).copied().unwrap_or(0) >= self.min_amount)
+            .copied()
+            .collect();
+        if funded.is_empty() {
+            return None;
+        }
+
+        let sender = funded[app.sim.rng().gen_range(0..funded.len())];
+        let sender_balance = self.balances.get(&sender).copied().unwrap_or(0);
+        let max_transfer = sender_balance.min(self.max_amount);
+        if max_transfer < self.min_amount {
+            return None;
+        }
+
+        let mut recipient = self.participants[0];
+        for _ in 0..self.participants.len() {
+            let idx = app.sim.rng().gen_range(0..self.participants.len());
+            if self.participants[idx] != sender {
+                recipient = self.participants[idx];
+                break;
+            }
+        }
+
+        let amount = app.sim.rng().gen_range(self.min_amount..=max_transfer);
+        self.record_transfer(sender, recipient, amount);
+        app.build_token_transfer_tx(
+            sender,
+            self.token_account,
+            recipient,
+            amount,
+            self.gas_limit,
+        )
+    }
+}
+
 impl SimTestApp {
     pub fn new() -> Self {
         Self::default()
@@ -898,6 +1030,10 @@ impl SimTestApp {
 
     pub fn accounts(&self) -> GenesisAccounts {
         self.accounts
+    }
+
+    pub fn signer_account_count(&self) -> usize {
+        self.signers.len()
     }
 }
 

@@ -11,6 +11,41 @@ use std::sync::Arc;
 
 use crate::error::MempoolError;
 
+/// Maximum length for sender keys used in mempool indexing.
+///
+/// This keeps sender tracking allocation-free while allowing different account
+/// address formats.
+pub const MAX_SENDER_KEY_LEN: usize = 64;
+
+/// Bounded sender key used for per-sender mempool tracking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SenderKey {
+    len: u8,
+    bytes: [u8; MAX_SENDER_KEY_LEN],
+}
+
+impl SenderKey {
+    /// Build a sender key from bytes if it fits the configured bound.
+    pub fn new(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() > MAX_SENDER_KEY_LEN {
+            return None;
+        }
+        let len = u8::try_from(bytes.len()).ok()?;
+        let mut key_bytes = [0u8; MAX_SENDER_KEY_LEN];
+        key_bytes[..bytes.len()].copy_from_slice(bytes);
+        Some(Self {
+            len,
+            bytes: key_bytes,
+        })
+    }
+
+    /// Borrow the sender key bytes.
+    #[inline]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.bytes[..self.len as usize]
+    }
+}
+
 /// Trait for transactions that can be stored in a mempool.
 ///
 /// The associated `OrderingKey` determines priority ordering.
@@ -34,7 +69,7 @@ pub trait MempoolTx: Clone + Send + Sync + 'static {
     /// Optional sender key for per-sender tracking.
     ///
     /// Returns `None` if per-sender tracking is not needed.
-    fn sender_key(&self) -> Option<[u8; 20]> {
+    fn sender_key(&self) -> Option<SenderKey> {
         None
     }
 

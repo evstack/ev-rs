@@ -54,4 +54,6 @@ mod traits;
 
 pub use error::{MempoolError, MempoolResult};
 pub use pool::{new_shared_mempool, shared_mempool_from, Mempool, SharedMempool};
-pub use traits::{FifoOrdering, GasPriceOrdering, MempoolOps, MempoolTx};
+pub use traits::{
+    FifoOrdering, GasPriceOrdering, MempoolOps, MempoolTx, SenderKey, MAX_SENDER_KEY_LEN,
+};

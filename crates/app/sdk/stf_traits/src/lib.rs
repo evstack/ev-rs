@@ -1,8 +1,20 @@
 use evolve_core::{
     AccountCode, AccountId, BlockContext, Environment, ErrorCode, FungibleAsset, InvokeRequest,
-    InvokeResponse, ReadonlyKV, SdkResult,
+    InvokeResponse, Message, ReadonlyKV, SdkResult,
 };
 use rayon::prelude::*;
+
+/// Optional bootstrap metadata for sender account auto-registration.
+///
+/// Transaction types can return this when STF should ensure the sender account
+/// is initialized before validation/execution.
+#[derive(Clone, Debug)]
+pub struct SenderBootstrap {
+    /// Account code identifier to register if sender account is missing.
+    pub account_code_id: &'static str,
+    /// Account-type-specific init message for bootstrap registration.
+    pub init_message: Message,
+}
 
 pub trait Transaction {
     fn sender(&self) -> AccountId;
@@ -11,6 +23,11 @@ pub trait Transaction {
     fn gas_limit(&self) -> u64;
     fn funds(&self) -> &[FungibleAsset];
     fn compute_identifier(&self) -> [u8; 32];
+
+    /// Optional sender bootstrap primitive for STF account auto-registration.
+    fn sender_bootstrap(&self) -> Option<SenderBootstrap> {
+        None
+    }
 }
 
 pub trait TxDecoder<T> {

@@ -88,9 +88,8 @@ use evolve_tx_eth::TxContext;
 let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
 ```
 
-Transaction types:
-- `TxContext` - Ethereum RLP transactions (type 0x02)
-- `MicroTxContext` - Minimal fixed-layout transactions (type 0x83)
+Transaction type:
+- `TxContext` - Ethereum RLP transactions
 
 ### 5. JSON-RPC Server (evolve_eth_jsonrpc)
 
@@ -251,34 +250,6 @@ See `bin/evd/src/main.rs` for the complete reference implementation that include
 ### ETH Transactions (default)
 
 Standard Ethereum RLP-encoded transactions. Use `evolve_tx_eth::TxContext`.
-
-### Micro Transactions (high throughput)
-
-Minimal 150-byte fixed-layout format. Use `evolve_tx_micro::MicroTxContext`.
-
-```rust
-use evolve_tx_micro::{MicroGateway, MicroTxContext, SignedMicroTx};
-
-// Decode and verify micro transaction
-let gateway = MicroGateway::new(chain_id);
-let tx_context = gateway.decode_and_verify(raw_bytes)?;
-
-// Add to mempool
-mempool.write().await.add(tx_context)?;
-```
-
-Micro TX format:
-
-| Field | Size | Description |
-|-------|------|-------------|
-| chain_id | 8 | u64 big-endian |
-| from | 32 | Ed25519 public key |
-| to | 20 | Recipient address |
-| amount | 16 | u128 big-endian |
-| timestamp | 8 | u64 milliseconds |
-| data_len | 2 | u16 calldata length |
-| data | var | Optional calldata |
-| signature | 64 | Ed25519 signature |
 
 ## CLI Pattern
 

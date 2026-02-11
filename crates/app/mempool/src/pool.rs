@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::error::{MempoolError, MempoolResult};
-use crate::traits::{MempoolOps, MempoolTx};
+use crate::traits::{MempoolOps, MempoolTx, SenderKey};
 
 /// An entry in the priority queue, holding the ordering key and tx hash.
 #[derive(Clone)]
@@ -53,11 +53,11 @@ pub struct Mempool<T: MempoolTx> {
     by_hash: HashMap<[u8; 32], Arc<T>>,
     /// Priority queue ordered by key (highest first).
     by_priority: BinaryHeap<OrderedEntry<T::OrderingKey>>,
-    /// Transactions by sender (20-byte key), ordered by nonce-like u64.
+    /// Transactions by sender key, ordered by nonce-like u64.
     /// Only populated if T::sender_key() returns Some.
-    by_sender: HashMap<[u8; 20], BTreeMap<u64, [u8; 32]>>,
+    by_sender: HashMap<SenderKey, BTreeMap<u64, [u8; 32]>>,
     /// Per-sender sequence counters to avoid collisions in by_sender keys.
-    by_sender_seq: HashMap<[u8; 20], u64>,
+    by_sender_seq: HashMap<SenderKey, u64>,
     /// Phantom marker for T.
     _marker: PhantomData<T>,
 }
@@ -135,7 +135,7 @@ impl<T: MempoolTx> Mempool<T> {
     /// Derive a secondary key for sender tracking.
     ///
     /// This is used for the BTreeMap within by_sender to maintain ordering.
-    fn next_sender_sequence(&mut self, sender: &[u8; 20]) -> u64 {
+    fn next_sender_sequence(&mut self, sender: &SenderKey) -> u64 {
         let next = self.by_sender_seq.entry(*sender).or_insert(0);
         let current = *next;
         debug_assert!(current != u64::MAX, "sender sequence overflow");
@@ -271,7 +271,7 @@ impl<T: MempoolTx> Mempool<T> {
     }
 
     /// Get all transaction hashes for a sender.
-    pub fn get_sender_txs(&self, sender: &[u8; 20]) -> Vec<[u8; 32]> {
+    pub fn get_sender_txs(&self, sender: &SenderKey) -> Vec<[u8; 32]> {
         self.by_sender
             .get(sender)
             .map(|nonces| nonces.values().copied().collect())
@@ -356,17 +356,17 @@ mod tests {
         id: [u8; 32],
         gas_price: u128,
         nonce: u64,
-        sender: [u8; 20],
+        sender: SenderKey,
         gas_limit: u64,
     }
 
     impl TestGasTx {
-        fn new(id: u8, gas_price: u128, nonce: u64, sender: [u8; 20]) -> Self {
+        fn new(id: u8, gas_price: u128, nonce: u64, sender: &[u8]) -> Self {
             Self {
                 id: [id; 32],
                 gas_price,
                 nonce,
-                sender,
+                sender: SenderKey::new(sender).expect("sender key within bounds"),
                 gas_limit: 21000, // Default gas limit
             }
         }
@@ -388,7 +388,7 @@ mod tests {
             GasPriceOrdering::new(self.gas_price, self.nonce)
         }
 
-        fn sender_key(&self) -> Option<[u8; 20]> {
+        fn sender_key(&self) -> Option<SenderKey> {
             Some(self.sender)
         }
 
@@ -432,7 +432,7 @@ mod tests {
     fn test_mempool_add_and_get() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
-        let tx = TestGasTx::new(1, 100, 0, [0xAAu8; 20]);
+        let tx = TestGasTx::new(1, 100, 0, &[0xAAu8; 20]);
 
         let id = pool.add(tx.clone()).unwrap();
         assert_eq!(id, [1u8; 32]);
@@ -447,7 +447,7 @@ mod tests {
     fn test_mempool_duplicate_rejected() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
-        let tx = TestGasTx::new(1, 100, 0, [0xAAu8; 20]);
+        let tx = TestGasTx::new(1, 100, 0, &[0xAAu8; 20]);
 
         pool.add(tx.clone()).unwrap();
         let result = pool.add(tx);
@@ -458,7 +458,7 @@ mod tests {
     fn test_mempool_remove() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
-        let tx = TestGasTx::new(1, 100, 0, [0xAAu8; 20]);
+        let tx = TestGasTx::new(1, 100, 0, &[0xAAu8; 20]);
 
         pool.add(tx).unwrap();
         assert_eq!(pool.len(), 1);
@@ -474,9 +474,9 @@ mod tests {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
         // Add transactions with different gas prices
-        let low = TestGasTx::new(1, 50, 0, [0xAAu8; 20]);
-        let high = TestGasTx::new(2, 100, 0, [0xBBu8; 20]);
-        let medium = TestGasTx::new(3, 75, 0, [0xCCu8; 20]);
+        let low = TestGasTx::new(1, 50, 0, &[0xAAu8; 20]);
+        let high = TestGasTx::new(2, 100, 0, &[0xBBu8; 20]);
+        let medium = TestGasTx::new(3, 75, 0, &[0xCCu8; 20]);
 
         pool.add(low).unwrap();
         pool.add(high).unwrap();
@@ -530,7 +530,7 @@ mod tests {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
         for i in 0..10 {
-            let tx = TestGasTx::new(i, (i as u128) * 10, 0, [i; 20]);
+            let tx = TestGasTx::new(i, (i as u128) * 10, 0, &[i; 20]);
             pool.add(tx).unwrap();
         }
 
@@ -547,8 +547,8 @@ mod tests {
     fn test_stale_entries_skipped() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
-        let tx1 = TestGasTx::new(1, 100, 0, [0xAAu8; 20]);
-        let tx2 = TestGasTx::new(2, 50, 0, [0xBBu8; 20]);
+        let tx1 = TestGasTx::new(1, 100, 0, &[0xAAu8; 20]);
+        let tx2 = TestGasTx::new(2, 50, 0, &[0xBBu8; 20]);
 
         pool.add(tx1).unwrap();
         pool.add(tx2).unwrap();
@@ -566,10 +566,10 @@ mod tests {
     fn test_sender_tracking() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
-        let sender = [0xAAu8; 20];
+        let sender = SenderKey::new(&[0xAAu8; 20]).expect("sender key within bounds");
 
-        let tx1 = TestGasTx::new(1, 100, 0, sender);
-        let tx2 = TestGasTx::new(2, 100, 1, sender);
+        let tx1 = TestGasTx::new(1, 100, 0, sender.as_slice());
+        let tx2 = TestGasTx::new(2, 100, 1, sender.as_slice());
 
         pool.add(tx1).unwrap();
         pool.add(tx2).unwrap();
@@ -582,11 +582,11 @@ mod tests {
     fn test_sender_tracking_no_collision_after_removal() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
-        let sender = [0xAAu8; 20];
+        let sender = SenderKey::new(&[0xAAu8; 20]).expect("sender key within bounds");
 
-        let tx1 = TestGasTx::new(1, 100, 0, sender);
-        let tx2 = TestGasTx::new(2, 100, 1, sender);
-        let tx3 = TestGasTx::new(3, 100, 2, sender);
+        let tx1 = TestGasTx::new(1, 100, 0, sender.as_slice());
+        let tx2 = TestGasTx::new(2, 100, 1, sender.as_slice());
+        let tx3 = TestGasTx::new(3, 100, 2, sender.as_slice());
 
         pool.add(tx1).unwrap();
         pool.add(tx2).unwrap();
@@ -604,7 +604,7 @@ mod tests {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
         for i in 0..5 {
-            let tx = TestGasTx::new(i, 100, i as u64, [0xAAu8; 20]);
+            let tx = TestGasTx::new(i, 100, i as u64, &[0xAAu8; 20]);
             pool.add(tx).unwrap();
         }
 
@@ -620,7 +620,7 @@ mod tests {
 
         // Add 3 txs with 10k gas each
         for i in 0..3 {
-            let tx = TestGasTx::new(i, 100, i as u64, [0xAAu8; 20]).with_gas_limit(10_000);
+            let tx = TestGasTx::new(i, 100, i as u64, &[0xAAu8; 20]).with_gas_limit(10_000);
             pool.add(tx).unwrap();
         }
 
@@ -636,7 +636,7 @@ mod tests {
 
         // Add 5 txs with 10k gas each
         for i in 0..5 {
-            let tx = TestGasTx::new(i, 100, i as u64, [0xAAu8; 20]).with_gas_limit(10_000);
+            let tx = TestGasTx::new(i, 100, i as u64, &[0xAAu8; 20]).with_gas_limit(10_000);
             pool.add(tx).unwrap();
         }
 
@@ -652,11 +652,11 @@ mod tests {
 
         // Add txs with different gas limits, highest gas price first
         // tx1: high gas price, large gas limit (won't fit after tx2)
-        let tx1 = TestGasTx::new(1, 100, 0, [0xAAu8; 20]).with_gas_limit(50_000);
+        let tx1 = TestGasTx::new(1, 100, 0, &[0xAAu8; 20]).with_gas_limit(50_000);
         // tx2: medium gas price, small gas limit
-        let tx2 = TestGasTx::new(2, 80, 0, [0xBBu8; 20]).with_gas_limit(10_000);
+        let tx2 = TestGasTx::new(2, 80, 0, &[0xBBu8; 20]).with_gas_limit(10_000);
         // tx3: low gas price, small gas limit (will fit in remaining)
-        let tx3 = TestGasTx::new(3, 60, 0, [0xCCu8; 20]).with_gas_limit(10_000);
+        let tx3 = TestGasTx::new(3, 60, 0, &[0xCCu8; 20]).with_gas_limit(10_000);
 
         pool.add(tx1).unwrap();
         pool.add(tx2).unwrap();
@@ -675,9 +675,9 @@ mod tests {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
         // Add: large tx (50k), small tx (10k), small tx (10k)
-        let tx1 = TestGasTx::new(1, 100, 0, [0xAAu8; 20]).with_gas_limit(50_000);
-        let tx2 = TestGasTx::new(2, 80, 0, [0xBBu8; 20]).with_gas_limit(10_000);
-        let tx3 = TestGasTx::new(3, 60, 0, [0xCCu8; 20]).with_gas_limit(10_000);
+        let tx1 = TestGasTx::new(1, 100, 0, &[0xAAu8; 20]).with_gas_limit(50_000);
+        let tx2 = TestGasTx::new(2, 80, 0, &[0xBBu8; 20]).with_gas_limit(10_000);
+        let tx3 = TestGasTx::new(3, 60, 0, &[0xCCu8; 20]).with_gas_limit(10_000);
 
         pool.add(tx1).unwrap();
         pool.add(tx2).unwrap();
@@ -697,7 +697,7 @@ mod tests {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
         for i in 0..5 {
-            let tx = TestGasTx::new(i, 100, i as u64, [0xAAu8; 20]).with_gas_limit(10_000);
+            let tx = TestGasTx::new(i, 100, i as u64, &[0xAAu8; 20]).with_gas_limit(10_000);
             pool.add(tx).unwrap();
         }
 
@@ -712,8 +712,8 @@ mod tests {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
         // Add one large tx and one small tx
-        let tx1 = TestGasTx::new(1, 100, 0, [0xAAu8; 20]).with_gas_limit(50_000);
-        let tx2 = TestGasTx::new(2, 80, 0, [0xBBu8; 20]).with_gas_limit(10_000);
+        let tx1 = TestGasTx::new(1, 100, 0, &[0xAAu8; 20]).with_gas_limit(50_000);
+        let tx2 = TestGasTx::new(2, 80, 0, &[0xBBu8; 20]).with_gas_limit(10_000);
 
         pool.add(tx1).unwrap();
         pool.add(tx2).unwrap();

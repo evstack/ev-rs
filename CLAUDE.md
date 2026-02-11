@@ -38,7 +38,6 @@ Evolve is a modular blockchain SDK written in Rust. Key characteristics:
 │   │   └── x/         # Pre-built modules (token, scheduler)
 │   ├── stf/           # State Transition Function implementation
 │   ├── tx/eth/        # EIP-2718 transactions, ECDSA, RLP
-│   ├── tx/micro/      # Minimal transaction type
 │   ├── mempool/       # Thread-safe transaction pool
 │   ├── server/        # DevConsensus, block building, persistence
 │   ├── node/          # Dev node runner
@@ -244,4 +243,3 @@ Format:
 ### Pattern Name
 Brief description of the pattern and when to apply it.
 -->
-

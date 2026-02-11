@@ -1204,6 +1204,35 @@ where
         gas_config: StorageGasConfig,
         block: BlockContext,
     ) -> TxResult {
+        // create a finite gas counter for the full tx lifecycle,
+        // including optional sender bootstrap registration.
+        let mut gas_counter = GasCounter::Finite {
+            gas_limit: tx.gas_limit(),
+            gas_used: 0,
+            storage_gas_config: gas_config,
+        };
+
+        // Auto-register sender when transaction provides a bootstrap primitive.
+        if let Some(bootstrap) = tx.sender_bootstrap() {
+            let mut reg_ctx = Invoker::new_for_begin_block(state, codes, &mut gas_counter, block);
+            if let Err(err) = reg_ctx.register_account_at_id(
+                tx.sender(),
+                bootstrap.account_code_id,
+                bootstrap.init_message,
+            ) {
+                drop(reg_ctx);
+                let gas_used = gas_counter.gas_used();
+                let events = state.pop_events();
+                return TxResult {
+                    events,
+                    gas_used,
+                    response: Err(err),
+                };
+            }
+            drop(reg_ctx);
+            state.pop_events();
+        }
+
         // NOTE: Transaction validation and execution are atomic - they share the same
         // ExecutionState throughout the process. The state cannot change between
         // validation and execution because:
@@ -1212,11 +1241,6 @@ where
         // 3. Transactions are processed sequentially, not concurrently
 
         // create validation context
-        let mut gas_counter = GasCounter::Finite {
-            gas_limit: tx.gas_limit(),
-            gas_used: 0,
-            storage_gas_config: gas_config,
-        };
         let mut ctx = Invoker::new_for_validate_tx(state, codes, &mut gas_counter, tx, block);
         // do tx validation; we do not swap invoker
         match self.tx_validator.validate_tx(tx, &mut ctx) {

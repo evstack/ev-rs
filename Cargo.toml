@@ -7,7 +7,6 @@ members = [
     "crates/rpc/chain-index",
     "crates/app/stf",
     "crates/app/tx/eth",
-    "crates/app/tx/micro",
     "crates/app/mempool",
     "crates/app/sdk/collections",
     "crates/app/sdk/core",
@@ -52,7 +51,6 @@ evolve_token = { path = "crates/app/sdk/x/token" }
 evolve_stf = { path = "crates/app/stf" }
 evolve_genesis = { path = "crates/app/genesis" }
 evolve_tx_eth = { path = "crates/app/tx/eth" }
-evolve_tx_micro = { path = "crates/app/tx/micro" }
 evolve_mempool = { path = "crates/app/mempool" }
 
 evolve_rpc_types = { path = "crates/rpc/types" }

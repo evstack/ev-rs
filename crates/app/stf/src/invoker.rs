@@ -4,7 +4,7 @@ use crate::gas::GasCounter;
 use crate::handlers;
 use crate::validation::{validate_code_id, validate_event};
 use evolve_core::events_api::Event;
-use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
+use evolve_core::runtime_api::{ACCOUNT_IDENTIFIER_PREFIX, RUNTIME_ACCOUNT_ID};
 use evolve_core::storage_api::STORAGE_ACCOUNT_ID;
 use evolve_core::{
     AccountCode, AccountId, BlockContext, Environment, EnvironmentQuery, FungibleAsset,
@@ -337,6 +337,46 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
         })??;
 
         Ok((new_account_id, init_resp.into_inner()))
+    }
+
+    /// Registers an account at a specific AccountId.
+    ///
+    /// Unlike `create_account()` which allocates a sequential ID, this registers
+    /// at a predetermined ID (e.g., derived from an ETH address).
+    /// No-op if the account already has a code identifier.
+    pub fn register_account_at_id(
+        &mut self,
+        account_id: AccountId,
+        code_id: &str,
+        init_msg: Message,
+    ) -> SdkResult<()> {
+        // Skip if already registered
+        if runtime_api_impl::get_account_code_identifier_for_account(self.storage, account_id)?
+            .is_some()
+        {
+            return Ok(());
+        }
+
+        validate_code_id(code_id)?;
+
+        let mut key = vec![ACCOUNT_IDENTIFIER_PREFIX];
+        key.extend_from_slice(&account_id.as_bytes());
+        let code_id_msg = Message::new(&code_id.to_string())?;
+        self.gas_counter.consume_set_gas(&key, &code_id_msg)?;
+        self.storage.set(&key, code_id_msg)?;
+
+        let req = InvokeRequest::new_from_message("init", 0, init_msg);
+        let account_codes = self.account_codes;
+        let mut invoker = self.branch_exec(account_id, vec![]);
+        account_codes.with_code(code_id, |code| match code {
+            Some(code) => {
+                code.init(&mut invoker, &req)?;
+                Ok(())
+            }
+            None => Err(ERR_CODE_NOT_FOUND),
+        })??;
+
+        Ok(())
     }
 
     /// Executes a closure with access to a specific account's code and environment.

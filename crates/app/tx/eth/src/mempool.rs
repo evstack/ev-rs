@@ -13,9 +13,9 @@
 
 use alloy_primitives::{Address, B256};
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{AccountId, FungibleAsset, InvokeRequest, SdkResult};
-use evolve_mempool::{GasPriceOrdering, MempoolTx};
-use evolve_stf_traits::Transaction;
+use evolve_core::{AccountId, FungibleAsset, InvokeRequest, Message, SdkResult};
+use evolve_mempool::{GasPriceOrdering, MempoolTx, SenderKey};
+use evolve_stf_traits::{SenderBootstrap, Transaction};
 
 use crate::envelope::TxEnvelope;
 use crate::traits::{address_to_account_id, TypedTransaction};
@@ -103,8 +103,8 @@ impl MempoolTx for TxContext {
         GasPriceOrdering::new(self.effective_gas_price, self.nonce())
     }
 
-    fn sender_key(&self) -> Option<[u8; 20]> {
-        Some(self.envelope.sender().0 .0)
+    fn sender_key(&self) -> Option<SenderKey> {
+        SenderKey::new(&self.envelope.sender().0 .0)
     }
 
     fn gas_limit(&self) -> u64 {
@@ -136,6 +136,14 @@ impl Transaction for TxContext {
 
     fn compute_identifier(&self) -> [u8; 32] {
         self.envelope.tx_hash().0
+    }
+
+    fn sender_bootstrap(&self) -> Option<SenderBootstrap> {
+        let eth_address: [u8; 20] = self.sender_address().into();
+        Some(SenderBootstrap {
+            account_code_id: "EthEoaAccount",
+            init_message: Message::new(&eth_address).ok()?,
+        })
     }
 }
 
