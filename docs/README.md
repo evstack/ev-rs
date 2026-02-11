@@ -27,17 +27,12 @@ bun run preview
 ## Structure
 
 ```
-website/
-├── docs/
-│   ├── pages/           # MDX content
-│   │   ├── index.mdx    # Homepage
-│   │   ├── getting-started/
-│   │   ├── concepts/
-│   │   ├── modules/
-│   │   ├── reference/
-│   │   ├── ethereum/
-│   │   └── operating/
-│   └── public/          # Static assets
+docs/
+├── pages/               # Docs website MDX content
+├── public/              # Static assets for docs website
+├── module-system/       # Markdown guides
+├── guides/              # Markdown guides
+├── transactions/        # Markdown guides
 ├── vocs.config.ts       # Vocs configuration
 ├── package.json
 └── tsconfig.json
@@ -53,7 +48,7 @@ Build outputs to `dist/`. Deploy to any static hosting.
 1. Connect repo to Cloudflare Pages
 2. Set build command: `bun run build`
 3. Set output directory: `dist`
-4. Set root directory: `website`
+4. Set root directory: `docs`
 5. Leave deploy command blank
 
 **Via CLI:**

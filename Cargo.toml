@@ -14,7 +14,7 @@ members = [
     "crates/app/sdk/stf_traits",
     "crates/app/server",
     "crates/app/sdk/standards/*",
-    "crates/app/sdk/x/*",
+    "crates/app/sdk/extensions/*",
     "crates/storage",
     "crates/app/sdk/testing",
     "crates/app/sdk/math",
@@ -23,7 +23,6 @@ members = [
     "bin/evd",
     "crates/app/genesis",
     "crates/testing/simulator",
-    "crates/testing/proptest",
     "crates/testing/debugger",
     "crates/testing/cli",
 ]
@@ -45,8 +44,8 @@ evolve_math = { path = "crates/app/sdk/math" }
 evolve_fungible_asset = { path = "crates/app/sdk/standards/evolve_fungible_asset" }
 evolve_authentication = { path = "crates/app/sdk/standards/evolve_authentication" }
 
-evolve_scheduler = { path = "crates/app/sdk/x/scheduler" }
-evolve_token = { path = "crates/app/sdk/x/token" }
+evolve_scheduler = { path = "crates/app/sdk/extensions/scheduler" }
+evolve_token = { path = "crates/app/sdk/extensions/token" }
 
 evolve_stf = { path = "crates/app/stf" }
 evolve_genesis = { path = "crates/app/genesis" }
@@ -64,7 +63,6 @@ evolve_testing = { path = "crates/app/sdk/testing" }
 evolve_storage = { path = "crates/storage" }
 
 evolve_simulator = { path = "crates/testing/simulator" }
-evolve_proptest = { path = "crates/testing/proptest" }
 evolve_debugger = { path = "crates/testing/debugger" }
 evolve_node = { path = "crates/app/node" }
 evolve_testapp = { path = "bin/testapp" }

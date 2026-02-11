@@ -7,7 +7,7 @@ Evolve includes ready-to-use modules for common functionality.
 Full-featured fungible token with mint/burn/transfer:
 
 ```rust
-use evolve_x::token::{Token, TokenConfig};
+use evolve_extensions::token::{Token, TokenConfig};
 
 // Register in STF
 let stf = StfBuilder::new()
@@ -58,7 +58,7 @@ Event::Burn { from, amount }
 Block-level scheduling for begin/end block hooks:
 
 ```rust
-use evolve_x::scheduler::{Scheduler, ScheduledTask};
+use evolve_extensions::scheduler::{Scheduler, ScheduledTask};
 
 // Register in STF
 let stf = StfBuilder::new()
@@ -94,7 +94,7 @@ env.call(scheduler_id, &ScheduleMsg { task }, funds)?;
 Gas configuration and metering:
 
 ```rust
-use evolve_x::gas::{GasService, GasConfig};
+use evolve_extensions::gas::{GasService, GasConfig};
 
 // Configuration
 let gas_config = GasConfig {
@@ -111,14 +111,14 @@ let gas_config = GasConfig {
 
 ```toml
 [dependencies]
-evolve_x = { path = "crates/app/sdk/x" }
+evolve_extensions = { path = "crates/app/sdk/extensions" }
 ```
 
 2. Register in STF:
 
 ```rust
-use evolve_x::token::Token;
-use evolve_x::scheduler::Scheduler;
+use evolve_extensions::token::Token;
+use evolve_extensions::scheduler::Scheduler;
 
 let stf = StfBuilder::new()
     .register_account::<Token>()

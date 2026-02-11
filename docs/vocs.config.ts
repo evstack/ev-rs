@@ -2,6 +2,7 @@ import { defineConfig } from 'vocs'
 
 export default defineConfig({
   title: 'Evolve',
+  rootDir: '.',
   description: 'Modular Rust SDK for building blockchain applications with Ethereum compatibility',
   logoUrl: '/logo.svg',
   iconUrl: '/favicon.ico',

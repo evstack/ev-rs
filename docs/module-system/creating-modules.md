@@ -5,7 +5,7 @@ Step-by-step guide to creating a new Evolve module.
 ## 1. Create the Crate
 
 ```bash
-cargo new --lib crates/app/sdk/x/my_module
+cargo new --lib crates/app/sdk/extensions/my_module
 ```
 
 Add to workspace `Cargo.toml`:
@@ -14,16 +14,16 @@ Add to workspace `Cargo.toml`:
 [workspace]
 members = [
     # ...
-    "crates/app/sdk/x/my_module",
+    "crates/app/sdk/extensions/my_module",
 ]
 
 [workspace.dependencies]
-evolve_my_module = { path = "crates/app/sdk/x/my_module" }
+evolve_my_module = { path = "crates/app/sdk/extensions/my_module" }
 ```
 
 ## 2. Set Up Dependencies
 
-In `crates/app/sdk/x/my_module/Cargo.toml`:
+In `crates/app/sdk/extensions/my_module/Cargo.toml`:
 
 ```toml
 [package]

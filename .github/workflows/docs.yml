@@ -1,0 +1,40 @@
+name: "Docs"
+
+on:
+  pull_request:
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "wrangler.toml"
+      - ".github/workflows/docs.yml"
+  merge_group:
+  push:
+    branches:
+      - main
+      - release/**
+      - rust-core
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "wrangler.toml"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: docs build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: oven-sh/setup-bun@v2
+      - name: Build docs site
+        working-directory: docs
+        run: |
+          bun install --frozen-lockfile
+          bun run build
