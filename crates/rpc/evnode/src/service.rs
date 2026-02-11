@@ -157,6 +157,31 @@ impl ExecutorState {
 /// Note: The callback receives a reference to the state changes.
 pub type StateChangeCallback = Arc<dyn Fn(&[StateChange]) + Send + Sync>;
 
+/// Information passed to the `OnBlockExecuted` callback after a block is executed.
+///
+/// Contains all data needed for storage commit and chain indexing.
+pub struct BlockExecutedInfo {
+    /// Block height.
+    pub height: u64,
+    /// Block timestamp (Unix seconds).
+    pub timestamp: u64,
+    /// State changes produced by execution.
+    pub state_changes: Vec<StateChange>,
+    /// Full block execution result.
+    pub block_result: BlockResult,
+    /// State root computed from changes (keccak-based).
+    pub state_root: B256,
+    /// Transactions that were included in the block.
+    pub transactions: Vec<TxContext>,
+}
+
+/// Callback invoked after a block is fully executed.
+///
+/// This provides all data needed for storage commit + chain indexing in one call.
+/// When set, this replaces the `StateChangeCallback` for `execute_txs` — the caller
+/// takes full responsibility for persisting state changes.
+pub type OnBlockExecuted = Arc<dyn Fn(BlockExecutedInfo) + Send + Sync>;
+
 /// ExecutorService implementation for EVNode.
 ///
 /// This service implements the gRPC interface that ev-node uses to interact
@@ -185,6 +210,8 @@ where
     state: ExecutorState,
     /// Optional callback for state changes.
     on_state_change: Option<StateChangeCallback>,
+    /// Optional callback invoked after block execution with full block data.
+    on_block_executed: Option<OnBlockExecuted>,
 }
 
 impl<Stf, S, Codes> ExecutorServiceImpl<Stf, S, Codes>
@@ -203,6 +230,7 @@ where
             config,
             state: ExecutorState::new(),
             on_state_change: None,
+            on_block_executed: None,
         }
     }
 
@@ -222,6 +250,7 @@ where
             config,
             state: ExecutorState::new(),
             on_state_change: None,
+            on_block_executed: None,
         }
     }
 
@@ -230,6 +259,16 @@ where
     /// This callback is invoked whenever state changes are produced by execution.
     pub fn with_state_change_callback(mut self, callback: StateChangeCallback) -> Self {
         self.on_state_change = Some(callback);
+        self
+    }
+
+    /// Set a callback for block execution.
+    ///
+    /// When set, this is called after `execute_txs` with the full block data
+    /// (state changes, block result, transactions). The caller takes responsibility
+    /// for persisting state changes and indexing the block.
+    pub fn with_on_block_executed(mut self, callback: OnBlockExecuted) -> Self {
+        self.on_block_executed = Some(callback);
         self
     }
 
@@ -350,16 +389,23 @@ where
         let txs = match &self.mempool {
             Some(mempool) => {
                 let mut pool = mempool.write().await;
+
                 // Select transactions up to block gas limit (no count limit)
                 let (selected, _total_gas) = pool.select_with_gas_budget(self.config.max_gas, 0);
 
                 // Encode selected transactions
-                selected.iter().filter_map(|tx| tx.encode().ok()).collect()
+                selected
+                    .iter()
+                    .filter_map(|tx| match tx.encode() {
+                        Ok(bytes) => Some(bytes),
+                        Err(e) => {
+                            tracing::warn!("Failed to encode tx: {:?}", e);
+                            None
+                        }
+                    })
+                    .collect()
             }
-            None => {
-                // No mempool configured - return empty
-                vec![]
-            }
+            None => vec![],
         };
 
         Ok(Response::new(GetTxsResponse { txs }))
@@ -399,6 +445,7 @@ where
         let block = evolve_server::BlockBuilder::<TxContext>::new()
             .number(req.block_height)
             .timestamp(timestamp)
+            .gas_limit(self.config.max_gas)
             .transactions(transactions)
             .build();
 
@@ -412,16 +459,7 @@ where
         // Compute updated state root
         let updated_state_root = compute_state_root(&changes);
 
-        // Handle state changes
-        self.handle_state_changes(changes).await;
-
-        // Update state
-        self.state
-            .current_height
-            .store(req.block_height, Ordering::SeqCst);
-        *self.state.last_state_root.write().await = updated_state_root;
-
-        // Log execution results
+        // Log execution results (before moving ownership)
         let successful = result
             .tx_results
             .iter()
@@ -438,6 +476,27 @@ where
             failed,
             gas_used
         );
+
+        // Handle state changes / notify callback
+        if let Some(ref callback) = self.on_block_executed {
+            let info = BlockExecutedInfo {
+                height: req.block_height,
+                timestamp,
+                state_changes: changes,
+                block_result: result,
+                state_root: updated_state_root,
+                transactions: block.transactions,
+            };
+            callback(info);
+        } else {
+            self.handle_state_changes(changes).await;
+        }
+
+        // Update state
+        self.state
+            .current_height
+            .store(req.block_height, Ordering::SeqCst);
+        *self.state.last_state_root.write().await = updated_state_root;
 
         Ok(Response::new(ExecuteTxsResponse {
             updated_state_root: updated_state_root.to_vec(),

@@ -7,6 +7,8 @@ export interface AgentConfig {
   address: Address;
   requestsPerSecond: number;
   endpoints: WeightedEndpoint[];
+  tokenAccountId: bigint;
+  chainId: number;
 }
 
 // Weighted endpoint for random selection

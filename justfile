@@ -139,30 +139,30 @@ node-reset:
 # EVD (gRPC node)
 # ============================================================================
 
-# Initialize evd genesis
+# Initialize evd genesis (default testapp genesis; pass genesis file for custom ETH accounts)
 [group('evd')]
-evd-init:
-    cargo run -p evd -- init
+evd-init genesis="":
+    cargo run -p evd -- init {{ if genesis != "" { "--genesis-file " + genesis } else { "" } }}
 
 # Run evd (gRPC on :50051, JSON-RPC on :8545)
 [group('evd')]
-evd-run:
-    cargo run -p evd -- run
+evd-run genesis="":
+    cargo run -p evd -- run {{ if genesis != "" { "--genesis-file " + genesis } else { "" } }}
 
 # Run evd in release mode
 [group('evd')]
-evd-run-release:
-    cargo run -p evd --release -- run
+evd-run-release genesis="":
+    cargo run -p evd --release -- run {{ if genesis != "" { "--genesis-file " + genesis } else { "" } }}
 
 # Run evd with custom addresses
 [group('evd')]
-evd-run-custom grpc="0.0.0.0:50051" rpc="0.0.0.0:8545":
-    cargo run -p evd -- run --grpc-addr {{grpc}} --rpc-addr {{rpc}}
+evd-run-custom genesis grpc="0.0.0.0:50051" rpc="0.0.0.0:8545":
+    cargo run -p evd -- run {{ if genesis != "" { "--genesis-file " + genesis } else { "" } }} --grpc-addr {{grpc}} --rpc-addr {{rpc}}
 
 # Clean evd data and reinitialize
 [group('evd')]
-evd-reset:
-    rm -rf ./data && just evd-init
+evd-reset genesis="":
+    rm -rf ./data && just evd-init {{genesis}}
 
 # ============================================================================
 # SIMULATION

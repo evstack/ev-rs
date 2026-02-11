@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { program } from "commander";
-import { formatEther, parseEther } from "viem";
 import { AgentPool } from "./pool.js";
 import { createPoolConfig, validateConfig } from "./config.js";
 
@@ -14,8 +13,8 @@ program
   .option("-e, --evolve-rpc <url>", "Evolve RPC URL", "http://localhost:8545")
   .option(
     "-f, --funding <amount>",
-    "Funding amount per agent in wei",
-    parseEther("1000").toString()
+    "Funding amount per agent (token units, 6 decimals)",
+    "1000000"
   )
   .option("-k, --faucet-key <key>", "Faucet private key (or set FAUCET_PRIVATE_KEY)")
   .option("-d, --duration <seconds>", "Run duration in seconds (0 = infinite)", "0")
@@ -50,7 +49,7 @@ async function main() {
   console.log(`  Target RPS: ${config.requestsPerSecond}`);
   console.log(`  Server: ${config.serverUrl}`);
   console.log(`  Evolve RPC: ${config.evolveRpcUrl}`);
-  console.log(`  Funding per agent: ${formatEther(config.fundingAmount)} EVO`);
+  console.log(`  Funding per agent: ${config.fundingAmount} tokens (6 decimals)`);
   console.log("");
 
   // Create and initialize pool

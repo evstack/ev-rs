@@ -54,6 +54,6 @@ pub use server::{
     start_evnode_server, start_evnode_server_with_mempool, EvnodeServer, EvnodeServerConfig,
 };
 pub use service::{
-    compute_state_root, EvnodeStfExecutor, ExecutorServiceConfig, ExecutorServiceImpl,
-    StateChangeCallback,
+    compute_state_root, BlockExecutedInfo, EvnodeStfExecutor, ExecutorServiceConfig,
+    ExecutorServiceImpl, OnBlockExecuted, StateChangeCallback,
 };

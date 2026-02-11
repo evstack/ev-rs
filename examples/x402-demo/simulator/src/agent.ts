@@ -15,14 +15,11 @@ import type {
   RequestResult,
   WeightedEndpoint,
 } from "./types.js";
-
-// Evolve chain definition
-const evolveChain = defineChain({
-  id: 1337,
-  name: "Evolve Testnet",
-  nativeCurrency: { decimals: 18, name: "Evolve", symbol: "EVO" },
-  rpcUrls: { default: { http: ["http://127.0.0.1:8545"] } },
-});
+import {
+  accountIdToAddress,
+  addressToAccountId,
+  buildTransferData,
+} from "./evolve-utils.js";
 
 export class Agent {
   private config: AgentConfig;
@@ -71,9 +68,7 @@ export class Agent {
   private scheduleNextRequest(): void {
     if (!this.running) return;
 
-    // Calculate delay based on requests per second
     const delayMs = 1000 / this.config.requestsPerSecond;
-    // Add jitter to avoid thundering herd
     const jitter = Math.random() * delayMs * 0.2;
 
     this.requestLoop = setTimeout(async () => {
@@ -110,12 +105,14 @@ export class Agent {
       // Step 1: Make initial request (expect 402)
       const initialResponse = await fetch(url, {
         method: endpoint.method,
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "X-Agent-ID": this.config.id,
+        },
         body: JSON.stringify(endpoint.payload()),
       });
 
       if (initialResponse.status !== 402) {
-        // Unexpected response
         if (initialResponse.ok) {
           return {
             success: true,
@@ -155,7 +152,7 @@ export class Agent {
       const amount = BigInt(paymentRequired.accepts[0].amount);
       const payTo = paymentRequired.accepts[0].payTo;
 
-      // Step 3: Submit payment transaction
+      // Step 3: Submit payment via token transfer
       const paymentStartTime = Date.now();
       const txHash = await this.submitPayment(payTo, amount);
       const paymentLatencyMs = Date.now() - paymentStartTime;
@@ -177,6 +174,7 @@ export class Agent {
         headers: {
           "Content-Type": "application/json",
           "PAYMENT-SIGNATURE": paymentSignature,
+          "X-Agent-ID": this.config.id,
         },
         body: JSON.stringify(endpoint.payload()),
       });
@@ -220,20 +218,34 @@ export class Agent {
 
   private async submitPayment(to: Address, amount: bigint): Promise<Hash> {
     const account = privateKeyToAccount(this.config.privateKey);
+
+    const chain = defineChain({
+      id: this.config.chainId,
+      name: "Evolve Testnet",
+      nativeCurrency: { decimals: 18, name: "Evolve", symbol: "EVO" },
+      rpcUrls: { default: { http: [this.rpcUrl] } },
+    });
+
     const walletClient = createWalletClient({
       account,
-      chain: { ...evolveChain, rpcUrls: { default: { http: [this.rpcUrl] } } },
+      chain,
       transport: http(this.rpcUrl),
     });
 
+    // Pay via token transfer calldata
+    const payToAccountId = addressToAccountId(to);
+    const data = buildTransferData(payToAccountId, amount);
+    const tokenAddress = accountIdToAddress(this.config.tokenAccountId);
+
     const txHash = await walletClient.sendTransaction({
-      to,
-      value: amount,
+      to: tokenAddress,
+      data,
+      value: 0n,
+      gas: 100_000n,
     });
 
-    // Wait for transaction to be mined
     const publicClient = createPublicClient({
-      chain: { ...evolveChain, rpcUrls: { default: { http: [this.rpcUrl] } } },
+      chain,
       transport: http(this.rpcUrl),
     });
 
@@ -244,19 +256,19 @@ export class Agent {
 
   async getBalance(): Promise<bigint> {
     const publicClient = createPublicClient({
-      chain: { ...evolveChain, rpcUrls: { default: { http: [this.rpcUrl] } } },
       transport: http(this.rpcUrl),
     });
     return publicClient.getBalance({ address: this.config.address });
   }
 }
 
-// Helper to create agent with generated wallet
 export function createAgentConfig(
   id: string,
   privateKey: Hex,
   requestsPerSecond: number,
-  endpoints: WeightedEndpoint[]
+  endpoints: WeightedEndpoint[],
+  tokenAccountId: bigint,
+  chainId: number,
 ): AgentConfig {
   const account = privateKeyToAccount(privateKey);
   return {
@@ -265,5 +277,7 @@ export function createAgentConfig(
     address: account.address,
     requestsPerSecond,
     endpoints,
+    tokenAccountId,
+    chainId,
   };
 }

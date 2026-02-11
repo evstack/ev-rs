@@ -10,7 +10,8 @@ use tonic::transport::Server;
 
 use crate::proto::evnode::v1::executor_service_server::ExecutorServiceServer;
 use crate::service::{
-    EvnodeStfExecutor, ExecutorServiceConfig, ExecutorServiceImpl, StateChangeCallback,
+    EvnodeStfExecutor, ExecutorServiceConfig, ExecutorServiceImpl, OnBlockExecuted,
+    StateChangeCallback,
 };
 
 /// Configuration for the EVNode gRPC server.
@@ -50,6 +51,7 @@ where
     codes: Codes,
     mempool: Option<SharedMempool<Mempool<TxContext>>>,
     on_state_change: Option<StateChangeCallback>,
+    on_block_executed: Option<OnBlockExecuted>,
 }
 
 impl<Stf, S, Codes> EvnodeServer<Stf, S, Codes>
@@ -67,6 +69,7 @@ where
             codes,
             mempool: None,
             on_state_change: None,
+            on_block_executed: None,
         }
     }
 
@@ -85,6 +88,7 @@ where
             codes,
             mempool: Some(mempool),
             on_state_change: None,
+            on_block_executed: None,
         }
     }
 
@@ -94,6 +98,15 @@ where
     /// (including genesis initialization). Use this to persist state changes to storage.
     pub fn with_state_change_callback(mut self, callback: StateChangeCallback) -> Self {
         self.on_state_change = Some(callback);
+        self
+    }
+
+    /// Set a callback for block execution.
+    ///
+    /// When set, this is called after `execute_txs` with the full block data.
+    /// The callback takes responsibility for persisting state changes and indexing.
+    pub fn with_on_block_executed(mut self, callback: OnBlockExecuted) -> Self {
+        self.on_block_executed = Some(callback);
         self
     }
 
@@ -121,6 +134,10 @@ where
 
         if let Some(callback) = self.on_state_change {
             service = service.with_state_change_callback(callback);
+        }
+
+        if let Some(callback) = self.on_block_executed {
+            service = service.with_on_block_executed(callback);
         }
 
         let mut server = ExecutorServiceServer::new(service)
@@ -170,6 +187,10 @@ where
 
         if let Some(callback) = self.on_state_change {
             service = service.with_state_change_callback(callback);
+        }
+
+        if let Some(callback) = self.on_block_executed {
+            service = service.with_on_block_executed(callback);
         }
 
         let mut server = ExecutorServiceServer::new(service)

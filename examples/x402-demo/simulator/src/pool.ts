@@ -2,21 +2,19 @@ import {
   createWalletClient,
   createPublicClient,
   http,
-  formatEther,
   defineChain,
 } from "viem";
-import { privateKeyToAccount, generatePrivateKey } from "viem/accounts";
+import { privateKeyToAccount } from "viem/accounts";
 import { Agent, createAgentConfig } from "./agent.js";
 import { MetricsCollector } from "./metrics.js";
 import type { PoolConfig, PoolMetrics, RequestResult } from "./types.js";
-
-// Evolve chain definition
-const evolveChain = defineChain({
-  id: 1337,
-  name: "Evolve Testnet",
-  nativeCurrency: { decimals: 18, name: "Evolve", symbol: "EVO" },
-  rpcUrls: { default: { http: ["http://127.0.0.1:8545"] } },
-});
+import {
+  HARDHAT_AGENT_KEYS,
+  TOKEN_ACCOUNT_CANDIDATES,
+  accountIdToAddress,
+  addressToAccountId,
+  buildTransferData,
+} from "./evolve-utils.js";
 
 export class AgentPool {
   private config: PoolConfig;
@@ -36,78 +34,132 @@ export class AgentPool {
   }
 
   async initialize(): Promise<void> {
-    console.log(`Initializing pool with ${this.config.agentCount} agents...`);
+    const agentCount = Math.min(this.config.agentCount, HARDHAT_AGENT_KEYS.length);
+    console.log(`Initializing pool with ${agentCount} agents...`);
 
-    // Generate wallets and fund them
+    const publicClient = createPublicClient({
+      transport: http(this.config.evolveRpcUrl),
+    });
+
+    // Get chain ID dynamically
+    const chainId = await publicClient.getChainId();
+    console.log(`Chain ID: ${chainId}`);
+
+    const evolveChain = defineChain({
+      id: chainId,
+      name: "Evolve Testnet",
+      nativeCurrency: { decimals: 18, name: "Evolve", symbol: "EVO" },
+      rpcUrls: { default: { http: [this.config.evolveRpcUrl] } },
+    });
+
+    // Set up faucet wallet
     const faucetAccount = privateKeyToAccount(this.config.faucetPrivateKey);
     const faucetWallet = createWalletClient({
       account: faucetAccount,
-      chain: {
-        ...evolveChain,
-        rpcUrls: { default: { http: [this.config.evolveRpcUrl] } },
-      },
+      chain: evolveChain,
       transport: http(this.config.evolveRpcUrl),
     });
 
-    const publicClient = createPublicClient({
-      chain: {
-        ...evolveChain,
-        rpcUrls: { default: { http: [this.config.evolveRpcUrl] } },
-      },
+    const chainPublicClient = createPublicClient({
+      chain: evolveChain,
       transport: http(this.config.evolveRpcUrl),
     });
-
-    // Check faucet balance
-    const faucetBalance = await publicClient.getBalance({
-      address: faucetAccount.address,
-    });
-    const requiredFunding =
-      this.config.fundingAmount * BigInt(this.config.agentCount);
 
     console.log(`Faucet address: ${faucetAccount.address}`);
-    console.log(`Faucet balance: ${formatEther(faucetBalance)} EVO`);
-    console.log(`Required funding: ${formatEther(requiredFunding)} EVO`);
-
-    if (faucetBalance < requiredFunding) {
-      throw new Error(
-        `Insufficient faucet balance. Have ${formatEther(faucetBalance)}, need ${formatEther(requiredFunding)}`
-      );
-    }
 
     // Calculate RPS per agent
-    const rpsPerAgent = this.config.requestsPerSecond / this.config.agentCount;
+    const rpsPerAgent = this.config.requestsPerSecond / agentCount;
 
-    // Create and fund agents
-    for (let i = 0; i < this.config.agentCount; i++) {
-      const privateKey = generatePrivateKey();
+    // Discover token account ID by trial-funding the first agent.
+    // eth_getCode is not implemented, so we try each candidate with a real transfer.
+    let tokenAccountId: bigint | null = null;
+    const firstKey = HARDHAT_AGENT_KEYS[0];
+    const firstAgentConfig = createAgentConfig(
+      `agent-000`,
+      firstKey,
+      rpsPerAgent,
+      this.config.endpoints,
+      0n, // placeholder, will be set after discovery
+      chainId,
+    );
+    const firstAgentAccountId = addressToAccountId(firstAgentConfig.address);
+
+    for (const candidate of TOKEN_ACCOUNT_CANDIDATES) {
+      const tokenAddress = accountIdToAddress(candidate);
+      const data = buildTransferData(firstAgentAccountId, this.config.fundingAmount);
+      console.log(`Trying token candidate ${candidate} (${tokenAddress})...`);
+      try {
+        const txHash = await faucetWallet.sendTransaction({
+          to: tokenAddress,
+          data,
+          value: 0n,
+          gas: 100_000n,
+        });
+        const receipt = await chainPublicClient.waitForTransactionReceipt({ hash: txHash });
+        if (receipt.status === "success") {
+          tokenAccountId = candidate;
+          console.log(`Found token at account ID ${candidate}`);
+          break;
+        }
+        console.warn(`Token candidate ${candidate} tx reverted`);
+      } catch (err) {
+        console.warn(`Token candidate ${candidate} failed:`, err);
+      }
+    }
+    if (tokenAccountId === null) {
+      throw new Error("Could not find token account. Tried all candidates.");
+    }
+
+    // First agent already funded during discovery - create it
+    const fundedFirstConfig = createAgentConfig(
+      `agent-000`,
+      firstKey,
+      rpsPerAgent,
+      this.config.endpoints,
+      tokenAccountId,
+      chainId,
+    );
+    const firstAgent = new Agent(fundedFirstConfig, this.config.serverUrl, this.config.evolveRpcUrl);
+    firstAgent.setResultHandler((result) => this.handleAgentResult(result));
+    this.agents.push(firstAgent);
+    this.metrics.registerAgent(fundedFirstConfig.id, fundedFirstConfig.address);
+    console.log(`Funded agent ${fundedFirstConfig.id} (${fundedFirstConfig.address.slice(0, 10)}...) with ${this.config.fundingAmount} tokens`);
+
+    // Fund remaining agents
+    for (let i = 1; i < agentCount; i++) {
+      const privateKey = HARDHAT_AGENT_KEYS[i];
       const agentConfig = createAgentConfig(
         `agent-${i.toString().padStart(3, "0")}`,
         privateKey,
         rpsPerAgent,
-        this.config.endpoints
+        this.config.endpoints,
+        tokenAccountId,
+        chainId,
       );
 
-      // Fund agent
+      const agentAccountId = addressToAccountId(agentConfig.address);
+      const data = buildTransferData(agentAccountId, this.config.fundingAmount);
+      const tokenAddress = accountIdToAddress(tokenAccountId);
+
       console.log(
-        `Funding agent ${agentConfig.id} (${agentConfig.address.slice(0, 10)}...) with ${formatEther(this.config.fundingAmount)} EVO`
+        `Funding agent ${agentConfig.id} (${agentConfig.address.slice(0, 10)}...) with ${this.config.fundingAmount} tokens`
       );
 
       const txHash = await faucetWallet.sendTransaction({
-        to: agentConfig.address,
-        value: this.config.fundingAmount,
+        to: tokenAddress,
+        data,
+        value: 0n,
+        gas: 100_000n,
       });
 
-      // Wait for funding tx
-      await publicClient.waitForTransactionReceipt({ hash: txHash });
+      await chainPublicClient.waitForTransactionReceipt({ hash: txHash });
 
-      // Create agent
       const agent = new Agent(
         agentConfig,
         this.config.serverUrl,
         this.config.evolveRpcUrl
       );
 
-      // Set up result handler
       agent.setResultHandler((result) => this.handleAgentResult(result));
 
       this.agents.push(agent);
@@ -120,7 +172,6 @@ export class AgentPool {
   private handleAgentResult(result: RequestResult): void {
     this.metrics.recordRequest(result);
 
-    // Log individual results (verbose mode could make this optional)
     const status = result.success ? "OK" : "FAIL";
     const latency = `${result.latencyMs}ms`;
     const payment = result.paymentLatencyMs
@@ -140,10 +191,8 @@ export class AgentPool {
     console.log("\nStarting agents...");
     this.metrics.start();
 
-    // Start all agents
     await Promise.all(this.agents.map((agent) => agent.start()));
 
-    // Start metrics reporting
     this.metricsInterval = setInterval(() => {
       const poolMetrics = this.metrics.getPoolMetrics();
       this.onMetricsUpdate?.(poolMetrics);

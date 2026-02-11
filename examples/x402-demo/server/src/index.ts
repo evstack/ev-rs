@@ -18,8 +18,8 @@ import { eventEmitter } from "./events.js";
 
 // X402 configuration
 const TREASURY_ADDRESS = (process.env.TREASURY_ADDRESS ??
-  "0x0000000000000000000000000000000000000001") as Address;
-const NETWORK = process.env.EVOLVE_NETWORK ?? "evolve:1337";
+  "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC") as Address;
+const NETWORK = process.env.EVOLVE_NETWORK ?? "evolve:1";
 const ASSET = process.env.EVOLVE_ASSET ?? "native";
 
 // Global client reference (initialized async)

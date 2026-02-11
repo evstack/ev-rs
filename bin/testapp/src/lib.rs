@@ -79,9 +79,15 @@ pub struct GenesisAccounts {
 
 /// Genesis initialization logic - can be called from system_exec.
 pub fn do_genesis_inner(env: &mut dyn Environment) -> SdkResult<GenesisAccounts> {
-    // create EOAs with dummy eth addresses for testing
-    let alice_eth_addr: [u8; 20] = [0xAA; 20];
-    let bob_eth_addr: [u8; 20] = [0xBB; 20];
+    do_genesis_with_addresses([0xAA; 20], [0xBB; 20], env)
+}
+
+/// Genesis with custom Ethereum addresses for Alice and Bob.
+pub fn do_genesis_with_addresses(
+    alice_eth_addr: [u8; 20],
+    bob_eth_addr: [u8; 20],
+    env: &mut dyn Environment,
+) -> SdkResult<GenesisAccounts> {
     let alice_account = EthEoaAccountRef::initialize(alice_eth_addr, env)?.0;
     let bob_account = EthEoaAccountRef::initialize(bob_eth_addr, env)?.0;
 
