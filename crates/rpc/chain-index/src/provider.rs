@@ -7,10 +7,14 @@
 //! - `Stf` for call/estimateGas execution
 //! - `EthGateway` + `Mempool` for transaction submission (optional)
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use alloy_primitives::{Address, Bytes, B256, U256};
 use async_trait::async_trait;
+use tokio::sync::{mpsc, oneshot, Mutex};
+use tokio::time::timeout;
 
 use crate::error::ChainIndexError;
 use crate::index::ChainIndex;
@@ -24,6 +28,78 @@ use evolve_rpc_types::SyncStatus;
 use evolve_rpc_types::{CallRequest, LogFilter, RpcBlock, RpcLog, RpcReceipt, RpcTransaction};
 use evolve_stf_traits::AccountsCodeStorage;
 use evolve_tx_eth::{EthGateway, TxContext};
+
+struct VerifyJob {
+    raw: Vec<u8>,
+    response: oneshot::Sender<Result<TxContext, String>>,
+}
+
+struct IngressVerifier {
+    queue: mpsc::Sender<VerifyJob>,
+    response_timeout: Duration,
+}
+
+impl IngressVerifier {
+    fn new(
+        gateway: Arc<EthGateway>,
+        workers: usize,
+        queue_capacity: usize,
+        response_timeout_ms: u64,
+    ) -> Arc<Self> {
+        let (tx, rx) = mpsc::channel::<VerifyJob>(queue_capacity);
+        let shared_rx = Arc::new(Mutex::new(rx));
+
+        for _ in 0..workers {
+            let rx = Arc::clone(&shared_rx);
+            let gateway = Arc::clone(&gateway);
+            tokio::spawn(async move {
+                loop {
+                    let maybe_job = {
+                        let mut guard = rx.lock().await;
+                        guard.recv().await
+                    };
+                    let Some(job) = maybe_job else { break };
+
+                    let raw = job.raw;
+                    let result = match tokio::task::spawn_blocking({
+                        let gateway = Arc::clone(&gateway);
+                        move || gateway.decode_and_verify(&raw).map_err(|e| e.to_string())
+                    })
+                    .await
+                    {
+                        Ok(res) => res,
+                        Err(e) => Err(format!("verify task failed: {e}")),
+                    };
+
+                    let _ = job.response.send(result);
+                }
+            });
+        }
+
+        Arc::new(Self {
+            queue: tx,
+            response_timeout: Duration::from_millis(response_timeout_ms),
+        })
+    }
+
+    async fn verify(&self, raw: Vec<u8>) -> Result<TxContext, RpcError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.queue
+            .send(VerifyJob {
+                raw,
+                response: response_tx,
+            })
+            .await
+            .map_err(|_| RpcError::InternalError("verifier queue closed".to_string()))?;
+
+        let result = timeout(self.response_timeout, response_rx)
+            .await
+            .map_err(|_| RpcError::InternalError("verifier timeout".to_string()))?
+            .map_err(|_| RpcError::InternalError("verifier response dropped".to_string()))?;
+
+        result.map_err(RpcError::InvalidTransaction)
+    }
+}
 
 /// State provider configuration.
 #[derive(Debug, Clone)]
@@ -53,8 +129,14 @@ pub struct ChainStateProvider<
     account_codes: Arc<A>,
     /// Optional mempool for transaction submission.
     mempool: Option<SharedMempool<Mempool<TxContext>>>,
-    /// Optional gateway for transaction decode/verify.
-    gateway: Option<EthGateway>,
+    /// Optional ingress verifier for transaction decode/verify.
+    verifier: Option<Arc<IngressVerifier>>,
+    /// Cached module identifiers for schema introspection endpoints.
+    module_ids_cache: parking_lot::RwLock<Option<Vec<String>>>,
+    /// Cached per-module schema lookups.
+    module_schema_cache: parking_lot::RwLock<BTreeMap<String, Option<AccountSchema>>>,
+    /// Cached list of all module schemas.
+    all_schemas_cache: parking_lot::RwLock<Option<Vec<AccountSchema>>>,
 }
 
 /// No-op implementation of AccountsCodeStorage for when schema introspection is not needed.
@@ -82,7 +164,10 @@ impl<I: ChainIndex> ChainStateProvider<I, NoopAccountCodes> {
             config,
             account_codes: Arc::new(NoopAccountCodes),
             mempool: None,
-            gateway: None,
+            verifier: None,
+            module_ids_cache: parking_lot::RwLock::new(None),
+            module_schema_cache: parking_lot::RwLock::new(BTreeMap::new()),
+            all_schemas_cache: parking_lot::RwLock::new(None),
         }
     }
 }
@@ -99,7 +184,10 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
             config,
             account_codes,
             mempool: None,
-            gateway: None,
+            verifier: None,
+            module_ids_cache: parking_lot::RwLock::new(None),
+            module_schema_cache: parking_lot::RwLock::new(BTreeMap::new()),
+            all_schemas_cache: parking_lot::RwLock::new(None),
         }
     }
 
@@ -113,13 +201,46 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
         account_codes: Arc<A>,
         mempool: SharedMempool<Mempool<TxContext>>,
     ) -> Self {
-        let gateway = EthGateway::new(config.chain_id);
+        let default_parallelism = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        let configured_parallelism = std::env::var("EVOLVE_RPC_VERIFY_PARALLELISM")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(default_parallelism);
+        let gateway = Arc::new(EthGateway::new(config.chain_id));
+        let queue_capacity = std::env::var("EVOLVE_RPC_VERIFY_QUEUE_CAPACITY")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(4096);
+        let response_timeout_ms = std::env::var("EVOLVE_RPC_VERIFY_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(10_000);
+        let verifier = IngressVerifier::new(
+            gateway,
+            configured_parallelism,
+            queue_capacity,
+            response_timeout_ms,
+        );
+        tracing::info!(
+            "RPC ingress verification: workers={}, queue_capacity={}, timeout_ms={}",
+            configured_parallelism,
+            queue_capacity,
+            response_timeout_ms
+        );
         Self {
             index,
             config,
             account_codes,
             mempool: Some(mempool),
-            gateway: Some(gateway),
+            verifier: Some(verifier),
+            module_ids_cache: parking_lot::RwLock::new(None),
+            module_schema_cache: parking_lot::RwLock::new(BTreeMap::new()),
+            all_schemas_cache: parking_lot::RwLock::new(None),
         }
     }
 
@@ -317,19 +438,16 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
             }
         };
 
-        let gateway = match &self.gateway {
-            Some(g) => g,
+        let verifier = match &self.verifier {
+            Some(v) => v,
             None => {
                 return Err(RpcError::NotImplemented(
-                    "sendRawTransaction: no gateway configured".to_string(),
+                    "sendRawTransaction: no verifier configured".to_string(),
                 ))
             }
         };
 
-        // Decode and verify the transaction via the gateway
-        let tx_context = gateway
-            .decode_and_verify(data)
-            .map_err(|e| RpcError::InvalidTransaction(e.to_string()))?;
+        let tx_context = verifier.verify(data.to_vec()).await?;
 
         // Get the transaction hash before adding to mempool
         let hash = B256::from(tx_context.tx_id());
@@ -362,27 +480,66 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
     }
 
     async fn list_module_identifiers(&self) -> Result<Vec<String>, RpcError> {
-        Ok(self.account_codes.list_identifiers())
+        if let Some(cached) = self.module_ids_cache.read().as_ref() {
+            return Ok(cached.clone());
+        }
+
+        let identifiers = self.account_codes.list_identifiers();
+        *self.module_ids_cache.write() = Some(identifiers.clone());
+        Ok(identifiers)
     }
 
     async fn get_module_schema(&self, id: &str) -> Result<Option<AccountSchema>, RpcError> {
+        if let Some(cached) = self.module_schema_cache.read().get(id) {
+            return Ok(cached.clone());
+        }
+
         self.account_codes
             .with_code(id, |code| code.map(|c| c.schema()))
             .map_err(|e| RpcError::InternalError(format!("Failed to get schema: {:?}", e)))
+            .inspect(|schema| {
+                self.module_schema_cache
+                    .write()
+                    .insert(id.to_string(), schema.clone());
+            })
     }
 
     async fn get_all_schemas(&self) -> Result<Vec<AccountSchema>, RpcError> {
-        let identifiers = self.account_codes.list_identifiers();
+        if let Some(cached) = self.all_schemas_cache.read().as_ref() {
+            return Ok(cached.clone());
+        }
+
+        let identifiers = if let Some(cached) = self.module_ids_cache.read().as_ref() {
+            cached.clone()
+        } else {
+            let ids = self.account_codes.list_identifiers();
+            *self.module_ids_cache.write() = Some(ids.clone());
+            ids
+        };
+
         let mut schemas = Vec::with_capacity(identifiers.len());
         for id in identifiers {
-            if let Some(schema) = self
-                .account_codes
-                .with_code(&id, |code| code.map(|c| c.schema()))
-                .map_err(|e| RpcError::InternalError(format!("Failed to get schema: {:?}", e)))?
-            {
+            let maybe_schema = if let Some(cached) = self.module_schema_cache.read().get(&id) {
+                cached.clone()
+            } else {
+                let schema = self
+                    .account_codes
+                    .with_code(&id, |code| code.map(|c| c.schema()))
+                    .map_err(|e| {
+                        RpcError::InternalError(format!("Failed to get schema: {:?}", e))
+                    })?;
+                self.module_schema_cache
+                    .write()
+                    .insert(id.clone(), schema.clone());
+                schema
+            };
+
+            if let Some(schema) = maybe_schema {
                 schemas.push(schema);
             }
         }
+
+        *self.all_schemas_cache.write() = Some(schemas.clone());
         Ok(schemas)
     }
 

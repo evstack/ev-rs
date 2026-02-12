@@ -5,6 +5,7 @@
 
 mod eip1559;
 mod legacy;
+mod recovery;
 
 pub use eip1559::SignedEip1559Tx;
 pub use legacy::SignedLegacyTx;

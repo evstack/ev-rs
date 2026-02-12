@@ -367,8 +367,7 @@ fn run_node(config: RunConfig, genesis_config: Option<EvdGenesisConfig>) {
 
             let on_block_executed: OnBlockExecuted = Arc::new(move |info| {
                 // 1. Commit state changes to QmdbStorage
-                let operations: Vec<Operation> =
-                    info.state_changes.into_iter().map(Into::into).collect();
+                let operations = state_changes_to_operations(info.state_changes);
 
                 let commit_hash = futures::executor::block_on(async {
                     storage_for_callback
@@ -715,7 +714,7 @@ async fn commit_genesis<S: Storage>(
     changes: Vec<StateChange>,
     genesis_result: &EvdGenesisResult,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut operations: Vec<Operation> = changes.into_iter().map(Into::into).collect();
+    let mut operations = state_changes_to_operations(changes);
 
     let chain_state = ChainState {
         height: 1,
@@ -737,4 +736,14 @@ async fn commit_genesis<S: Storage>(
         .map_err(|e| format!("commit failed: {:?}", e))?;
 
     Ok(())
+}
+
+fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
+    changes
+        .into_iter()
+        .map(|change| match change {
+            StateChange::Set { key, value } => Operation::Set { key, value },
+            StateChange::Remove { key } => Operation::Remove { key },
+        })
+        .collect()
 }

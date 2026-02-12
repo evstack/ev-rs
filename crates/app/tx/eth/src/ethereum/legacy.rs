@@ -4,8 +4,8 @@ use alloy_consensus::{Signed, TxLegacy};
 use alloy_primitives::{keccak256, Address, B256, U256};
 use evolve_core::{InvokeRequest, SdkResult};
 
-use crate::error::ERR_SIGNATURE_RECOVERY;
 use crate::ethereum::invoke_request_from_input;
+use crate::ethereum::recovery::recover_sender_from_signature_hash;
 use crate::traits::TypedTransaction;
 
 /// A signed legacy Ethereum transaction with cached sender.
@@ -28,10 +28,8 @@ impl SignedLegacyTx {
     /// The hash is computed from the provided raw bytes to ensure consistency
     /// with the original transaction encoding.
     pub fn from_alloy_with_bytes(signed: Signed<TxLegacy>, raw_bytes: &[u8]) -> SdkResult<Self> {
-        // Recover sender from signature
-        let sender = signed
-            .recover_signer()
-            .map_err(|_| ERR_SIGNATURE_RECOVERY)?;
+        let sender =
+            recover_sender_from_signature_hash(signed.signature_hash(), signed.signature())?;
 
         // Compute transaction hash from original bytes
         // This ensures the hash matches the original encoding
@@ -49,10 +47,8 @@ impl SignedLegacyTx {
     /// Uses alloy's internal hash computation (re-encodes the transaction).
     /// Prefer `from_alloy_with_bytes` when you have the original bytes.
     pub fn from_alloy(signed: Signed<TxLegacy>) -> SdkResult<Self> {
-        // Recover sender from signature
-        let sender = signed
-            .recover_signer()
-            .map_err(|_| ERR_SIGNATURE_RECOVERY)?;
+        let sender =
+            recover_sender_from_signature_hash(signed.signature_hash(), signed.signature())?;
 
         // Use alloy's hash (computes from re-encoded tx)
         let hash = *signed.hash();

@@ -36,6 +36,30 @@ pub const DEFAULT_DATA_DIR: &str = "./data";
 /// Default RPC server address.
 pub const DEFAULT_RPC_ADDR: &str = "127.0.0.1:8545";
 
+fn parse_env_u64(var: &str, default: u64) -> u64 {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
+}
+
+fn parse_env_usize(var: &str, default: usize) -> usize {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
+}
+
+fn configured_block_interval() -> Duration {
+    Duration::from_millis(parse_env_u64("EVOLVE_BLOCK_INTERVAL_MS", 1_000))
+}
+
+fn configured_max_txs_per_block() -> usize {
+    parse_env_usize("EVOLVE_MAX_TXS_PER_BLOCK", 1_000)
+}
+
 /// Convenience handles for a dev node wired with a mempool.
 pub struct DevNodeMempoolHandles<Stf, S, Codes, Tx: MempoolTx> {
     /// Dev consensus engine wired to mempool transactions.
@@ -82,6 +106,8 @@ pub struct RpcConfig {
     pub client_version: String,
     /// Whether RPC is enabled.
     pub enabled: bool,
+    /// Whether block indexing is enabled while producing blocks.
+    pub enable_block_indexing: bool,
 }
 
 impl Default for RpcConfig {
@@ -91,6 +117,7 @@ impl Default for RpcConfig {
             chain_id: 1,
             client_version: "evolve-dev/0.1.0".to_string(),
             enabled: true,
+            enable_block_indexing: true,
         }
     }
 }
@@ -113,6 +140,12 @@ impl RpcConfig {
     /// Set the chain ID.
     pub fn with_chain_id(mut self, chain_id: u64) -> Self {
         self.chain_id = chain_id;
+        self
+    }
+
+    /// Enable or disable block indexing while keeping RPC enabled.
+    pub fn with_block_indexing(mut self, enabled: bool) -> Self {
+        self.enable_block_indexing = enabled;
         self
     }
 }
@@ -277,7 +310,7 @@ pub fn run_dev_node_with_rpc<
             let stf = (build_stf)(&genesis_result);
 
             // Create DevConsensus config
-            let block_interval = Duration::from_secs(1);
+            let block_interval = configured_block_interval();
             let dev_config = DevConfig {
                 block_interval: Some(block_interval),
                 initial_height,
@@ -331,15 +364,17 @@ pub fn run_dev_node_with_rpc<
                 .expect("failed to start RPC server");
 
                 // Create DevConsensus with RPC support
-                let dev: Arc<DevConsensus<Stf, S, Codes, Tx, PersistentChainIndex<S>>> =
-                    Arc::new(DevConsensus::with_rpc(
+                let dev: Arc<DevConsensus<Stf, S, Codes, Tx, PersistentChainIndex<S>>> = Arc::new(
+                    DevConsensus::with_rpc(
                         stf,
                         storage,
                         codes,
                         dev_config,
                         chain_index,
                         subscriptions,
-                    ));
+                    )
+                    .with_indexing_enabled(rpc_config.enable_block_indexing),
+                );
 
                 tracing::info!(
                     "Block interval: {:?}, starting at height {}",
@@ -537,7 +572,8 @@ pub fn run_dev_node_with_rpc_and_mempool<
 
             let stf = (build_stf)(&genesis_result);
 
-            let block_interval = Duration::from_secs(1);
+            let block_interval = configured_block_interval();
+            let max_txs_per_block = configured_max_txs_per_block();
             let dev_config = DevConfig {
                 block_interval: Some(block_interval),
                 initial_height,
@@ -561,14 +597,14 @@ pub fn run_dev_node_with_rpc_and_mempool<
                 Arc::new(DevConsensus::with_mempool(stf, storage, codes, dev_config, mempool));
 
             tracing::info!(
-                "Block interval: {:?}, starting at height {}",
+                "Block interval: {:?}, max_txs_per_block: {}, starting at height {}",
                 block_interval,
+                max_txs_per_block,
                 initial_height
             );
 
             tracing::info!("Starting block production... (Ctrl+C to stop)");
 
-            let max_txs_per_block = 1000usize;
             tokio::select! {
                 _ = dev.run_block_production_with_mempool(context_for_shutdown.clone(), max_txs_per_block) => {
                 }
@@ -697,7 +733,8 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
 
             let stf = (build_stf)(&genesis_result);
 
-            let block_interval = Duration::from_secs(1);
+            let block_interval = configured_block_interval();
+            let max_txs_per_block = configured_max_txs_per_block();
             let dev_config = DevConfig {
                 block_interval: Some(block_interval),
                 initial_height,
@@ -747,25 +784,28 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                 .expect("failed to start RPC server");
 
                 let dev: Arc<DevConsensus<Stf, S, Codes, TxContext, PersistentChainIndex<S>>> =
-                    Arc::new(DevConsensus::with_rpc_and_mempool(
-                        stf,
-                        storage,
-                        codes,
-                        dev_config,
-                        chain_index,
-                        subscriptions,
-                        mempool.clone(),
-                    ));
+                    Arc::new(
+                        DevConsensus::with_rpc_and_mempool(
+                            stf,
+                            storage,
+                            codes,
+                            dev_config,
+                            chain_index,
+                            subscriptions,
+                            mempool.clone(),
+                        )
+                        .with_indexing_enabled(rpc_config.enable_block_indexing),
+                    );
 
                 tracing::info!(
-                    "Block interval: {:?}, starting at height {}",
+                    "Block interval: {:?}, max_txs_per_block: {}, starting at height {}",
                     block_interval,
+                    max_txs_per_block,
                     initial_height
                 );
 
                 tracing::info!("Starting block production... (Ctrl+C to stop)");
 
-                let max_txs_per_block = 1000usize;
                 tokio::select! {
                     _ = dev.run_block_production_with_mempool(context_for_shutdown.clone(), max_txs_per_block) => {
                     }
@@ -797,14 +837,14 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                     Arc::new(DevConsensus::with_mempool(stf, storage, codes, dev_config, mempool));
 
                 tracing::info!(
-                    "Block interval: {:?}, starting at height {}",
+                    "Block interval: {:?}, max_txs_per_block: {}, starting at height {}",
                     block_interval,
+                    max_txs_per_block,
                     initial_height
                 );
 
                 tracing::info!("Starting block production... (Ctrl+C to stop)");
 
-                let max_txs_per_block = 1000usize;
                 tokio::select! {
                     _ = dev.run_block_production_with_mempool(context_for_shutdown.clone(), max_txs_per_block) => {
                     }
@@ -973,7 +1013,7 @@ async fn commit_genesis<G: BorshSerialize + Clone, S: Storage>(
     changes: Vec<StateChange>,
     genesis_result: &G,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut operations: Vec<Operation> = changes.into_iter().map(Into::into).collect();
+    let mut operations = state_changes_to_operations(changes);
 
     let chain_state: ChainState<G> = ChainState {
         height: 1,
@@ -994,4 +1034,14 @@ async fn commit_genesis<G: BorshSerialize + Clone, S: Storage>(
         .await
         .map_err(|e| format!("commit failed: {:?}", e))?;
     Ok(())
+}
+
+fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
+    changes
+        .into_iter()
+        .map(|change| match change {
+            StateChange::Set { key, value } => Operation::Set { key, value },
+            StateChange::Remove { key } => Operation::Remove { key },
+        })
+        .collect()
 }

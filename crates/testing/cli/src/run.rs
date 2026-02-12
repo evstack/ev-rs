@@ -4,7 +4,9 @@
 #![allow(clippy::disallowed_types)]
 
 use evolve_debugger::{save_trace, StateSnapshot, TraceBuilder, TraceFormat};
-use evolve_simulator::{MetricsConfig, SimConfig, Simulator, StorageConfig, TimeConfig};
+use evolve_simulator::{
+    MetricsConfig, SimConfig, Simulator, StorageBackendConfig, StorageConfig, TimeConfig,
+};
 use std::path::PathBuf;
 
 /// Configuration for the run command.
@@ -45,6 +47,7 @@ pub fn execute(config: RunConfig) -> Result<(), String> {
             write_fault_prob: config.write_fault_prob,
             log_operations: false,
         },
+        storage_backend: StorageBackendConfig::from_env(),
         metrics: MetricsConfig::default(),
         max_blocks: config.blocks,
         max_txs_per_block: config.max_txs,
@@ -76,7 +79,8 @@ pub fn execute(config: RunConfig) -> Result<(), String> {
 
         // Record block end if tracing
         if let Some(ref mut builder) = trace_builder {
-            builder.block_end(block_height, [0; 32]); // TODO: compute actual state hash
+            let app_hash = simulator.app_hash().unwrap_or([0; 32]);
+            builder.block_end(block_height, app_hash);
         }
 
         // Progress indicator

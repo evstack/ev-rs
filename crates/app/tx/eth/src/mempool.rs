@@ -15,7 +15,7 @@ use alloy_primitives::{Address, B256};
 use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::{AccountId, FungibleAsset, InvokeRequest, Message, SdkResult};
 use evolve_mempool::{GasPriceOrdering, MempoolTx, SenderKey};
-use evolve_stf_traits::{SenderBootstrap, Transaction};
+use evolve_stf_traits::{AuthenticationPayload, SenderBootstrap, Transaction};
 
 use crate::envelope::TxEnvelope;
 use crate::traits::{address_to_account_id, TypedTransaction};
@@ -144,6 +144,12 @@ impl Transaction for TxContext {
             account_code_id: "EthEoaAccount",
             init_message: Message::new(&eth_address).ok()?,
         })
+    }
+}
+
+impl AuthenticationPayload for TxContext {
+    fn authentication_payload(&self) -> SdkResult<Message> {
+        Message::new(&self.sender_id)
     }
 }
 

@@ -21,6 +21,7 @@ members = [
     "crates/app/node",
     "bin/testapp",
     "bin/evd",
+    "bin/txload",
     "crates/app/genesis",
     "crates/testing/simulator",
     "crates/testing/debugger",

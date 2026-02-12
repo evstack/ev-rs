@@ -1,4 +1,6 @@
+use evolve_authentication::auth_interface::AuthenticationInterfaceRef;
 use evolve_authentication::ERR_NOT_EOA;
+use evolve_core::Message;
 use evolve_testapp::sim_testing::SimTestApp;
 
 #[test]
@@ -26,5 +28,23 @@ fn test_not_eoa_transaction() {
     match &not_eoa_result.response {
         Err(err) => assert_eq!(*err, ERR_NOT_EOA),
         Ok(resp) => panic!("expected error, got {:?}", resp),
+    }
+}
+
+#[test]
+fn test_forged_sender_account_id_payload_rejected() {
+    let mut app = SimTestApp::default();
+    let accounts = app.accounts();
+
+    // Attempt to authenticate Alice's EOA account with Bob's account ID payload.
+    // This simulates a forged auth payload for the fast path and must fail.
+    let res = app.system_exec_as(accounts.alice, |env| {
+        AuthenticationInterfaceRef::new(accounts.alice)
+            .authenticate(Message::new(&accounts.bob)?, env)
+    });
+
+    match res {
+        Err(err) => assert_eq!(err.id, 0x51),
+        Ok(_) => panic!("expected forged sender payload to be rejected"),
     }
 }

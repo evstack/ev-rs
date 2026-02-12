@@ -2,12 +2,12 @@
 
 use evolve_core::ReadonlyKV;
 use evolve_node::{
-    init_dev_node, run_dev_node_with_rpc_and_mempool,
+    init_dev_node, run_dev_node_with_rpc_and_mempool_eth,
     run_dev_node_with_rpc_and_mempool_mock_storage, GenesisOutput, DEFAULT_DATA_DIR,
 };
 use evolve_storage::{QmdbStorage, Storage, StorageConfig};
 use evolve_testapp::{
-    build_mempool_stf, default_gas_config, do_genesis_inner, install_account_codes,
+    build_mempool_stf, default_gas_config, do_eth_genesis_inner, install_account_codes,
     GenesisAccounts, MempoolStf, PLACEHOLDER_ACCOUNT,
 };
 use evolve_testing::server_mocks::AccountStorageMock;
@@ -23,15 +23,25 @@ fn main() {
 
     let command = std::env::args().nth(1).unwrap_or_else(|| "run".to_string());
 
+    let disable_chain_index = std::env::var("EVOLVE_DISABLE_CHAIN_INDEX")
+        .ok()
+        .map(|v| {
+            let s = v.trim().to_ascii_lowercase();
+            s == "1" || s == "true" || s == "yes" || s == "on"
+        })
+        .unwrap_or(false);
+
+    let rpc_config = evolve_node::RpcConfig::default().with_block_indexing(!disable_chain_index);
+
     match command.as_str() {
-        "run" => run_dev_node_with_rpc_and_mempool(
+        "run" => run_dev_node_with_rpc_and_mempool_eth(
             DEFAULT_DATA_DIR,
             build_genesis_stf,
             build_stf_from_genesis,
             build_codes,
             run_genesis_output,
             build_storage,
-            evolve_node::RpcConfig::default(),
+            rpc_config.clone(),
         ),
         "run-mock" => run_dev_node_with_rpc_and_mempool_mock_storage(
             DEFAULT_DATA_DIR,
@@ -39,7 +49,7 @@ fn main() {
             build_stf_from_genesis,
             build_codes,
             run_genesis_output,
-            evolve_node::RpcConfig::default(),
+            rpc_config,
         ),
         "init" => init_dev_node(
             DEFAULT_DATA_DIR,
@@ -78,12 +88,32 @@ fn run_genesis_output<S: ReadonlyKV + Storage>(
     codes: &AccountStorageMock,
     storage: &S,
 ) -> Result<GenesisOutput<GenesisAccounts>, Box<dyn std::error::Error + Send + Sync>> {
+    use alloy_primitives::Address;
     use evolve_core::BlockContext;
+    use std::str::FromStr;
 
     let genesis_block = BlockContext::new(0, 0);
+    let alice_eth_address = std::env::var("GENESIS_ALICE_ETH_ADDRESS")
+        .ok()
+        .and_then(|s| Address::from_str(s.trim()).ok())
+        .map(Into::into)
+        .unwrap_or([0xAA; 20]);
+    let bob_eth_address = std::env::var("GENESIS_BOB_ETH_ADDRESS")
+        .ok()
+        .and_then(|s| Address::from_str(s.trim()).ok())
+        .map(Into::into)
+        .unwrap_or([0xBB; 20]);
 
     let (accounts, state) = stf
-        .system_exec(storage, codes, genesis_block, |env| do_genesis_inner(env))
+        .system_exec(storage, codes, genesis_block, |env| {
+            let eth_accounts = do_eth_genesis_inner(alice_eth_address, bob_eth_address, env)?;
+            Ok(GenesisAccounts {
+                alice: eth_accounts.alice,
+                bob: eth_accounts.bob,
+                atom: eth_accounts.evolve,
+                scheduler: eth_accounts.scheduler,
+            })
+        })
         .map_err(|e| format!("{:?}", e))?;
 
     let changes = state.into_changes().map_err(|e| format!("{:?}", e))?;

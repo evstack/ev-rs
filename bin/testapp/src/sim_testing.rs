@@ -5,16 +5,20 @@ use crate::{
 use alloy_consensus::{SignableTransaction, TxEip1559};
 use alloy_primitives::{Bytes, PrimitiveSignature, TxKind, U256};
 use evolve_core::{
-    encoding::Decodable, runtime_api::ACCOUNT_IDENTIFIER_PREFIX, AccountId, BlockContext,
-    Environment, FungibleAsset, InvokableMessage, Message, ReadonlyKV, SdkResult,
+    encoding::Decodable, AccountId, Environment, FungibleAsset, InvokableMessage, ReadonlyKV,
+    SdkResult,
 };
 use evolve_debugger::{ExecutionTrace, StateSnapshot, TraceBuilder};
 use evolve_mempool::{new_shared_mempool, Mempool, MempoolError, MempoolTx, SharedMempool};
 use evolve_server::Block;
-use evolve_simulator::{SimConfig, SimStorageAdapter, Simulator};
+use evolve_simulator::{
+    apply_block_and_commit, current_block_context, generate_signing_key, init_eth_eoa_storage,
+    query_stf, register_account_code_identifier, run_block_iterations, system_exec_as_and_commit,
+    system_exec_genesis_and_commit, SimConfig, Simulator,
+};
 use evolve_stf::gas::GasCounter;
 use evolve_stf::results::BlockResult;
-use evolve_stf_traits::{Block as BlockTrait, StateChange, Transaction, WritableKV};
+use evolve_stf_traits::{Block as BlockTrait, Transaction};
 use evolve_testing::server_mocks::AccountStorageMock;
 use evolve_token::account::TokenRef;
 use evolve_tx_eth::{account_id_to_address, address_to_account_id};
@@ -29,6 +33,7 @@ pub struct SimTestApp {
     stf: crate::MempoolStf,
     accounts: GenesisAccounts,
     mempool: SharedMempool<Mempool<TxContext>>,
+    gateway: EthGateway,
     chain_id: u64,
     signers: BTreeMap<AccountId, SigningKey>,
     nonces: BTreeMap<AccountId, u64>,
@@ -171,257 +176,6 @@ impl TxGeneratorRegistry {
 impl Default for TxGeneratorRegistry {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-pub struct TokenTransferGenerator {
-    token_account: AccountId,
-    senders: Vec<AccountId>,
-    recipients: Vec<AccountId>,
-    min_amount: u128,
-    max_amount: u128,
-    gas_limit: u64,
-}
-
-impl TokenTransferGenerator {
-    pub fn new(
-        token_account: AccountId,
-        senders: Vec<AccountId>,
-        recipients: Vec<AccountId>,
-        min_amount: u128,
-        max_amount: u128,
-        gas_limit: u64,
-    ) -> Self {
-        Self {
-            token_account,
-            senders,
-            recipients,
-            min_amount,
-            max_amount,
-            gas_limit,
-        }
-    }
-}
-
-impl TxGenerator for TokenTransferGenerator {
-    fn generate_tx(&mut self, _height: u64, app: &mut SimTestApp) -> Option<Vec<u8>> {
-        if self.senders.is_empty() || self.recipients.is_empty() {
-            return None;
-        }
-        if self.min_amount > self.max_amount {
-            return None;
-        }
-
-        let sender_idx = app.sim.rng().gen_range(0..self.senders.len());
-        let recipient_idx = app.sim.rng().gen_range(0..self.recipients.len());
-        let amount = app.sim.rng().gen_range(self.min_amount..=self.max_amount);
-
-        let sender = self.senders[sender_idx];
-        let recipient = self.recipients[recipient_idx];
-
-        app.build_token_transfer_tx(
-            sender,
-            self.token_account,
-            recipient,
-            amount,
-            self.gas_limit,
-        )
-    }
-}
-
-/// Generates transfers with balance awareness to reduce failed txs.
-/// Tracks expected balances and only generates transfers when funds are available.
-pub struct BalanceAwareTransferGenerator {
-    token_account: AccountId,
-    accounts: Vec<AccountId>,
-    balances: std::collections::BTreeMap<AccountId, u128>,
-    min_amount: u128,
-    max_amount: u128,
-    gas_limit: u64,
-}
-
-impl BalanceAwareTransferGenerator {
-    pub fn new(
-        token_account: AccountId,
-        initial_balances: Vec<(AccountId, u128)>,
-        min_amount: u128,
-        max_amount: u128,
-        gas_limit: u64,
-    ) -> Self {
-        let accounts: Vec<AccountId> = initial_balances.iter().map(|(a, _)| *a).collect();
-        let balances: std::collections::BTreeMap<_, _> = initial_balances.into_iter().collect();
-        Self {
-            token_account,
-            accounts,
-            balances,
-            min_amount,
-            max_amount,
-            gas_limit,
-        }
-    }
-
-    /// Updates internal balance tracking after a successful transfer.
-    pub fn record_transfer(&mut self, from: AccountId, to: AccountId, amount: u128) {
-        if let Some(bal) = self.balances.get_mut(&from) {
-            *bal = bal.saturating_sub(amount);
-        }
-        *self.balances.entry(to).or_insert(0) += amount;
-    }
-
-    /// Adds a new account with initial balance (e.g., after minting).
-    pub fn add_balance(&mut self, account: AccountId, amount: u128) {
-        *self.balances.entry(account).or_insert(0) += amount;
-        if !self.accounts.contains(&account) {
-            self.accounts.push(account);
-        }
-    }
-}
-
-impl TxGenerator for BalanceAwareTransferGenerator {
-    fn generate_tx(&mut self, _height: u64, app: &mut SimTestApp) -> Option<Vec<u8>> {
-        if self.accounts.len() < 2 {
-            return None;
-        }
-
-        // Find accounts with sufficient balance
-        let funded_accounts: Vec<_> = self
-            .accounts
-            .iter()
-            .filter(|a| self.balances.get(a).copied().unwrap_or(0) >= self.min_amount)
-            .copied()
-            .collect();
-
-        if funded_accounts.is_empty() {
-            return None;
-        }
-
-        let sender_idx = app.sim.rng().gen_range(0..funded_accounts.len());
-        let sender = funded_accounts[sender_idx];
-        let sender_balance = self.balances.get(&sender).copied().unwrap_or(0);
-
-        // Pick recipient different from sender
-        let mut recipient = self.accounts[0];
-        for _ in 0..self.accounts.len() {
-            let idx = app.sim.rng().gen_range(0..self.accounts.len());
-            if self.accounts[idx] != sender {
-                recipient = self.accounts[idx];
-                break;
-            }
-        }
-
-        // Clamp amount to available balance
-        let max_transfer = sender_balance.min(self.max_amount);
-        if max_transfer < self.min_amount {
-            return None;
-        }
-        let amount = app.sim.rng().gen_range(self.min_amount..=max_transfer);
-
-        // Pre-update balances (optimistic)
-        self.record_transfer(sender, recipient, amount);
-
-        app.build_token_transfer_tx(
-            sender,
-            self.token_account,
-            recipient,
-            amount,
-            self.gas_limit,
-        )
-    }
-}
-
-/// Generates random transfer amounts that may exceed balances (for failure testing).
-pub struct FailingTransferGenerator {
-    token_account: AccountId,
-    senders: Vec<AccountId>,
-    recipients: Vec<AccountId>,
-    amount: u128,
-    gas_limit: u64,
-}
-
-impl FailingTransferGenerator {
-    pub fn new(
-        token_account: AccountId,
-        senders: Vec<AccountId>,
-        recipients: Vec<AccountId>,
-        amount: u128,
-        gas_limit: u64,
-    ) -> Self {
-        Self {
-            token_account,
-            senders,
-            recipients,
-            amount,
-            gas_limit,
-        }
-    }
-}
-
-impl TxGenerator for FailingTransferGenerator {
-    fn generate_tx(&mut self, _height: u64, app: &mut SimTestApp) -> Option<Vec<u8>> {
-        if self.senders.is_empty() || self.recipients.is_empty() {
-            return None;
-        }
-
-        let sender_idx = app.sim.rng().gen_range(0..self.senders.len());
-        let recipient_idx = app.sim.rng().gen_range(0..self.recipients.len());
-        let sender = self.senders[sender_idx];
-        let recipient = self.recipients[recipient_idx];
-
-        app.build_token_transfer_tx(
-            sender,
-            self.token_account,
-            recipient,
-            self.amount,
-            self.gas_limit,
-        )
-    }
-}
-
-/// Generates a sequence of transfers in round-robin fashion for predictable testing.
-pub struct RoundRobinTransferGenerator {
-    token_account: AccountId,
-    participants: Vec<AccountId>,
-    current_sender_idx: usize,
-    amount: u128,
-    gas_limit: u64,
-}
-
-impl RoundRobinTransferGenerator {
-    pub fn new(
-        token_account: AccountId,
-        participants: Vec<AccountId>,
-        amount: u128,
-        gas_limit: u64,
-    ) -> Self {
-        Self {
-            token_account,
-            participants,
-            current_sender_idx: 0,
-            amount,
-            gas_limit,
-        }
-    }
-}
-
-impl TxGenerator for RoundRobinTransferGenerator {
-    fn generate_tx(&mut self, _height: u64, app: &mut SimTestApp) -> Option<Vec<u8>> {
-        if self.participants.len() < 2 {
-            return None;
-        }
-
-        let sender = self.participants[self.current_sender_idx];
-        let recipient_idx = (self.current_sender_idx + 1) % self.participants.len();
-        let recipient = self.participants[recipient_idx];
-
-        self.current_sender_idx = (self.current_sender_idx + 1) % self.participants.len();
-
-        app.build_token_transfer_tx(
-            sender,
-            self.token_account,
-            recipient,
-            self.amount,
-            self.gas_limit,
-        )
     }
 }
 
@@ -568,132 +322,69 @@ impl SimTestApp {
         let mut codes = AccountStorageMock::default();
         install_account_codes(&mut codes);
 
-        let mut sim = Simulator::new(seed, config);
+        let mut sim = Simulator::new(seed, config.with_storage_backend_from_env());
 
-        let alice_key = Self::generate_signing_key(&mut sim);
-        let bob_key = Self::generate_signing_key(&mut sim);
+        let alice_key = generate_signing_key(&mut sim, MAX_SIGNING_KEY_ATTEMPTS)
+            .expect("failed to generate signing key");
+        let bob_key = generate_signing_key(&mut sim, MAX_SIGNING_KEY_ATTEMPTS)
+            .expect("failed to generate signing key");
         let alice_address = get_address(&alice_key);
         let bob_address = get_address(&bob_key);
 
         let alice_id = address_to_account_id(alice_address);
         let bob_id = address_to_account_id(bob_address);
 
-        Self::register_account_code_identifier(&mut sim, alice_id, "EthEoaAccount");
-        Self::register_account_code_identifier(&mut sim, bob_id, "EthEoaAccount");
-        Self::init_eth_eoa_storage(&mut sim, alice_id, alice_address.into());
-        Self::init_eth_eoa_storage(&mut sim, bob_id, bob_address.into());
+        register_account_code_identifier(&mut sim, alice_id, "EthEoaAccount")
+            .expect("register alice code");
+        register_account_code_identifier(&mut sim, bob_id, "EthEoaAccount")
+            .expect("register bob code");
+        init_eth_eoa_storage(&mut sim, alice_id, alice_address.into()).expect("init alice eoa");
+        init_eth_eoa_storage(&mut sim, bob_id, bob_address.into()).expect("init bob eoa");
 
-        let adapter = SimStorageAdapter::new(sim.storage());
+        let run_genesis = |env: &mut dyn Environment| -> SdkResult<GenesisAccounts> {
+            let atom = TokenRef::initialize(
+                evolve_fungible_asset::FungibleAssetMetadata {
+                    name: "evolve".to_string(),
+                    symbol: "ev".to_string(),
+                    decimals: 6,
+                    icon_url: "https://lol.wtf".to_string(),
+                    description: "The evolve coin".to_string(),
+                },
+                vec![(alice_id, 1000), (bob_id, 2000)],
+                Some(MINTER),
+                env,
+            )?
+            .0;
 
-        let genesis_block = BlockContext::new(0, 0);
-        let (accounts, state) = bootstrap_stf
-            .system_exec(&adapter, &codes, genesis_block, |env| {
-                let atom = TokenRef::initialize(
-                    evolve_fungible_asset::FungibleAssetMetadata {
-                        name: "evolve".to_string(),
-                        symbol: "ev".to_string(),
-                        decimals: 6,
-                        icon_url: "https://lol.wtf".to_string(),
-                        description: "The evolve coin".to_string(),
-                    },
-                    vec![(alice_id, 1000), (bob_id, 2000)],
-                    Some(MINTER),
-                    env,
-                )?
-                .0;
+            let scheduler =
+                evolve_scheduler::scheduler_account::SchedulerRef::initialize(vec![], vec![], env)?
+                    .0;
+            scheduler.update_begin_blockers(vec![], env)?;
 
-                let scheduler = evolve_scheduler::scheduler_account::SchedulerRef::initialize(
-                    vec![],
-                    vec![],
-                    env,
-                )?
-                .0;
-                scheduler.update_begin_blockers(vec![], env)?;
-
-                Ok(GenesisAccounts {
-                    alice: alice_id,
-                    bob: bob_id,
-                    atom: atom.0,
-                    scheduler: scheduler.0,
-                })
+            Ok(GenesisAccounts {
+                alice: alice_id,
+                bob: bob_id,
+                atom: atom.0,
+                scheduler: scheduler.0,
             })
-            .expect("genesis failed");
+        };
 
-        sim.apply_state_changes(state.into_changes().expect("genesis changes"))
-            .expect("apply genesis");
+        let accounts =
+            system_exec_genesis_and_commit(&mut sim, &bootstrap_stf, &codes, run_genesis)
+                .expect("genesis failed");
 
         let stf = build_mempool_stf(gas_config, accounts.scheduler);
-        let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
-
-        let mut signers = BTreeMap::new();
-        signers.insert(alice_id, alice_key);
-        signers.insert(bob_id, bob_key);
-
-        let mut nonces = BTreeMap::new();
-        nonces.insert(alice_id, 0);
-        nonces.insert(bob_id, 0);
-
         Self {
             sim,
             codes,
             stf,
             accounts,
-            mempool,
+            mempool: new_shared_mempool(),
+            gateway: EthGateway::new(SIM_CHAIN_ID),
             chain_id: SIM_CHAIN_ID,
-            signers,
-            nonces,
+            signers: BTreeMap::from([(alice_id, alice_key), (bob_id, bob_key)]),
+            nonces: BTreeMap::from([(alice_id, 0), (bob_id, 0)]),
         }
-    }
-
-    fn generate_signing_key(sim: &mut Simulator) -> SigningKey {
-        for _ in 0..MAX_SIGNING_KEY_ATTEMPTS {
-            let bytes: [u8; 32] = sim.rng().gen();
-            if let Ok(key) = SigningKey::from_bytes(&bytes.into()) {
-                return key;
-            }
-        }
-        panic!("failed to generate signing key");
-    }
-
-    fn register_account_code_identifier(sim: &mut Simulator, account_id: AccountId, code_id: &str) {
-        let mut key = vec![ACCOUNT_IDENTIFIER_PREFIX];
-        key.extend_from_slice(&account_id.as_bytes());
-        let value = Message::new(&code_id.to_string())
-            .expect("encode code id")
-            .into_bytes()
-            .expect("code id bytes");
-        sim.storage_mut()
-            .apply_changes(vec![StateChange::Set { key, value }])
-            .expect("register account code");
-    }
-
-    fn init_eth_eoa_storage(sim: &mut Simulator, account_id: AccountId, eth_address: [u8; 20]) {
-        let mut nonce_key = account_id.as_bytes();
-        nonce_key.push(0u8);
-        let nonce_value = Message::new(&0u64)
-            .expect("encode nonce")
-            .into_bytes()
-            .expect("nonce bytes");
-
-        let mut addr_key = account_id.as_bytes();
-        addr_key.push(1u8);
-        let addr_value = Message::new(&eth_address)
-            .expect("encode eth address")
-            .into_bytes()
-            .expect("addr bytes");
-
-        sim.storage_mut()
-            .apply_changes(vec![
-                StateChange::Set {
-                    key: nonce_key,
-                    value: nonce_value,
-                },
-                StateChange::Set {
-                    key: addr_key,
-                    value: addr_value,
-                },
-            ])
-            .expect("init eoa storage");
     }
 
     fn next_nonce(&mut self, sender: AccountId) -> u64 {
@@ -701,6 +392,10 @@ impl SimTestApp {
         let nonce = *entry;
         *entry = nonce.saturating_add(1);
         nonce
+    }
+
+    fn get_storage_value(&self, key: &[u8]) -> SdkResult<Option<Vec<u8>>> {
+        self.sim.readonly_kv().get(key)
     }
 
     pub fn build_token_transfer_tx(
@@ -711,7 +406,8 @@ impl SimTestApp {
         amount: u128,
         gas_limit: u64,
     ) -> Option<Vec<u8>> {
-        let signing_key = self.signers.get(&sender)?.clone();
+        let nonce = self.next_nonce(sender);
+        let signing_key = self.signers.get(&sender)?;
         let selector = compute_selector("transfer");
         let args = borsh::to_vec(&(recipient, amount)).ok()?;
         let mut calldata = Vec::with_capacity(4 + args.len());
@@ -719,9 +415,8 @@ impl SimTestApp {
         calldata.extend_from_slice(&args);
 
         let to = account_id_to_address(token_account);
-        let nonce = self.next_nonce(sender);
         Some(create_signed_tx(
-            &signing_key,
+            signing_key,
             self.chain_id,
             nonce,
             to,
@@ -731,36 +426,84 @@ impl SimTestApp {
         ))
     }
 
+    pub fn build_token_transfer_tx_context(
+        &mut self,
+        sender: AccountId,
+        token_account: AccountId,
+        recipient: AccountId,
+        amount: u128,
+        gas_limit: u64,
+    ) -> Option<TxContext> {
+        let raw =
+            self.build_token_transfer_tx(sender, token_account, recipient, amount, gas_limit)?;
+        self.gateway.decode_and_verify(&raw).ok()
+    }
+
     pub fn submit_raw_tx(&mut self, raw_tx: &[u8]) -> Result<alloy_primitives::B256, MempoolError> {
-        let gateway = EthGateway::new(self.chain_id);
-        let tx_context = gateway
+        let tx_context = self
+            .gateway
             .decode_and_verify(raw_tx)
             .map_err(|e| MempoolError::DecodeFailed(e.to_string()))?;
+        self.submit_tx_context(tx_context)
+    }
+
+    pub fn submit_tx_context(
+        &mut self,
+        tx_context: TxContext,
+    ) -> Result<alloy_primitives::B256, MempoolError> {
         let mut pool = self.mempool.blocking_write();
         let tx_id = pool.add(tx_context)?;
         Ok(alloy_primitives::B256::from(tx_id))
     }
 
-    pub fn produce_block_from_mempool(&mut self, max_txs: usize) -> BlockResult {
+    fn take_mempool_batch(&mut self, max_txs: usize) -> (Vec<[u8; 32]>, Vec<TxContext>) {
         let selected = {
             let mut pool = self.mempool.blocking_write();
             pool.select(max_txs)
         };
 
-        let tx_hashes: Vec<[u8; 32]> = selected.iter().map(|tx| tx.tx_id()).collect();
-        let transactions: Vec<TxContext> = selected.into_iter().map(|tx| (*tx).clone()).collect();
+        let mut tx_hashes = Vec::with_capacity(selected.len());
+        let mut transactions = Vec::with_capacity(selected.len());
+        for tx in selected {
+            tx_hashes.push(tx.tx_id());
+            transactions.push((*tx).clone());
+        }
+        (tx_hashes, transactions)
+    }
 
-        let height = self.sim.time().block_height();
+    fn remove_many_from_mempool(&mut self, tx_hashes: &[[u8; 32]]) {
+        if tx_hashes.is_empty() {
+            return;
+        }
+        let mut pool = self.mempool.blocking_write();
+        pool.remove_many(tx_hashes);
+    }
+
+    fn produce_block_internal(
+        &mut self,
+        height: u64,
+        transactions: Vec<TxContext>,
+        advance: bool,
+    ) -> BlockResult {
         let block = Block::for_testing(height, transactions);
         let result = self.apply_block(&block);
-
-        if !tx_hashes.is_empty() {
-            let mut pool = self.mempool.blocking_write();
-            pool.remove_many(&tx_hashes);
+        if advance {
+            self.sim.advance_block();
         }
-
-        self.sim.advance_block();
         result
+    }
+
+    pub fn produce_block_from_mempool(&mut self, max_txs: usize) -> BlockResult {
+        let (tx_hashes, transactions) = self.take_mempool_batch(max_txs);
+        let height = self.sim.time().block_height();
+        let result = self.produce_block_internal(height, transactions, true);
+        self.remove_many_from_mempool(&tx_hashes);
+        result
+    }
+
+    pub fn produce_block_with_txs(&mut self, transactions: Vec<TxContext>) -> BlockResult {
+        let height = self.sim.time().block_height();
+        self.produce_block_internal(height, transactions, true)
     }
 
     pub fn submit_transfer_and_produce_block(
@@ -782,14 +525,15 @@ impl SimTestApp {
         impersonate: AccountId,
         action: impl Fn(&mut dyn Environment) -> SdkResult<R>,
     ) -> SdkResult<R> {
-        let adapter = SimStorageAdapter::new(self.sim.storage());
-        let block = BlockContext::new(self.sim.time().block_height(), 0);
-        let (resp, state) =
-            self.stf
-                .system_exec_as(&adapter, &self.codes, block, impersonate, action)?;
-        let changes = state.into_changes()?;
-        self.sim.apply_state_changes(changes)?;
-        Ok(resp)
+        let block = current_block_context(&self.sim);
+        system_exec_as_and_commit(
+            &mut self.sim,
+            &self.stf,
+            &self.codes,
+            block,
+            impersonate,
+            action,
+        )
     }
 
     /// Queries an account and decodes the response.
@@ -798,19 +542,13 @@ impl SimTestApp {
         target: AccountId,
         request: &Req,
     ) -> SdkResult<Resp> {
-        let adapter = SimStorageAdapter::new(self.sim.storage());
         let gc = GasCounter::infinite();
-        let response = self.stf.query(&adapter, &self.codes, target, request, gc)?;
+        let response = query_stf(&self.sim, &self.stf, &self.codes, target, request, gc)?;
         response.get::<Resp>()
     }
 
     pub fn apply_block(&mut self, block: &Block<TxContext>) -> BlockResult {
-        let adapter = SimStorageAdapter::new(self.sim.storage());
-        let (result, state) = self.stf.apply_block(&adapter, &self.codes, block);
-        self.sim
-            .apply_state_changes(state.into_changes().expect("state changes"))
-            .expect("apply state changes");
-        result
+        apply_block_and_commit(&mut self.sim, &self.stf, &self.codes, block)
     }
 
     pub fn apply_block_with_trace(
@@ -826,18 +564,22 @@ impl SimTestApp {
             builder.tx_start(tx.compute_identifier(), tx.sender(), tx.recipient());
         }
 
-        let adapter = SimStorageAdapter::new(self.sim.storage());
-        let (result, state) = self.stf.apply_block(&adapter, &self.codes, block);
+        let storage = self.sim.readonly_kv();
+        let (result, state) = self.stf.apply_block(&storage, &self.codes, block);
         let changes = state.into_changes().expect("state changes");
 
         for change in &changes {
             match change {
                 evolve_stf_traits::StateChange::Set { key, value } => {
-                    let old_value = self.sim.storage().get(key).expect("storage read");
+                    let old_value = self
+                        .get_storage_value(key.as_slice())
+                        .expect("storage read");
                     builder.state_change(key.clone(), old_value, Some(value.clone()));
                 }
                 evolve_stf_traits::StateChange::Remove { key } => {
-                    let old_value = self.sim.storage().get(key).expect("storage read");
+                    let old_value = self
+                        .get_storage_value(key.as_slice())
+                        .expect("storage read");
                     builder.state_change(key.clone(), old_value, None);
                 }
             }
@@ -855,7 +597,8 @@ impl SimTestApp {
             );
         }
 
-        builder.block_end(height, self.sim.storage().state_hash());
+        let state_hash = self.sim.app_hash().unwrap_or([0u8; 32]);
+        builder.block_end(height, state_hash);
         result
     }
 
@@ -867,25 +610,26 @@ impl SimTestApp {
     where
         F: FnMut(u64, &mut SimTestApp) -> Vec<Vec<u8>>,
     {
-        let mut results = Vec::with_capacity(num_blocks as usize);
         let max_txs = self.sim.config().max_txs_per_block;
-
-        for _ in 0..num_blocks {
-            let height = self.sim.time().block_height();
-            let mut txs = make_txs(height, self);
-            if txs.len() > max_txs {
-                txs.truncate(max_txs);
-            }
-
-            for raw_tx in &txs {
-                self.submit_raw_tx(raw_tx).expect("submit tx");
-            }
-
-            let result = self.produce_block_from_mempool(max_txs);
-            results.push(result);
-        }
-
-        results
+        run_block_iterations(
+            self,
+            num_blocks,
+            |app| app.sim.time().block_height(),
+            |height, app| {
+                let mut txs = make_txs(height, app);
+                if txs.len() > max_txs {
+                    txs.truncate(max_txs);
+                }
+                for raw_tx in &txs {
+                    app.submit_raw_tx(raw_tx).expect("submit tx");
+                }
+                let (tx_hashes, transactions) = app.take_mempool_batch(max_txs);
+                let result = app.produce_block_internal(height, transactions, false);
+                app.remove_many_from_mempool(&tx_hashes);
+                result
+            },
+            |app| app.sim.advance_block(),
+        )
     }
 
     pub fn run_blocks_with_registry(
@@ -893,22 +637,23 @@ impl SimTestApp {
         num_blocks: u64,
         registry: &mut TxGeneratorRegistry,
     ) -> Vec<BlockResult> {
-        let mut results = Vec::with_capacity(num_blocks as usize);
         let max_txs = self.sim.config().max_txs_per_block;
-
-        for _ in 0..num_blocks {
-            let height = self.sim.time().block_height();
-            let txs = registry.generate_block(height, self, max_txs);
-
-            for raw_tx in &txs {
-                self.submit_raw_tx(raw_tx).expect("submit tx");
-            }
-
-            let result = self.produce_block_from_mempool(max_txs);
-            results.push(result);
-        }
-
-        results
+        run_block_iterations(
+            self,
+            num_blocks,
+            |app| app.sim.time().block_height(),
+            |height, app| {
+                let txs = registry.generate_block(height, app, max_txs);
+                for raw_tx in &txs {
+                    app.submit_raw_tx(raw_tx).expect("submit tx");
+                }
+                let (tx_hashes, transactions) = app.take_mempool_batch(max_txs);
+                let result = app.produce_block_internal(height, transactions, false);
+                app.remove_many_from_mempool(&tx_hashes);
+                result
+            },
+            |app| app.sim.advance_block(),
+        )
     }
 
     pub fn run_blocks_with_trace<F>(
@@ -919,46 +664,31 @@ impl SimTestApp {
     where
         F: FnMut(u64, &mut SimTestApp) -> Vec<Vec<u8>>,
     {
-        let snapshot = StateSnapshot::from_data(
-            self.sim.storage().snapshot().data,
-            self.sim.time().block_height(),
-            self.sim.time().now_ms(),
-        );
+        let snapshot = StateSnapshot::empty();
         let mut builder = TraceBuilder::new(self.sim.seed_info().seed, snapshot);
-        let mut results = Vec::with_capacity(num_blocks as usize);
         let max_txs = self.sim.config().max_txs_per_block;
+        let results = run_block_iterations(
+            self,
+            num_blocks,
+            |app| app.sim.time().block_height(),
+            |height, app| {
+                let mut txs = make_txs(height, app);
+                if txs.len() > max_txs {
+                    txs.truncate(max_txs);
+                }
+                for raw_tx in &txs {
+                    app.submit_raw_tx(raw_tx).expect("submit tx");
+                }
 
-        for _ in 0..num_blocks {
-            let height = self.sim.time().block_height();
-            let mut txs = make_txs(height, self);
-            if txs.len() > max_txs {
-                txs.truncate(max_txs);
-            }
+                let (tx_hashes, transactions) = app.take_mempool_batch(max_txs);
+                let block = Block::for_testing(height, transactions);
+                let result = app.apply_block_with_trace(&block, &mut builder);
 
-            for raw_tx in &txs {
-                self.submit_raw_tx(raw_tx).expect("submit tx");
-            }
-
-            let selected = {
-                let mut pool = self.mempool.blocking_write();
-                pool.select(max_txs)
-            };
-
-            let tx_hashes: Vec<[u8; 32]> = selected.iter().map(|tx| tx.tx_id()).collect();
-            let transactions: Vec<TxContext> =
-                selected.into_iter().map(|tx| (*tx).clone()).collect();
-
-            let block = Block::for_testing(height, transactions);
-            let result = self.apply_block_with_trace(&block, &mut builder);
-            results.push(result);
-
-            if !tx_hashes.is_empty() {
-                let mut pool = self.mempool.blocking_write();
-                pool.remove_many(&tx_hashes);
-            }
-
-            self.sim.advance_block();
-        }
+                app.remove_many_from_mempool(&tx_hashes);
+                result
+            },
+            |app| app.sim.advance_block(),
+        );
 
         (results, builder.finish())
     }
@@ -983,7 +713,8 @@ impl SimTestApp {
 
     /// Create an EOA with a randomly generated Ethereum address.
     pub fn create_eoa(&mut self) -> AccountId {
-        let signing_key = Self::generate_signing_key(&mut self.sim);
+        let signing_key = generate_signing_key(&mut self.sim, MAX_SIGNING_KEY_ATTEMPTS)
+            .expect("failed to generate signing key");
         let address = get_address(&signing_key);
         let account_id = self.create_eoa_with_address(address.into());
         self.signers.insert(account_id, signing_key);
@@ -994,14 +725,16 @@ impl SimTestApp {
     /// Create an EOA with a specific Ethereum address.
     pub fn create_eoa_with_address(&mut self, eth_address: [u8; 20]) -> AccountId {
         let account_id = address_to_account_id(alloy_primitives::Address::from(eth_address));
-        Self::register_account_code_identifier(&mut self.sim, account_id, "EthEoaAccount");
-        Self::init_eth_eoa_storage(&mut self.sim, account_id, eth_address);
+        register_account_code_identifier(&mut self.sim, account_id, "EthEoaAccount")
+            .expect("register eoa code");
+        init_eth_eoa_storage(&mut self.sim, account_id, eth_address).expect("init eoa storage");
         account_id
     }
 
     /// Create a signer without creating an EOA account in state.
     pub fn create_signer_without_account(&mut self) -> AccountId {
-        let signing_key = Self::generate_signing_key(&mut self.sim);
+        let signing_key = generate_signing_key(&mut self.sim, MAX_SIGNING_KEY_ATTEMPTS)
+            .expect("failed to generate signing key");
         let address = get_address(&signing_key);
         let account_id = address_to_account_id(address);
         self.signers.insert(account_id, signing_key);
@@ -1011,21 +744,15 @@ impl SimTestApp {
 
     /// Create a signer and register a non-EOA account code for it.
     pub fn create_signer_with_code(&mut self, code_id: &str) -> AccountId {
-        let signing_key = Self::generate_signing_key(&mut self.sim);
+        let signing_key = generate_signing_key(&mut self.sim, MAX_SIGNING_KEY_ATTEMPTS)
+            .expect("failed to generate signing key");
         let address = get_address(&signing_key);
         let account_id = address_to_account_id(address);
-        Self::register_account_code_identifier(&mut self.sim, account_id, code_id);
+        register_account_code_identifier(&mut self.sim, account_id, code_id)
+            .expect("register account code");
         self.signers.insert(account_id, signing_key);
         self.nonces.entry(account_id).or_insert(0);
         account_id
-    }
-
-    pub fn simulator(&self) -> &Simulator {
-        &self.sim
-    }
-
-    pub fn simulator_mut(&mut self) -> &mut Simulator {
-        &mut self.sim
     }
 
     pub fn accounts(&self) -> GenesisAccounts {

@@ -28,6 +28,11 @@ define_error!(ERR_INCOMPATIBLE_FA, 0x07, "incompatible fungible asset");
 define_error!(ERR_INSUFFICIENT_BALANCE, 0x08, "insufficient balance");
 define_error!(ERR_OVERFLOW, 0x09, "amount overflow");
 
+/// Maximum storage key payload size (in bytes).
+///
+/// Keys are encoded with a 2-byte length prefix into a fixed 256-byte storage key.
+pub const MAX_STORAGE_KEY_SIZE: usize = 254;
+
 #[cfg(feature = "error-decode")]
 pub type SdkResult<T> = Result<T, crate::error::DecodedError>;
 #[cfg(not(feature = "error-decode"))]

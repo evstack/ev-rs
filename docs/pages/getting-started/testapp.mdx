@@ -86,6 +86,26 @@ The testapp demonstrates:
 | Transaction validation | ECDSA signature verification |
 | WebSocket subscriptions | `newHeads` and log filtering |
 
+## Run the Simulator Harness
+
+`SimTestApp` is the deterministic harness used by `bin/testapp/tests/simulation_tests.rs` and supports multiple storage backends through `evolve_simulator`.
+
+```bash
+# Default deterministic simulation tests
+cargo test -p evolve_testapp --test simulation_tests
+
+# Run with mock storage backend
+EVOLVE_SIM_STORAGE_MODE=mock cargo test -p evolve_testapp --test simulation_tests
+
+# Run with qmdb backend
+EVOLVE_SIM_STORAGE_MODE=qmdb EVOLVE_SIM_QMDB_PATH=/tmp/evolve-sim-qmdb \
+  cargo test -p evolve_testapp --test simulation_tests
+```
+
+Supported values for `EVOLVE_SIM_STORAGE_MODE`:
+- `mock` (default)
+- `qmdb`
+
 ## Next Steps
 
 - [Core Concepts](/concepts/accounts) - Understand the account model

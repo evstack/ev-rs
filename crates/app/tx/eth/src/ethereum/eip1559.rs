@@ -1,12 +1,13 @@
 //! EIP-1559 fee market transaction type.
 
 use alloy_consensus::{Signed, TxEip1559};
-use alloy_primitives::{keccak256, Address, B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use evolve_core::{InvokeRequest, SdkResult};
+use sha3::{Digest, Keccak256};
 
 use crate::envelope::tx_type;
-use crate::error::ERR_SIGNATURE_RECOVERY;
 use crate::ethereum::invoke_request_from_input;
+use crate::ethereum::recovery::recover_sender_from_signature_hash;
 use crate::traits::TypedTransaction;
 
 /// A signed EIP-1559 transaction with cached sender.
@@ -31,17 +32,16 @@ impl SignedEip1559Tx {
     /// The hash is computed from the provided raw RLP bytes (without type prefix).
     /// The type prefix is added internally for correct hash computation.
     pub fn from_alloy_with_bytes(signed: Signed<TxEip1559>, rlp_bytes: &[u8]) -> SdkResult<Self> {
-        // Recover sender from signature
-        let sender = signed
-            .recover_signer()
-            .map_err(|_| ERR_SIGNATURE_RECOVERY)?;
+        let sender =
+            recover_sender_from_signature_hash(signed.signature_hash(), signed.signature())?;
 
         // Compute transaction hash: keccak256(type_prefix || rlp_bytes)
-        // EIP-2718 typed transaction hash includes the type byte
-        let mut hash_input = Vec::with_capacity(1 + rlp_bytes.len());
-        hash_input.push(tx_type::EIP1559);
-        hash_input.extend_from_slice(rlp_bytes);
-        let hash = keccak256(&hash_input);
+        // EIP-2718 typed transaction hash includes the type byte.
+        // Stream into hasher to avoid per-tx allocation for concatenation.
+        let mut hasher = Keccak256::new();
+        hasher.update([tx_type::EIP1559]);
+        hasher.update(rlp_bytes);
+        let hash = B256::from_slice(&hasher.finalize());
 
         Ok(Self {
             inner: signed,
@@ -55,10 +55,8 @@ impl SignedEip1559Tx {
     /// Uses alloy's internal hash computation (re-encodes the transaction).
     /// Prefer `from_alloy_with_bytes` when you have the original bytes.
     pub fn from_alloy(signed: Signed<TxEip1559>) -> SdkResult<Self> {
-        // Recover sender from signature
-        let sender = signed
-            .recover_signer()
-            .map_err(|_| ERR_SIGNATURE_RECOVERY)?;
+        let sender =
+            recover_sender_from_signature_hash(signed.signature_hash(), signed.signature())?;
 
         // Use alloy's hash (computes from re-encoded tx)
         let hash = *signed.hash();

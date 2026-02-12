@@ -43,7 +43,9 @@ use evolve_eth_jsonrpc::SharedSubscriptionManager;
 use evolve_mempool::{Mempool, MempoolTx, SharedMempool};
 use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::results::BlockResult;
-use evolve_stf_traits::{AccountsCodeStorage, PostTxExecution, Transaction, TxValidator};
+use evolve_stf_traits::{
+    AccountsCodeStorage, PostTxExecution, StateChange, Transaction, TxValidator,
+};
 use evolve_storage::{Operation, Storage};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -168,6 +170,8 @@ pub struct DevConsensus<Stf, S, Codes, Tx: MempoolTx, I = NoopChainIndex> {
     chain_index: Option<Arc<I>>,
     /// Optional subscription manager for publishing events.
     subscriptions: Option<SharedSubscriptionManager>,
+    /// Whether block indexing is enabled on block production.
+    index_blocks: bool,
     /// Phantom for Tx type.
     _tx: std::marker::PhantomData<Tx>,
 }
@@ -192,6 +196,7 @@ impl<Stf, S, Codes, Tx: MempoolTx> DevConsensus<Stf, S, Codes, Tx, NoopChainInde
             mempool: None,
             chain_index: None,
             subscriptions: None,
+            index_blocks: false,
             _tx: std::marker::PhantomData,
         }
     }
@@ -226,6 +231,7 @@ impl<Stf, S, Codes, Tx: MempoolTx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             mempool: None,
             chain_index: Some(chain_index),
             subscriptions: Some(subscriptions),
+            index_blocks: true,
             _tx: std::marker::PhantomData,
         }
     }
@@ -250,6 +256,7 @@ impl<Stf, S, Codes, Tx: MempoolTx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             mempool: Some(mempool),
             chain_index: Some(chain_index),
             subscriptions: Some(subscriptions),
+            index_blocks: true,
             _tx: std::marker::PhantomData,
         }
     }
@@ -283,6 +290,7 @@ impl<Stf, S, Codes, Tx: MempoolTx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             mempool: Some(mempool),
             chain_index: None,
             subscriptions: None,
+            index_blocks: false,
             _tx: std::marker::PhantomData,
         }
     }
@@ -326,6 +334,12 @@ impl<Stf, S, Codes, Tx: MempoolTx, I> DevConsensus<Stf, S, Codes, Tx, I> {
     pub fn subscriptions(&self) -> Option<&SharedSubscriptionManager> {
         self.subscriptions.as_ref()
     }
+
+    /// Enable or disable block indexing on block production.
+    pub fn with_indexing_enabled(mut self, enabled: bool) -> Self {
+        self.index_blocks = enabled;
+        self
+    }
 }
 
 impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I>
@@ -334,7 +348,7 @@ where
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
-    I: ChainIndex + 'static,
+    I: ChainIndex + Send + Sync + 'static,
 {
     /// Produce a single empty block.
     ///
@@ -383,7 +397,7 @@ where
         let failed_txs = tx_count - successful_txs;
 
         // Convert StateChange to Operation and commit via async storage
-        let operations: Vec<Operation> = changes.into_iter().map(Into::into).collect();
+        let operations = state_changes_to_operations(changes);
         self.storage
             .batch(operations)
             .await
@@ -399,31 +413,52 @@ where
         *self.state.last_hash.write().await = block_hash;
         self.state.last_timestamp.store(timestamp, Ordering::SeqCst);
 
-        // Index the block for RPC queries if chain index is configured
-        if let Some(ref index) = self.chain_index {
-            let metadata = BlockMetadata::new(
-                block_hash,
-                parent_hash,
-                state_root,
-                timestamp,
-                self.config.gas_limit,
-                Address::ZERO, // No miner in dev mode
-                self.config.chain_id,
-            );
+        // Index the block for RPC queries if chain index is configured.
+        // This runs off the block-production hot path so indexing I/O does not delay
+        // execution of subsequent blocks.
+        if self.index_blocks {
+            if let Some(index) = self.chain_index.as_ref().cloned() {
+                let metadata = BlockMetadata::new(
+                    block_hash,
+                    parent_hash,
+                    state_root,
+                    timestamp,
+                    self.config.gas_limit,
+                    Address::ZERO, // No miner in dev mode
+                    self.config.chain_id,
+                );
 
-            let (stored_block, stored_txs, stored_receipts) =
-                build_index_data(&block, &result, &metadata);
+                let (stored_block, stored_txs, stored_receipts) =
+                    build_index_data(&block, &result, &metadata);
+                let block_for_publish = stored_block.clone();
+                let subscriptions = self.subscriptions.clone();
 
-            if let Err(e) = index.store_block(stored_block.clone(), stored_txs, stored_receipts) {
-                tracing::warn!("Failed to index block {}: {:?}", height, e);
-            } else {
-                tracing::debug!("Indexed block {}", height);
+                tokio::spawn(async move {
+                    match tokio::task::spawn_blocking(move || {
+                        index.store_block(stored_block, stored_txs, stored_receipts)
+                    })
+                    .await
+                    {
+                        Ok(Ok(())) => {
+                            tracing::debug!("Indexed block {}", height);
 
-                // Publish new block to subscribers
-                if let Some(ref subs) = self.subscriptions {
-                    let rpc_block = stored_block.to_rpc_block(None);
-                    subs.publish_new_head(rpc_block);
-                }
+                            if let Some(subs) = subscriptions {
+                                let rpc_block = block_for_publish.to_rpc_block(None);
+                                subs.publish_new_head(rpc_block);
+                            }
+                        }
+                        Ok(Err(e)) => {
+                            tracing::warn!("Failed to index block {}: {:?}", height, e);
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Index task failed for block {} (join error): {:?}",
+                                height,
+                                e
+                            );
+                        }
+                    }
+                });
             }
         }
 
@@ -511,7 +546,7 @@ where
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
-    I: ChainIndex + 'static,
+    I: ChainIndex + Send + Sync + 'static,
 {
     /// Produce a block with transactions from the mempool.
     ///
@@ -757,6 +792,16 @@ fn compute_block_hash(height: u64, timestamp: u64, parent_hash: B256) -> B256 {
     data.extend_from_slice(parent_hash.as_slice());
 
     keccak256(&data)
+}
+
+fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
+    changes
+        .into_iter()
+        .map(|change| match change {
+            StateChange::Set { key, value } => Operation::Set { key, value },
+            StateChange::Remove { key } => Operation::Remove { key },
+        })
+        .collect()
 }
 
 #[cfg(test)]

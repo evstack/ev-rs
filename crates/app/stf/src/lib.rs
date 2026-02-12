@@ -107,6 +107,8 @@ mod model_tests {
     const DEFAULT_CASES: u32 = 32;
     const CI_CASES: u32 = 8;
     const MAX_TXS: usize = 16;
+    const TEST_ACCOUNT_ID: AccountId = AccountId::new(100);
+    const DEFAULT_SENDER_ID: AccountId = AccountId::new(200);
 
     fn proptest_cases() -> u32 {
         if let Ok(value) = std::env::var("EVOLVE_PROPTEST_CASES") {
@@ -234,6 +236,9 @@ mod model_tests {
         }
     }
 
+    type TestStf<PostTx = NoopPostTx> =
+        Stf<TestTx, TestBlock, NoopBegin, Validator, NoopEnd, PostTx>;
+
     #[derive(Default)]
     struct TestAccount;
 
@@ -352,6 +357,79 @@ mod model_tests {
         let mut out = vec![ACCOUNT_IDENTIFIER_PREFIX];
         out.extend_from_slice(&account.as_bytes());
         out
+    }
+
+    fn default_gas_config() -> StorageGasConfig {
+        StorageGasConfig {
+            storage_get_charge: 1,
+            storage_set_charge: 1,
+            storage_remove_charge: 1,
+        }
+    }
+
+    fn setup_env_with_post_tx<P: PostTxExecution<TestTx>>(
+        gas_config: StorageGasConfig,
+        post_tx: P,
+    ) -> (InMemoryStorage, CodeStore, TestStf<P>) {
+        let mut storage = InMemoryStorage::default();
+        let code_id = "test_account".to_string();
+        storage.data.insert(
+            account_code_key(TEST_ACCOUNT_ID),
+            Message::new(&code_id).unwrap().into_bytes().unwrap(),
+        );
+
+        let mut codes = CodeStore::new();
+        codes.add_code(TestAccount);
+
+        let stf = Stf::new(NoopBegin, NoopEnd, Validator, post_tx, gas_config);
+
+        (storage, codes, stf)
+    }
+
+    fn setup_default_env() -> (InMemoryStorage, CodeStore, TestStf) {
+        setup_env_with_post_tx(default_gas_config(), NoopPostTx)
+    }
+
+    fn make_tx(
+        sender: AccountId,
+        recipient: AccountId,
+        key: Vec<u8>,
+        value: Vec<u8>,
+        gas_limit: u64,
+        fail_validate: bool,
+        fail_after_write: bool,
+    ) -> TestTx {
+        let msg = TestMsg {
+            key,
+            value,
+            fail_after_write,
+        };
+        TestTx {
+            sender,
+            recipient,
+            request: InvokeRequest::new(&msg).unwrap(),
+            gas_limit,
+            funds: vec![],
+            fail_validate,
+        }
+    }
+
+    fn execute_and_commit<P: PostTxExecution<TestTx>>(
+        stf: &TestStf<P>,
+        storage: &mut InMemoryStorage,
+        codes: &CodeStore,
+        txs: Vec<TestTx>,
+    ) -> BlockResult {
+        let block = TestBlock {
+            height: 1,
+            time: 0,
+            txs,
+        };
+        let (result, state) = stf.apply_block(storage, codes, &block);
+        storage
+            .apply_changes(state.into_changes().unwrap())
+            .unwrap();
+        result
     }
 
     proptest! {
@@ -675,24 +753,7 @@ mod model_tests {
     /// Test that post-tx handler can reject transactions
     #[test]
     fn test_post_tx_handler_rejection() {
-        let test_account = AccountId::new(100);
-
-        let mut storage = InMemoryStorage::default();
-        let gas_config = StorageGasConfig {
-            storage_get_charge: 10, // Higher charge to make gas difference more visible
-            storage_set_charge: 10,
-            storage_remove_charge: 10,
-        };
-        let code_id = "test_account".to_string();
-        storage.data.insert(
-            account_code_key(test_account),
-            Message::new(&code_id).unwrap().into_bytes().unwrap(),
-        );
-
-        let mut codes = CodeStore::new();
-        codes.add_code(TestAccount);
-
-        // Post-tx handler that rejects based on a marker in the tx
+        // Post-tx handler that rejects based on sender marker.
         struct RejectMarkedPostTx;
         const ERR_REJECTED_BY_POST_TX: ErrorCode = ErrorCode::new(999);
 
@@ -712,12 +773,13 @@ mod model_tests {
             }
         }
 
-        let stf = Stf::new(
-            NoopBegin,
-            NoopEnd,
-            Validator,
+        let (mut storage, codes, stf) = setup_env_with_post_tx(
+            StorageGasConfig {
+                storage_get_charge: 10,
+                storage_set_charge: 10,
+                storage_remove_charge: 10,
+            },
             RejectMarkedPostTx,
-            gas_config,
         );
 
         let msg = TestMsg {
@@ -729,7 +791,7 @@ mod model_tests {
         // Tx from sender 200 should succeed
         let tx_normal = TestTx {
             sender: AccountId::new(200),
-            recipient: test_account,
+            recipient: TEST_ACCOUNT_ID,
             request: InvokeRequest::new(&msg).unwrap(),
             gas_limit: 10000,
             funds: vec![],
@@ -739,19 +801,14 @@ mod model_tests {
         // Tx from sender 201 should be rejected by post-tx handler
         let tx_marked = TestTx {
             sender: AccountId::new(201),
-            recipient: test_account,
+            recipient: TEST_ACCOUNT_ID,
             request: InvokeRequest::new(&msg).unwrap(),
             gas_limit: 10000,
             funds: vec![],
             fail_validate: false,
         };
 
-        let block = TestBlock {
-            height: 1,
-            time: 0,
-            txs: vec![tx_normal, tx_marked],
-        };
-        let (result, _state) = stf.apply_block(&storage, &codes, &block);
+        let result = execute_and_commit(&stf, &mut storage, &codes, vec![tx_normal, tx_marked]);
 
         assert_eq!(result.tx_results.len(), 2);
 
@@ -773,83 +830,80 @@ mod model_tests {
         );
     }
 
-    /// Test that state changes are collected correctly (verifies into_changes works)
+    /// Test transaction-level rollback behavior against committed storage.
+    /// Only successful txs should produce persistent state changes.
     #[test]
-    fn test_state_changes_collection() {
-        let test_account = AccountId::new(100);
-        let sender = AccountId::new(200);
+    fn test_only_successful_transactions_commit_state() {
+        let (mut storage, codes, stf) = setup_default_env();
 
-        let mut storage = InMemoryStorage::default();
-        let gas_config = StorageGasConfig {
-            storage_get_charge: 1,
-            storage_set_charge: 1,
-            storage_remove_charge: 1,
-        };
-        let code_id = "test_account".to_string();
-        storage.data.insert(
-            account_code_key(test_account),
-            Message::new(&code_id).unwrap().into_bytes().unwrap(),
+        let txs = vec![
+            make_tx(
+                DEFAULT_SENDER_ID,
+                TEST_ACCOUNT_ID,
+                vec![0],
+                vec![100],
+                10_000,
+                false,
+                false,
+            ),
+            make_tx(
+                DEFAULT_SENDER_ID,
+                TEST_ACCOUNT_ID,
+                vec![1],
+                vec![101],
+                10_000,
+                true,
+                false,
+            ),
+            make_tx(
+                DEFAULT_SENDER_ID,
+                TEST_ACCOUNT_ID,
+                vec![2],
+                vec![102],
+                10_000,
+                false,
+                true,
+            ),
+            make_tx(
+                DEFAULT_SENDER_ID,
+                TEST_ACCOUNT_ID,
+                vec![3],
+                vec![103],
+                1,
+                false,
+                false,
+            ),
+        ];
+
+        let result = execute_and_commit(&stf, &mut storage, &codes, txs);
+        assert_eq!(result.tx_results.len(), 4);
+        assert!(
+            result.tx_results[0].response.is_ok(),
+            "first tx should succeed"
+        );
+        assert!(
+            result.tx_results[1].response.is_err(),
+            "validation failure should fail tx"
+        );
+        assert!(
+            result.tx_results[2].response.is_err(),
+            "execution failure should fail tx"
+        );
+        assert_eq!(
+            result.tx_results[3].response.as_ref().unwrap_err(),
+            &crate::gas::ERR_OUT_OF_GAS,
+            "out-of-gas tx should fail with ERR_OUT_OF_GAS"
         );
 
-        let mut codes = CodeStore::new();
-        codes.add_code(TestAccount);
+        let key_ok = account_storage_key(TEST_ACCOUNT_ID, &[0]);
+        let key_validate_fail = account_storage_key(TEST_ACCOUNT_ID, &[1]);
+        let key_exec_fail = account_storage_key(TEST_ACCOUNT_ID, &[2]);
+        let key_out_of_gas = account_storage_key(TEST_ACCOUNT_ID, &[3]);
 
-        let stf = Stf::new(NoopBegin, NoopEnd, Validator, NoopPostTx, gas_config);
-
-        // Create 3 transactions writing to different keys
-        let txs: Vec<TestTx> = (0..3)
-            .map(|i| {
-                let msg = TestMsg {
-                    key: vec![i as u8],
-                    value: vec![i as u8 + 100],
-                    fail_after_write: false,
-                };
-                TestTx {
-                    sender,
-                    recipient: test_account,
-                    request: InvokeRequest::new(&msg).unwrap(),
-                    gas_limit: 10000,
-                    funds: vec![],
-                    fail_validate: false,
-                }
-            })
-            .collect();
-
-        let block = TestBlock {
-            height: 1,
-            time: 0,
-            txs,
-        };
-        let (result, state) = stf.apply_block(&storage, &codes, &block);
-
-        // All txs should succeed
-        for tx_result in &result.tx_results {
-            assert!(tx_result.response.is_ok());
-        }
-
-        // Collect and verify changes
-        let changes = state.into_changes().unwrap();
-
-        // Should have 3 state changes (one per tx)
-        let set_changes: Vec<_> = changes
-            .iter()
-            .filter_map(|c| match c {
-                evolve_stf_traits::StateChange::Set { key, value: _ } => Some(key.clone()),
-                _ => None,
-            })
-            .collect();
-
-        assert_eq!(set_changes.len(), 3, "Expected 3 state changes");
-
-        // Verify each expected key exists (order may vary due to HashMap)
-        for i in 0..3u8 {
-            let expected_key = account_storage_key(test_account, &[i]);
-            assert!(
-                set_changes.contains(&expected_key),
-                "Expected to find state change for key {}",
-                i
-            );
-        }
+        assert_eq!(storage.get(&key_ok).unwrap(), Some(vec![100]));
+        assert_eq!(storage.get(&key_validate_fail).unwrap(), None);
+        assert_eq!(storage.get(&key_exec_fail).unwrap(), None);
+        assert_eq!(storage.get(&key_out_of_gas).unwrap(), None);
     }
 }
 

@@ -30,6 +30,15 @@ pub trait Transaction {
     }
 }
 
+/// Provides the message payload used for account-level authentication.
+///
+/// By default, transactions authenticate using their full encoded form.
+/// Transaction implementations can override this to provide a lighter
+/// payload when full decode is unnecessary during authentication.
+pub trait AuthenticationPayload {
+    fn authentication_payload(&self) -> SdkResult<Message>;
+}
+
 pub trait TxDecoder<T> {
     fn decode(&self, bytes: &mut &[u8]) -> SdkResult<T>;
 }

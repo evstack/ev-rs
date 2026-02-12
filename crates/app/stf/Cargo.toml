@@ -11,7 +11,6 @@ borsh.workspace = true
 evolve_core.workspace = true
 evolve_fungible_asset.workspace = true
 evolve_stf_traits.workspace = true
-evolve_storage.workspace = true
 hashbrown = "0.15"
 ahash = { version = "0.8.11", optional = true }
 linkme = {version = "0.3", default-features = false, optional = true}

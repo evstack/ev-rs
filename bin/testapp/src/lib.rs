@@ -77,9 +77,20 @@ pub struct GenesisAccounts {
     pub scheduler: AccountId,
 }
 
+fn parse_genesis_address_env(var: &str) -> Option<[u8; 20]> {
+    use alloy_primitives::Address;
+    use std::str::FromStr;
+
+    let raw = std::env::var(var).ok()?;
+    let addr = Address::from_str(raw.trim()).ok()?;
+    Some(addr.into())
+}
+
 /// Genesis initialization logic - can be called from system_exec.
 pub fn do_genesis_inner(env: &mut dyn Environment) -> SdkResult<GenesisAccounts> {
-    do_genesis_with_addresses([0xAA; 20], [0xBB; 20], env)
+    let alice_eth = parse_genesis_address_env("GENESIS_ALICE_ETH_ADDRESS").unwrap_or([0xAA; 20]);
+    let bob_eth = parse_genesis_address_env("GENESIS_BOB_ETH_ADDRESS").unwrap_or([0xBB; 20]);
+    do_genesis_with_addresses(alice_eth, bob_eth, env)
 }
 
 /// Genesis with custom Ethereum addresses for Alice and Bob.
@@ -163,11 +174,20 @@ pub fn do_eth_genesis_inner(
     env: &mut dyn Environment,
 ) -> SdkResult<EthGenesisAccounts> {
     use alloy_primitives::Address;
+    use std::str::FromStr;
 
     // Convert Ethereum addresses to AccountIds
     // (accounts should already be registered in storage)
     let alice_id = address_to_account_id(Address::from(alice_eth_address));
     let bob_id = address_to_account_id(Address::from(bob_eth_address));
+    let alice_balance = std::env::var("GENESIS_ALICE_TOKEN_BALANCE")
+        .ok()
+        .and_then(|v| u128::from_str(v.trim()).ok())
+        .unwrap_or(1000);
+    let bob_balance = std::env::var("GENESIS_BOB_TOKEN_BALANCE")
+        .ok()
+        .and_then(|v| u128::from_str(v.trim()).ok())
+        .unwrap_or(2000);
 
     // Create evolve token
     let evolve = TokenRef::initialize(
@@ -178,7 +198,7 @@ pub fn do_eth_genesis_inner(
             icon_url: "https://lol.wtf".to_string(),
             description: "The evolve coin".to_string(),
         },
-        vec![(alice_id, 1000), (bob_id, 2000)],
+        vec![(alice_id, alice_balance), (bob_id, bob_balance)],
         Some(MINTER),
         env,
     )?

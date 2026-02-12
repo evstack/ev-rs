@@ -32,18 +32,27 @@
 // Testing code - determinism requirements do not apply.
 #![allow(clippy::disallowed_types)]
 
+pub mod backend;
+pub mod eth_eoa;
 pub mod metrics;
 pub mod seed;
+pub mod stf_harness;
 pub mod storage;
 pub mod time;
 
+pub use backend::{StorageBackendConfig, StorageBackendView};
+pub use eth_eoa::{generate_signing_key, init_eth_eoa_storage, register_account_code_identifier};
 pub use metrics::{BlockMetrics, MetricsConfig, PerformanceReport, SimMetrics, TxMetrics};
 pub use seed::{SeedInfo, SeededRng};
-pub use storage::{SimulatedStorage, StorageConfig, StorageSnapshot, StorageStats};
+pub use stf_harness::{
+    apply_block_and_commit, current_block_context, query_stf, run_block_iterations,
+    system_exec_and_commit, system_exec_as_and_commit, system_exec_genesis_and_commit,
+};
+pub use storage::StorageConfig;
 pub use time::{SimulatedTime, TimeConfig, TimeSnapshot};
 
-use evolve_core::{define_error, ErrorCode, ReadonlyKV};
-use evolve_stf_traits::{StateChange, WritableKV};
+use evolve_core::{define_error, ErrorCode};
+use evolve_stf_traits::StateChange;
 use metrics::BlockMetricsBuilder;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -55,6 +64,8 @@ define_error!(ERR_SIMULATION_ABORTED, 0x10, "simulation aborted");
 pub struct SimConfig {
     /// Storage configuration (fault injection).
     pub storage: StorageConfig,
+    /// Storage backend selection.
+    pub storage_backend: StorageBackendConfig,
     /// Time configuration.
     pub time: TimeConfig,
     /// Metrics configuration.
@@ -71,6 +82,7 @@ impl Default for SimConfig {
     fn default() -> Self {
         Self {
             storage: StorageConfig::default(),
+            storage_backend: StorageBackendConfig::default(),
             time: TimeConfig::default(),
             metrics: MetricsConfig::default(),
             max_blocks: 0,
@@ -97,6 +109,11 @@ impl SimConfig {
             ..Default::default()
         }
     }
+
+    pub fn with_storage_backend_from_env(mut self) -> Self {
+        self.storage_backend = StorageBackendConfig::from_env();
+        self
+    }
 }
 
 /// The main deterministic simulator.
@@ -109,12 +126,14 @@ pub struct Simulator {
     rng: SeededRng,
     /// Simulated time.
     time: SimulatedTime,
-    /// Simulated storage.
-    storage: SimulatedStorage,
+    /// Configurable storage backend.
+    storage: backend::StorageBackend,
     /// Configuration.
     config: SimConfig,
     /// Collected metrics.
     metrics: SimMetrics,
+    /// Last committed app hash returned by the active storage backend.
+    last_app_hash: Option<[u8; 32]>,
     /// Whether simulation is running.
     running: bool,
     /// Abort reason if stopped.
@@ -126,7 +145,7 @@ impl Simulator {
     pub fn new(seed: u64, config: SimConfig) -> Self {
         let mut rng = SeededRng::new(seed);
         let storage_seed = rng.gen();
-        let storage = SimulatedStorage::new(storage_seed, config.storage.clone());
+        let storage = backend::StorageBackend::new(storage_seed, config.storage_backend.clone());
         let time = SimulatedTime::new(config.time.clone());
         let metrics = SimMetrics::with_config(config.metrics.clone());
 
@@ -137,6 +156,7 @@ impl Simulator {
             storage,
             config,
             metrics,
+            last_app_hash: None,
             running: false,
             abort_reason: None,
         }
@@ -148,7 +168,7 @@ impl Simulator {
     pub fn with_random_seed(config: SimConfig) -> (Self, u64) {
         let (rng, seed) = SeededRng::from_entropy();
         let storage_seed = rng.seed().wrapping_add(1);
-        let storage = SimulatedStorage::new(storage_seed, config.storage.clone());
+        let storage = backend::StorageBackend::new(storage_seed, config.storage_backend.clone());
         let time = SimulatedTime::new(config.time.clone());
         let metrics = SimMetrics::with_config(config.metrics.clone());
 
@@ -159,6 +179,7 @@ impl Simulator {
             storage,
             config,
             metrics,
+            last_app_hash: None,
             running: false,
             abort_reason: None,
         };
@@ -191,14 +212,19 @@ impl Simulator {
         &mut self.time
     }
 
-    /// Returns a reference to the storage.
-    pub fn storage(&self) -> &SimulatedStorage {
-        &self.storage
+    /// Returns a ReadonlyKV view over the active storage backend.
+    pub fn readonly_kv(&self) -> StorageBackendView<'_> {
+        StorageBackendView::new(&self.storage)
     }
 
-    /// Returns a mutable reference to the storage.
-    pub fn storage_mut(&mut self) -> &mut SimulatedStorage {
-        &mut self.storage
+    /// Returns the latest committed app hash.
+    pub fn app_hash(&self) -> Option<[u8; 32]> {
+        self.last_app_hash
+    }
+
+    /// Returns the latest committed app hash.
+    pub fn storage_state_hash(&self) -> Option<[u8; 32]> {
+        self.app_hash()
     }
 
     /// Returns a reference to the metrics.
@@ -254,7 +280,9 @@ impl Simulator {
 
     /// Applies state changes to storage.
     pub fn apply_state_changes(&mut self, changes: Vec<StateChange>) -> Result<(), ErrorCode> {
-        self.storage.apply_changes(changes)
+        self.storage.apply_changes(changes)?;
+        self.last_app_hash = Some(self.storage.commit()?);
+        Ok(())
     }
 
     /// Generates a performance report.
@@ -267,18 +295,18 @@ impl Simulator {
         SimSnapshot {
             seed: self.seed,
             time: self.time.snapshot(),
-            storage: self.storage.snapshot(),
             metrics: self.metrics.snapshot(),
+            app_hash: self.last_app_hash,
         }
     }
 
     /// Restores from a snapshot.
     ///
-    /// Note: This only restores time and storage state. The RNG state
-    /// is not restored, so subsequent random values will differ.
+    /// Note: This restores simulated time only. The RNG state is not restored,
+    /// so subsequent random values will differ.
     pub fn restore(&mut self, snapshot: SimSnapshot) {
         self.time.restore(&snapshot.time);
-        self.storage.restore(snapshot.storage);
+        self.last_app_hash = snapshot.app_hash;
     }
 
     /// Aborts the simulation with a reason.
@@ -340,29 +368,10 @@ pub struct SimSnapshot {
     pub seed: u64,
     /// Time state.
     pub time: TimeSnapshot,
-    /// Storage state.
-    pub storage: StorageSnapshot,
     /// Metrics snapshot.
     pub metrics: metrics::SimMetricsSnapshot,
-}
-
-/// A wrapper around SimulatedStorage that implements ReadonlyKV.
-///
-/// This is useful for integrating with the STF which expects ReadonlyKV.
-pub struct SimStorageAdapter<'a> {
-    storage: &'a SimulatedStorage,
-}
-
-impl<'a> SimStorageAdapter<'a> {
-    pub fn new(storage: &'a SimulatedStorage) -> Self {
-        Self { storage }
-    }
-}
-
-impl ReadonlyKV for SimStorageAdapter<'_> {
-    fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
-        self.storage.get(key)
-    }
+    /// Last committed app hash.
+    pub app_hash: Option<[u8; 32]>,
 }
 
 /// Builder for constructing a Simulator with custom configuration.
@@ -460,6 +469,7 @@ impl SimulatorBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evolve_core::ReadonlyKV;
 
     #[test]
     fn test_simulator_determinism() {
@@ -500,12 +510,12 @@ mod tests {
 
         sim.apply_state_changes(changes).unwrap();
 
-        let value = sim.storage().get(b"key").unwrap();
+        let value = sim.readonly_kv().get(b"key").unwrap();
         assert_eq!(value, Some(b"value".to_vec()));
     }
 
     #[test]
-    fn test_simulator_snapshot_restore() {
+    fn test_simulator_snapshot_restore_time_only() {
         let mut sim = Simulator::new(42, SimConfig::default());
 
         sim.advance_block();
@@ -527,7 +537,6 @@ mod tests {
         sim.restore(snapshot);
 
         assert_eq!(sim.time().block_height(), 1);
-        assert!(sim.storage().get(b"k2").unwrap().is_none());
     }
 
     #[test]
@@ -541,7 +550,7 @@ mod tests {
         assert_eq!(sim.config().max_blocks, 100);
         assert!(sim.config().stop_on_error);
         assert_eq!(
-            sim.storage().get(b"initial_key").unwrap(),
+            sim.readonly_kv().get(b"initial_key").unwrap(),
             Some(b"initial_value".to_vec())
         );
         assert!(seed > 0);

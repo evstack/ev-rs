@@ -45,15 +45,6 @@ pub enum Operation {
     Remove { key: Vec<u8> },
 }
 
-impl From<evolve_stf_traits::StateChange> for Operation {
-    fn from(change: evolve_stf_traits::StateChange) -> Self {
-        match change {
-            evolve_stf_traits::StateChange::Set { key, value } => Operation::Set { key, value },
-            evolve_stf_traits::StateChange::Remove { key } => Operation::Remove { key },
-        }
-    }
-}
-
 /// Storage configuration
 #[derive(Debug, Clone)]
 pub struct StorageConfig {
@@ -95,7 +86,8 @@ pub const KEY_LENGTH_PREFIX_SIZE: usize = 2;
 pub const STORAGE_KEY_SIZE: usize = 256;
 /// Maximum sizes for keys and values
 /// Note: storage keys include a 2-byte length prefix, so payload keys are capped at 254 bytes.
-pub const MAX_KEY_SIZE: usize = STORAGE_KEY_SIZE - KEY_LENGTH_PREFIX_SIZE;
+pub const MAX_KEY_SIZE: usize = evolve_core::MAX_STORAGE_KEY_SIZE;
+const _: () = assert!(MAX_KEY_SIZE + KEY_LENGTH_PREFIX_SIZE == STORAGE_KEY_SIZE);
 pub const MAX_BATCH_SIZE: usize = 10_000; // 10k operations
 
 // For commonware integration, we use fixed-size types

@@ -13,6 +13,7 @@ linkme = { version = "0.3", default-features = false, optional = true }
 evolve_stf_traits = { workspace = true }
 evolve_stf = { workspace = true, features = ["testing"] }
 evolve_testing = { workspace = true }
+evolve_storage = { workspace = true }
 
 # PRNG
 rand = "0.8"
@@ -28,6 +29,10 @@ sha2.workspace = true
 
 # Time tracking
 instant = "0.1"
+futures = { workspace = true }
+commonware-runtime = { workspace = true }
+tokio = { workspace = true }
+k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
 
 [features]
 default = []

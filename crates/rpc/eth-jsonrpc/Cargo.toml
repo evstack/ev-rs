@@ -9,7 +9,6 @@ rust-version.workspace = true
 
 [dependencies]
 evolve_core.workspace = true
-evolve_stf.workspace = true
 evolve_rpc_types.workspace = true
 
 jsonrpsee = { version = "0.24", features = ["server", "macros"] }

@@ -1,0 +1,32 @@
+[package]
+name = "txload"
+version = "0.1.0"
+edition = "2021"
+repository.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Transaction-only RPC load testing tool for Evolve"
+
+[[bin]]
+name = "txload"
+path = "src/main.rs"
+
+[dependencies]
+evolve_core.workspace = true
+evolve_tx_eth.workspace = true
+alloy-primitives.workspace = true
+alloy-consensus = { workspace = true, features = ["k256"] }
+
+clap = { workspace = true, features = ["derive"] }
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+borsh.workspace = true
+serde_json = "1.0"
+k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+hex = "0.4"
+
+[lints]
+workspace = true
