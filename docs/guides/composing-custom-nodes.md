@@ -127,7 +127,6 @@ let state_provider = ChainStateProvider::with_mempool(
 let server_config = RpcServerConfig {
     http_addr: "127.0.0.1:8545".parse()?,
     chain_id: 1,
-    client_version: "my-node/0.1.0".to_string(),
 };
 
 let handle = start_server_with_subscriptions(

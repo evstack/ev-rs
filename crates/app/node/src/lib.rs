@@ -6,6 +6,9 @@
 //! - Chain indexing for block/transaction/receipt queries
 //! - Persistent storage across restarts
 
+pub mod cli;
+pub mod config;
+
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::path::Path;
@@ -29,6 +32,9 @@ use evolve_stf_traits::{AccountsCodeStorage, StateChange, Transaction};
 use evolve_storage::{MockStorage, Operation, Storage, StorageConfig};
 use evolve_tx_eth::TxContext;
 use std::future::Future;
+
+pub use cli::*;
+pub use config::*;
 
 /// Default data directory for persistent storage.
 pub const DEFAULT_DATA_DIR: &str = "./data";
@@ -102,8 +108,6 @@ pub struct RpcConfig {
     pub http_addr: SocketAddr,
     /// Chain ID for eth_chainId.
     pub chain_id: u64,
-    /// Client version string.
-    pub client_version: String,
     /// Whether RPC is enabled.
     pub enabled: bool,
     /// Whether block indexing is enabled while producing blocks.
@@ -115,7 +119,6 @@ impl Default for RpcConfig {
         Self {
             http_addr: DEFAULT_RPC_ADDR.parse().unwrap(),
             chain_id: 1,
-            client_version: "evolve-dev/0.1.0".to_string(),
             enabled: true,
             enable_block_indexing: true,
         }
@@ -351,7 +354,6 @@ pub fn run_dev_node_with_rpc<
                 let server_config = RpcServerConfig {
                     http_addr: rpc_config.http_addr,
                     chain_id: rpc_config.chain_id,
-                    client_version: rpc_config.client_version.clone(),
                 };
 
                 tracing::info!("Starting JSON-RPC server on {}", rpc_config.http_addr);
@@ -771,7 +773,6 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                 let server_config = RpcServerConfig {
                     http_addr: rpc_config.http_addr,
                     chain_id: rpc_config.chain_id,
-                    client_version: rpc_config.client_version.clone(),
                 };
 
                 tracing::info!("Starting JSON-RPC server on {}", rpc_config.http_addr);

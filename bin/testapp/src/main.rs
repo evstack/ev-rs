@@ -1,9 +1,11 @@
 //! Evolve Dev Node entrypoint.
 
+use clap::{Args, Parser, Subcommand};
 use evolve_core::ReadonlyKV;
 use evolve_node::{
-    init_dev_node, run_dev_node_with_rpc_and_mempool_eth,
-    run_dev_node_with_rpc_and_mempool_mock_storage, GenesisOutput, DEFAULT_DATA_DIR,
+    init_dev_node, init_tracing as init_node_tracing, resolve_node_config,
+    resolve_node_config_init, run_dev_node_with_rpc_and_mempool_eth,
+    run_dev_node_with_rpc_and_mempool_mock_storage, GenesisOutput, InitArgs, NoArgs, RunArgs,
 };
 use evolve_storage::{QmdbStorage, Storage, StorageConfig};
 use evolve_testapp::{
@@ -11,60 +13,75 @@ use evolve_testapp::{
     GenesisAccounts, MempoolStf, PLACEHOLDER_ACCOUNT,
 };
 use evolve_testing::server_mocks::AccountStorageMock;
-use tracing_subscriber::{fmt, EnvFilter};
+
+#[derive(Parser)]
+#[command(name = "testapp")]
+#[command(about = "Evolve testapp node")]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run the dev node with persistent storage
+    Run(TestappRunArgs),
+    /// Initialize genesis state without running
+    Init(TestappInitArgs),
+}
+
+type TestappRunArgs = RunArgs<TestappRunCustom>;
+type TestappInitArgs = InitArgs<NoArgs>;
+
+#[derive(Args)]
+struct TestappRunCustom {
+    /// Use in-memory mock storage instead of persistent storage
+    #[arg(long)]
+    mock_storage: bool,
+}
 
 fn main() {
-    // Initialize tracing with env filter (RUST_LOG=info by default)
-    fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
-        .init();
+    let cli = Cli::parse();
 
-    let command = std::env::args().nth(1).unwrap_or_else(|| "run".to_string());
+    match cli.command {
+        Commands::Run(args) => {
+            let config = resolve_node_config(&args.common, &args.native);
+            init_node_tracing(&config.observability.log_level);
 
-    let disable_chain_index = std::env::var("EVOLVE_DISABLE_CHAIN_INDEX")
-        .ok()
-        .map(|v| {
-            let s = v.trim().to_ascii_lowercase();
-            s == "1" || s == "true" || s == "yes" || s == "on"
-        })
-        .unwrap_or(false);
-
-    let rpc_config = evolve_node::RpcConfig::default().with_block_indexing(!disable_chain_index);
-
-    match command.as_str() {
-        "run" => run_dev_node_with_rpc_and_mempool_eth(
-            DEFAULT_DATA_DIR,
-            build_genesis_stf,
-            build_stf_from_genesis,
-            build_codes,
-            run_genesis_output,
-            build_storage,
-            rpc_config.clone(),
-        ),
-        "run-mock" => run_dev_node_with_rpc_and_mempool_mock_storage(
-            DEFAULT_DATA_DIR,
-            build_genesis_stf,
-            build_stf_from_genesis,
-            build_codes,
-            run_genesis_output,
-            rpc_config,
-        ),
-        "init" => init_dev_node(
-            DEFAULT_DATA_DIR,
-            build_genesis_stf,
-            build_codes,
-            run_genesis_output,
-            build_storage,
-        ),
-        "help" | "--help" | "-h" => {
-            println!("Usage: evolve_testapp [run|run-mock|init]");
+            let rpc_config = config.to_rpc_config();
+            if args.custom.mock_storage {
+                run_dev_node_with_rpc_and_mempool_mock_storage(
+                    &config.storage.path,
+                    build_genesis_stf,
+                    build_stf_from_genesis,
+                    build_codes,
+                    run_genesis_output,
+                    rpc_config,
+                );
+            } else {
+                run_dev_node_with_rpc_and_mempool_eth(
+                    &config.storage.path,
+                    build_genesis_stf,
+                    build_stf_from_genesis,
+                    build_codes,
+                    run_genesis_output,
+                    build_storage,
+                    rpc_config,
+                );
+            }
         }
-        other => {
-            eprintln!("Unknown command: {other}");
-            eprintln!("Usage: evolve_testapp [run|run-mock|init]");
-            std::process::exit(2);
+        Commands::Init(args) => {
+            let config = resolve_node_config_init(&args.common);
+            init_node_tracing(&config.observability.log_level);
+
+            init_dev_node(
+                &config.storage.path,
+                build_genesis_stf,
+                build_codes,
+                run_genesis_output,
+                build_storage,
+            );
         }
     }
 }

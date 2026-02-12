@@ -64,13 +64,12 @@
 
 mod genesis_config;
 
-use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_primitives::{keccak256, Address, B256, U256};
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 use commonware_runtime::tokio::{Config as TokioConfig, Runner};
 use commonware_runtime::{Runner as RunnerTrait, Spawner};
 use evolve_chain_index::{
@@ -82,7 +81,10 @@ use evolve_core::{AccountId, Environment, Message, ReadonlyKV, SdkResult};
 use evolve_eth_jsonrpc::{start_server_with_subscriptions, RpcServerConfig, SubscriptionManager};
 use evolve_evnode::{EvnodeServer, EvnodeServerConfig, ExecutorServiceConfig, OnBlockExecuted};
 use evolve_mempool::{new_shared_mempool, Mempool, SharedMempool};
-use evolve_node::GenesisOutput;
+use evolve_node::{
+    init_tracing as init_node_tracing, resolve_node_config, resolve_node_config_init,
+    GenesisOutput, InitArgs, NodeConfig, RunArgs,
+};
 use evolve_rpc_types::SyncStatus;
 use evolve_scheduler::scheduler_account::SchedulerRef;
 use evolve_server::{
@@ -98,21 +100,8 @@ use evolve_testing::server_mocks::AccountStorageMock;
 use evolve_token::account::TokenRef;
 use evolve_tx_eth::address_to_account_id;
 use evolve_tx_eth::TxContext;
-use tracing_subscriber::{fmt, EnvFilter};
 
 use genesis_config::{EvdGenesisConfig, EvdGenesisResult};
-
-/// Default gRPC server address.
-const DEFAULT_GRPC_ADDR: &str = "127.0.0.1:50051";
-
-/// Default JSON-RPC server address.
-const DEFAULT_RPC_ADDR: &str = "127.0.0.1:8545";
-
-/// Default data directory.
-const DEFAULT_DATA_DIR: &str = "./data";
-
-/// Default chain ID.
-const DEFAULT_CHAIN_ID: u64 = 1;
 
 #[derive(Parser)]
 #[command(name = "evd")]
@@ -126,107 +115,43 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Run the node with gRPC and JSON-RPC servers
-    Run {
-        /// Data directory for persistent storage
-        #[arg(long, default_value = DEFAULT_DATA_DIR)]
-        data_dir: String,
-
-        /// gRPC server bind address (for external consensus)
-        #[arg(long, default_value = DEFAULT_GRPC_ADDR)]
-        grpc_addr: String,
-
-        /// JSON-RPC server bind address (for queries)
-        #[arg(long, default_value = DEFAULT_RPC_ADDR)]
-        rpc_addr: String,
-
-        /// Chain ID
-        #[arg(long, default_value_t = DEFAULT_CHAIN_ID)]
-        chain_id: u64,
-
-        /// Maximum gas per block
-        #[arg(long, default_value_t = 30_000_000)]
-        max_gas: u64,
-
-        /// Maximum transaction size in bytes
-        #[arg(long, default_value_t = 128 * 1024)]
-        max_tx_bytes: u64,
-
-        /// Disable gzip compression for gRPC
-        #[arg(long)]
-        disable_gzip: bool,
-
-        /// Disable JSON-RPC server
-        #[arg(long)]
-        disable_rpc: bool,
-
-        /// Log level (trace, debug, info, warn, error)
-        #[arg(long, default_value = "info")]
-        log_level: String,
-
-        /// Path to a genesis JSON file with ETH accounts (uses default testapp genesis if omitted)
-        #[arg(long)]
-        genesis_file: Option<String>,
-    },
+    Run(EvdRunArgs),
     /// Initialize genesis state without running
-    Init {
-        /// Data directory for persistent storage
-        #[arg(long, default_value = DEFAULT_DATA_DIR)]
-        data_dir: String,
+    Init(EvdInitArgs),
+}
 
-        /// Log level
-        #[arg(long, default_value = "info")]
-        log_level: String,
+type EvdRunArgs = RunArgs<EvdRunCustom>;
+type EvdInitArgs = InitArgs<EvdInitCustom>;
 
-        /// Path to a genesis JSON file with ETH accounts (uses default testapp genesis if omitted)
-        #[arg(long)]
-        genesis_file: Option<String>,
-    },
+#[derive(Args)]
+struct EvdRunCustom {
+    /// Path to a genesis JSON file with ETH accounts (uses default testapp genesis if omitted)
+    #[arg(long)]
+    genesis_file: Option<String>,
+}
+
+#[derive(Args)]
+struct EvdInitCustom {
+    /// Path to a genesis JSON file with ETH accounts (uses default testapp genesis if omitted)
+    #[arg(long)]
+    genesis_file: Option<String>,
 }
 
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Run {
-            data_dir,
-            grpc_addr,
-            rpc_addr,
-            chain_id,
-            max_gas,
-            max_tx_bytes,
-            disable_gzip,
-            disable_rpc,
-            log_level,
-            genesis_file,
-        } => {
-            init_tracing(&log_level);
-
-            let genesis_config = load_genesis_config(genesis_file.as_deref());
-            let grpc: SocketAddr = grpc_addr.parse().expect("invalid gRPC address");
-            let rpc: SocketAddr = rpc_addr.parse().expect("invalid RPC address");
-
-            run_node(
-                RunConfig {
-                    data_dir,
-                    grpc_addr: grpc,
-                    rpc_addr: rpc,
-                    chain_id,
-                    max_gas,
-                    max_tx_bytes,
-                    enable_gzip: !disable_gzip,
-                    enable_rpc: !disable_rpc,
-                },
-                genesis_config,
-            );
+        Commands::Run(args) => {
+            let config = resolve_node_config(&args.common, &args.native);
+            init_node_tracing(&config.observability.log_level);
+            let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
+            run_node(config, genesis_config);
         }
-        Commands::Init {
-            data_dir,
-            log_level,
-            genesis_file,
-        } => {
-            init_tracing(&log_level);
-            let genesis_config = load_genesis_config(genesis_file.as_deref());
-            init_genesis(&data_dir, genesis_config);
+        Commands::Init(args) => {
+            let config = resolve_node_config_init(&args.common);
+            init_node_tracing(&config.observability.log_level);
+            let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
+            init_genesis(&config.storage.path, genesis_config);
         }
     }
 }
@@ -238,34 +163,18 @@ fn load_genesis_config(path: Option<&str>) -> Option<EvdGenesisConfig> {
     })
 }
 
-fn init_tracing(level: &str) {
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(level));
-    fmt().with_env_filter(filter).init();
-}
-
-struct RunConfig {
-    data_dir: String,
-    grpc_addr: SocketAddr,
-    rpc_addr: SocketAddr,
-    chain_id: u64,
-    max_gas: u64,
-    max_tx_bytes: u64,
-    enable_gzip: bool,
-    enable_rpc: bool,
-}
-
-fn run_node(config: RunConfig, genesis_config: Option<EvdGenesisConfig>) {
+fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
     tracing::info!("=== Evolve Node Daemon (evd) ===");
 
-    std::fs::create_dir_all(&config.data_dir).expect("failed to create data directory");
+    std::fs::create_dir_all(&config.storage.path).expect("failed to create data directory");
 
     let storage_config = StorageConfig {
-        path: config.data_dir.clone().into(),
+        path: config.storage.path.clone().into(),
         ..Default::default()
     };
 
     let runtime_config = TokioConfig::default()
-        .with_storage_directory(&config.data_dir)
+        .with_storage_directory(&config.storage.path)
         .with_worker_threads(4);
 
     let runner = Runner::new(runtime_config);
@@ -315,12 +224,12 @@ fn run_node(config: RunConfig, genesis_config: Option<EvdGenesisConfig>) {
             }
 
             // Set up JSON-RPC server if enabled
-            let rpc_handle = if config.enable_rpc {
+            let rpc_handle = if config.rpc.enabled {
                 let subscriptions = Arc::new(SubscriptionManager::new());
                 let codes_for_rpc = Arc::new(build_codes());
 
                 let state_provider_config = ChainStateProviderConfig {
-                    chain_id: config.chain_id,
+                    chain_id: config.chain.chain_id,
                     protocol_version: "0x1".to_string(),
                     gas_price: U256::ZERO,
                     sync_status: SyncStatus::NotSyncing(false),
@@ -333,13 +242,13 @@ fn run_node(config: RunConfig, genesis_config: Option<EvdGenesisConfig>) {
                     mempool.clone(),
                 );
 
+                let rpc_addr = config.parsed_rpc_addr();
                 let server_config = RpcServerConfig {
-                    http_addr: config.rpc_addr,
-                    chain_id: config.chain_id,
-                    client_version: "evd/0.1.0".to_string(),
+                    http_addr: rpc_addr,
+                    chain_id: config.chain.chain_id,
                 };
 
-                tracing::info!("Starting JSON-RPC server on {}", config.rpc_addr);
+                tracing::info!("Starting JSON-RPC server on {}", rpc_addr);
                 let handle = start_server_with_subscriptions(
                     server_config,
                     state_provider,
@@ -362,8 +271,10 @@ fn run_node(config: RunConfig, genesis_config: Option<EvdGenesisConfig>) {
             let chain_index_for_callback = Arc::clone(&chain_index);
             let parent_hash_for_callback = Arc::clone(&parent_hash);
             let current_height_for_callback = Arc::clone(&current_height);
-            let callback_chain_id = config.chain_id;
-            let callback_max_gas = config.max_gas;
+            let callback_chain_id = config.chain.chain_id;
+            let executor_config = ExecutorServiceConfig::default();
+            let callback_max_gas = executor_config.max_gas;
+            let callback_indexing_enabled = config.rpc.enable_block_indexing;
 
             let on_block_executed: OnBlockExecuted = Arc::new(move |info| {
                 // 1. Commit state changes to QmdbStorage
@@ -405,17 +316,21 @@ fn run_node(config: RunConfig, genesis_config: Option<EvdGenesisConfig>) {
                 let (stored_block, stored_txs, stored_receipts) =
                     build_index_data(&block, &info.block_result, &metadata);
 
-                if let Err(e) =
-                    chain_index_for_callback.store_block(stored_block, stored_txs, stored_receipts)
-                {
-                    tracing::warn!("Failed to index block {}: {:?}", info.height, e);
-                } else {
-                    tracing::debug!(
-                        "Indexed block {} (hash={}, state_root={})",
-                        info.height,
-                        block_hash,
-                        state_root
-                    );
+                if callback_indexing_enabled {
+                    if let Err(e) = chain_index_for_callback.store_block(
+                        stored_block,
+                        stored_txs,
+                        stored_receipts,
+                    ) {
+                        tracing::warn!("Failed to index block {}: {:?}", info.height, e);
+                    } else {
+                        tracing::debug!(
+                            "Indexed block {} (hash={}, state_root={})",
+                            info.height,
+                            block_hash,
+                            state_root
+                        );
+                    }
                 }
 
                 // 4. Update parent hash and height for next block
@@ -425,22 +340,19 @@ fn run_node(config: RunConfig, genesis_config: Option<EvdGenesisConfig>) {
 
             // Configure gRPC server
             let grpc_config = EvnodeServerConfig {
-                addr: config.grpc_addr,
-                enable_gzip: config.enable_gzip,
-                max_message_size: 4 * 1024 * 1024,
-                executor_config: ExecutorServiceConfig {
-                    max_gas: config.max_gas,
-                    max_bytes: config.max_tx_bytes,
-                },
+                addr: config.parsed_grpc_addr(),
+                enable_gzip: config.grpc.enable_gzip,
+                max_message_size: config.grpc_max_message_size_usize(),
+                executor_config,
             };
 
-            tracing::info!("Starting gRPC server on {}", config.grpc_addr);
+            let grpc_addr = config.parsed_grpc_addr();
+            tracing::info!("Starting gRPC server on {}", grpc_addr);
             tracing::info!("Configuration:");
-            tracing::info!("  - Chain ID: {}", config.chain_id);
-            tracing::info!("  - Max gas per block: {}", config.max_gas);
-            tracing::info!("  - Max bytes per tx: {}", config.max_tx_bytes);
-            tracing::info!("  - gRPC compression: {}", config.enable_gzip);
-            tracing::info!("  - JSON-RPC: {}", config.enable_rpc);
+            tracing::info!("  - Chain ID: {}", config.chain.chain_id);
+            tracing::info!("  - gRPC compression: {}", config.grpc.enable_gzip);
+            tracing::info!("  - JSON-RPC: {}", config.rpc.enabled);
+            tracing::info!("  - Block indexing: {}", config.rpc.enable_block_indexing);
             tracing::info!("  - Initial height: {}", initial_height);
 
             // Create gRPC server with mempool and block callback
@@ -465,7 +377,7 @@ fn run_node(config: RunConfig, genesis_config: Option<EvdGenesisConfig>) {
                 _ = tokio::signal::ctrl_c() => {
                     tracing::info!("Received Ctrl+C, shutting down...");
                     context_for_shutdown
-                        .stop(0, Some(Duration::from_secs(10)))
+                        .stop(0, Some(Duration::from_secs(config.operations.shutdown_timeout_secs)))
                         .await
                         .expect("shutdown failed");
                 }

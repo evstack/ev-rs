@@ -33,6 +33,7 @@ borsh.workspace = true
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tokio.workspace = true
+clap = { workspace = true }
 
 # TODO: Move evolve_testing to dev-dependencies once storage engine is fully implemented
 # This dependency is currently required in main dependencies for testing infrastructure

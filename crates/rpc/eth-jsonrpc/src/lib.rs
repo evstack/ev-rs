@@ -33,6 +33,6 @@ pub use health::HealthStatus;
 pub use metrics_middleware::{encode_metrics, MetricsLayer, MetricsService};
 pub use server::{
     start_server, start_server_with_subscriptions, EthRpcServer, NoopStateProvider,
-    RpcServerConfig, StateProvider,
+    RpcServerConfig, StateProvider, CLIENT_VERSION,
 };
 pub use subscriptions::{SharedSubscriptionManager, SubscriptionKind, SubscriptionManager};

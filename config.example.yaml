@@ -30,8 +30,6 @@ rpc:
   enabled: true
   # HTTP address to bind to (host:port format)
   http_addr: "127.0.0.1:8545"
-  # Client version string returned by web3_clientVersion
-  client_version: "evolve/0.1.0"
 
 # gRPC server configuration
 grpc:

@@ -14,6 +14,9 @@ use jsonrpsee::{PendingSubscriptionSink, RpcModule, SubscriptionMessage, Subscri
 
 use crate::api::{EthApiServer, EthPubSubApiServer, EvolveApiServer, NetApiServer, Web3ApiServer};
 use crate::error::RpcError;
+
+/// Client version string returned by `web3_clientVersion`.
+pub const CLIENT_VERSION: &str = "evolve/0.1.0";
 use crate::subscriptions::{
     LogSubscriptionParams, SharedSubscriptionManager, SubscriptionKind, SubscriptionManager,
 };
@@ -30,8 +33,6 @@ pub struct RpcServerConfig {
     pub http_addr: SocketAddr,
     /// Chain ID to return for eth_chainId.
     pub chain_id: u64,
-    /// Client version string.
-    pub client_version: String,
 }
 
 impl Default for RpcServerConfig {
@@ -39,7 +40,6 @@ impl Default for RpcServerConfig {
         Self {
             http_addr: "127.0.0.1:8545".parse().unwrap(),
             chain_id: 1,
-            client_version: "evolve/0.1.0".to_string(),
         }
     }
 }
@@ -534,7 +534,7 @@ impl<S: StateProvider> EthApiServer for EthRpcServer<S> {
 #[async_trait]
 impl<S: StateProvider> Web3ApiServer for EthRpcServer<S> {
     async fn client_version(&self) -> Result<String, ErrorObjectOwned> {
-        Ok(self.config.client_version.clone())
+        Ok(CLIENT_VERSION.to_string())
     }
 
     async fn sha3(&self, data: Bytes) -> Result<B256, ErrorObjectOwned> {

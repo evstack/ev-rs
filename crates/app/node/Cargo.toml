@@ -15,6 +15,10 @@ tracing-subscriber = { workspace = true }
 borsh = { workspace = true }
 tokio = { workspace = true }
 alloy-primitives = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
+figment = { version = "0.10", features = ["yaml", "env"] }
+clap = { workspace = true }
 
 evolve_core = { workspace = true }
 evolve_mempool = { workspace = true }
@@ -28,3 +32,6 @@ evolve_rpc_types = { workspace = true }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+tempfile = "3.8"
