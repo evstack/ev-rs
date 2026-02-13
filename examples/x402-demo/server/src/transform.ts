@@ -1,5 +1,14 @@
 import { Hono } from "hono";
-import { getPaymentInfo } from "./x402.js";
+import type { Address } from "viem";
+import type { Network } from "@x402/core/types";
+import type { RouteConfig, RoutesConfig } from "@x402/core/http";
+
+// Evolve payment configuration
+export const TREASURY_ADDRESS: Address =
+  (process.env.TREASURY_ADDRESS ??
+    "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC") as Address;
+export const NETWORK: Network =
+  (process.env.EVOLVE_NETWORK ?? "evolve:1") as Network;
 
 type TransformRequest = {
   input: string;
@@ -8,8 +17,6 @@ type TransformRequest = {
 type TransformResponse = {
   output: string;
   operation: string;
-  cost: string;
-  txHash?: string;
 };
 
 type Variables = {
@@ -46,16 +53,7 @@ export function createTransformRoutes() {
    */
   app.post("/echo", (c) => {
     const input = c.get("transformInput");
-    const payment = getPaymentInfo(c);
-
-    const response: TransformResponse = {
-      output: input,
-      operation: "echo",
-      cost: payment?.amount.toString() ?? "0",
-      txHash: payment?.txHash,
-    };
-
-    return c.json(response);
+    return c.json<TransformResponse>({ output: input, operation: "echo" });
   });
 
   /**
@@ -64,16 +62,7 @@ export function createTransformRoutes() {
    */
   app.post("/reverse", (c) => {
     const input = c.get("transformInput");
-    const payment = getPaymentInfo(c);
-
-    const response: TransformResponse = {
-      output: input.split("").reverse().join(""),
-      operation: "reverse",
-      cost: payment?.amount.toString() ?? "0",
-      txHash: payment?.txHash,
-    };
-
-    return c.json(response);
+    return c.json<TransformResponse>({ output: input.split("").reverse().join(""), operation: "reverse" });
   });
 
   /**
@@ -82,16 +71,7 @@ export function createTransformRoutes() {
    */
   app.post("/uppercase", (c) => {
     const input = c.get("transformInput");
-    const payment = getPaymentInfo(c);
-
-    const response: TransformResponse = {
-      output: input.toUpperCase(),
-      operation: "uppercase",
-      cost: payment?.amount.toString() ?? "0",
-      txHash: payment?.txHash,
-    };
-
-    return c.json(response);
+    return c.json<TransformResponse>({ output: input.toUpperCase(), operation: "uppercase" });
   });
 
   /**
@@ -100,44 +80,26 @@ export function createTransformRoutes() {
    */
   app.post("/hash", async (c) => {
     const input = c.get("transformInput");
-    const payment = getPaymentInfo(c);
-
-    // Use Web Crypto API (available in Bun)
-    const encoder = new TextEncoder();
-    const data = encoder.encode(input);
-    const hashBuffer = await crypto.subtle.digest("SHA-256", data);
-    const hashArray = Array.from(new Uint8Array(hashBuffer));
-    const hashHex = hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
-
-    const response: TransformResponse = {
-      output: `0x${hashHex}`,
-      operation: "hash",
-      cost: payment?.amount.toString() ?? "0",
-      txHash: payment?.txHash,
-    };
-
-    return c.json(response);
+    const hashBuffer = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
+    const hashHex = Array.from(new Uint8Array(hashBuffer)).map((b) => b.toString(16).padStart(2, "0")).join("");
+    return c.json<TransformResponse>({ output: `0x${hashHex}`, operation: "hash" });
   });
 
   return app;
 }
 
-// Route configurations for X402 middleware
-export const TRANSFORM_ROUTES = {
-  "POST /api/transform/echo": {
-    price: 100n,
-    description: "Echo - returns input unchanged",
-  },
-  "POST /api/transform/reverse": {
-    price: 100n,
-    description: "Reverse - reverses input string",
-  },
-  "POST /api/transform/uppercase": {
-    price: 100n,
-    description: "Uppercase - uppercases input string",
-  },
-  "POST /api/transform/hash": {
-    price: 200n,
-    description: "Hash - returns SHA256 of input",
-  },
+// Route configurations for X402 middleware (@x402/core format)
+function route(price: string, description: string): RouteConfig {
+  return {
+    accepts: { scheme: "exact", payTo: TREASURY_ADDRESS, price, network: NETWORK },
+    description,
+    mimeType: "application/json",
+  };
+}
+
+export const TRANSFORM_ROUTES: RoutesConfig = {
+  "POST /api/transform/echo": route("100", "Echo - returns input unchanged"),
+  "POST /api/transform/reverse": route("100", "Reverse - reverses input string"),
+  "POST /api/transform/uppercase": route("100", "Uppercase - uppercases input string"),
+  "POST /api/transform/hash": route("200", "Hash - returns SHA256 of input"),
 };

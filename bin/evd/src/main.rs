@@ -216,7 +216,6 @@ fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
 
             // Create shared mempool
             let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
-
             // Create chain index (shared between RPC and block callback)
             let chain_index = Arc::new(PersistentChainIndex::new(Arc::new(storage.clone())));
             if let Err(e) = chain_index.initialize() {

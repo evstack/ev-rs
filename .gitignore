@@ -20,6 +20,7 @@ Cargo.lock
 .vscode
 
 data/
+config.yaml
 
 node_modules/
 dist/

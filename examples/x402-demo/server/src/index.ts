@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
-import { type Address } from "viem";
 import {
   createEvolveClient,
   createEvolveClientSync,
@@ -12,18 +11,54 @@ import {
 } from "./evolve.js";
 import { createWalletRoutes } from "./wallet.js";
 import { createPasskeyRoutes } from "./passkey.js";
-import { x402Middleware } from "./x402.js";
-import { createTransformRoutes, TRANSFORM_ROUTES } from "./transform.js";
+import {
+  createTransformRoutes,
+  TRANSFORM_ROUTES,
+  TREASURY_ADDRESS,
+  NETWORK,
+} from "./transform.js";
 import { eventEmitter } from "./events.js";
+import { x402ResourceServer } from "@x402/core/server";
+import { EvolveFacilitatorClient } from "./x402/evolve-facilitator.js";
+import { EvolveSchemeServer } from "./x402/evolve-scheme-server.js";
+import { paymentMiddleware, captureAgentId, registerEventHooks } from "./x402/hono-middleware.js";
 
-// X402 configuration
-const TREASURY_ADDRESS = (process.env.TREASURY_ADDRESS ??
-  "0x3C44CdDdB6a900fa2b585dd299e03d12FA4293BC") as Address;
-const NETWORK = process.env.EVOLVE_NETWORK ?? "evolve:1";
-const ASSET = process.env.EVOLVE_ASSET ?? "native";
+const EVOLVE_RPC_URL = process.env.EVOLVE_RPC_URL ?? "http://127.0.0.1:8545";
 
 // Global client reference (initialized async)
 let evolveClient: EvolveClient;
+
+async function getBlockTxCountFromRpc(blockNumber: bigint): Promise<number | null> {
+  const blockTag = `0x${blockNumber.toString(16)}`;
+  const result = await callRpc<string>("eth_getBlockTransactionCountByNumber", [blockTag]);
+  return result ? Number.parseInt(result, 16) : null;
+}
+
+async function callRpc<T>(method: string, params: unknown[]): Promise<T | null> {
+  try {
+    const response = await fetch(EVOLVE_RPC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params,
+      }),
+    });
+    const data = (await response.json()) as {
+      result?: T;
+      error?: unknown;
+    };
+    if (data.error || data.result === undefined) {
+      return null;
+    }
+    return data.result;
+  } catch {
+    return null;
+  }
+}
+
 
 function createApp(client: EvolveClient) {
   const app = new Hono();
@@ -41,16 +76,12 @@ function createApp(client: EvolveClient) {
   );
 
   // Apply X402 middleware for protected routes
-  app.use(
-    "/api/transform/*",
-    x402Middleware({
-      routes: TRANSFORM_ROUTES,
-      payTo: TREASURY_ADDRESS,
-      network: NETWORK,
-      asset: ASSET,
-      client,
-    })
-  );
+  const facilitator = new EvolveFacilitatorClient(client, NETWORK);
+  const resourceServer = new x402ResourceServer(facilitator);
+  resourceServer.register(NETWORK, new EvolveSchemeServer());
+  registerEventHooks(resourceServer);
+  app.use("/api/transform/*", captureAgentId());
+  app.use("/api/transform/*", paymentMiddleware(TRANSFORM_ROUTES, resourceServer));
 
   // Health check with chain info
   app.get("/health", async (c) => {
@@ -70,7 +101,7 @@ function createApp(client: EvolveClient) {
         x402: {
           treasury: TREASURY_ADDRESS,
           network: NETWORK,
-          asset: ASSET,
+          asset: "native",
         },
         timestamp: new Date().toISOString(),
       });
@@ -94,16 +125,17 @@ function createApp(client: EvolveClient) {
 
   // Pricing info endpoint
   app.get("/api/pricing", (c) => {
-    const pricing = Object.entries(TRANSFORM_ROUTES).map(([route, config]) => ({
+    const routes = TRANSFORM_ROUTES as Record<string, { accepts: { price: string }; description?: string }>;
+    const pricing = Object.entries(routes).map(([route, config]) => ({
       route,
-      price: config.price.toString(),
-      description: config.description,
+      price: String(config.accepts.price),
+      description: config.description ?? "",
     }));
 
     return c.json({
       treasury: TREASURY_ADDRESS,
       network: NETWORK,
-      asset: ASSET,
+      asset: "native",
       endpoints: pricing,
     });
   });
@@ -122,6 +154,49 @@ function createApp(client: EvolveClient) {
       },
       wsConnections: eventEmitter.getConnectionCount(),
     });
+  });
+
+  // Chain stats endpoint for dashboard widgets
+  app.get("/api/chain", async (c) => {
+    try {
+      const [blockNumber, chainId] = await Promise.all([
+        getBlockNumber(client),
+        getChainId(client),
+      ]);
+      const metrics = eventEmitter.getMetrics();
+
+      let latestBlockTxCount = await getBlockTxCountFromRpc(blockNumber);
+      let latestBlockTimestamp: string | null = null;
+
+      try {
+        const block = await client.public.getBlock({
+          blockNumber,
+          includeTransactions: false,
+        });
+        if (latestBlockTxCount === null) {
+          latestBlockTxCount = block.transactions.length;
+        }
+        latestBlockTimestamp = new Date(Number(block.timestamp) * 1000).toISOString();
+      } catch (err) {
+        // Some dev RPC implementations may not support all block fields.
+        console.warn("Failed to fetch latest block details:", err);
+      }
+
+      return c.json({
+        chainId,
+        blockNumber: blockNumber.toString(),
+        latestBlockTxCount,
+        latestBlockTimestamp,
+        observedPaymentTxs: metrics.totalPayments,
+        observedServedRequests: metrics.totalRequests,
+      });
+    } catch (err) {
+      console.error("Failed to fetch chain stats:", err);
+      return c.json(
+        { error: "Failed to fetch chain stats from ev-node" },
+        503
+      );
+    }
   });
 
   // Treasury balance endpoint

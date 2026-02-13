@@ -26,6 +26,12 @@ const styles = {
     fontVariantNumeric: "tabular-nums",
     color: "#fff",
   },
+  errorValue: {
+    fontSize: 28,
+    fontWeight: 600,
+    fontVariantNumeric: "tabular-nums",
+    color: "#ef4444",
+  },
   unit: {
     fontSize: 14,
     color: "#666",

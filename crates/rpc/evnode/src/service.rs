@@ -390,8 +390,10 @@ where
             Some(mempool) => {
                 let mut pool = mempool.write().await;
 
-                // Select transactions up to block gas limit (no count limit)
-                let (selected, _total_gas) = pool.select_with_gas_budget(self.config.max_gas, 0);
+                // Select txs for the block proposal and mark them as in-flight.
+                // Executed txs are confirmed via finalize in execute_txs;
+                // unexecuted ones are returned to the priority queue.
+                let (selected, _total_gas) = pool.propose(self.config.max_gas, 0);
 
                 // Encode selected transactions
                 selected
@@ -476,6 +478,16 @@ where
             failed,
             gas_used
         );
+
+        // Finalize the block proposal: remove executed txs, return unexecuted in-flight txs.
+        if let Some(ref mempool) = self.mempool {
+            let tx_hashes: Vec<[u8; 32]> =
+                block.transactions.iter().map(|tx| tx.hash().0).collect();
+            if !tx_hashes.is_empty() {
+                let mut pool = mempool.write().await;
+                pool.finalize(&tx_hashes);
+            }
+        }
 
         // Handle state changes / notify callback
         if let Some(ref callback) = self.on_block_executed {

@@ -65,8 +65,8 @@ export function validateConfig(config: PoolConfig): string[] {
   if (config.agentCount < 1) {
     errors.push("Agent count must be at least 1");
   }
-  if (config.agentCount > 17) {
-    errors.push("Agent count exceeds maximum (17 Hardhat agent wallets available)");
+  if (config.agentCount > 5000) {
+    errors.push("Agent count exceeds maximum (5000)");
   }
   if (config.requestsPerSecond < 1) {
     errors.push("Requests per second must be at least 1");

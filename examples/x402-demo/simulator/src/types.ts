@@ -70,31 +70,36 @@ export interface PoolMetrics {
   elapsedMs: number;
 }
 
-// X402 Protocol Types
+// X402 Protocol Types (v2 — compatible with @x402/core)
 export interface PaymentRequired {
-  x402Version: 2;
-  error: string;
+  x402Version: number;
+  error?: string;
   resource: {
     url: string;
-    method: string;
+    description: string;
+    mimeType: string;
   };
   accepts: PaymentRequirements[];
-  description?: string;
 }
 
 export interface PaymentRequirements {
-  scheme: "exact";
+  scheme: string;
   network: string;
   asset: string;
   amount: string;
-  payTo: Address;
+  payTo: string;
   maxTimeoutSeconds: number;
+  extra: Record<string, unknown>;
 }
 
 export interface PaymentPayload {
-  x402Version: 2;
-  scheme: "exact";
-  network: string;
+  x402Version: number;
+  resource: {
+    url: string;
+    description: string;
+    mimeType: string;
+  };
+  accepted: PaymentRequirements;
   payload: {
     txHash: Hash;
   };

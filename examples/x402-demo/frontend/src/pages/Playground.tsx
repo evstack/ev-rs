@@ -184,7 +184,7 @@ export function Playground() {
         // Step 3: Retry with payment proof
         addStep("Retry", "Retrying with payment signature...", "pending");
 
-        const signature = createPaymentSignature(paymentResult.txHash);
+        const signature = createPaymentSignature(paymentResult.txHash, requirements);
         const result = await transform(operation, input, signature);
 
         setSteps((prev) =>

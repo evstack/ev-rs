@@ -6,7 +6,7 @@
 #![allow(clippy::disallowed_types)]
 
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, BinaryHeap, HashMap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::marker::PhantomData;
 use std::sync::Arc;
 
@@ -58,6 +58,8 @@ pub struct Mempool<T: MempoolTx> {
     by_sender: HashMap<SenderKey, BTreeMap<u64, [u8; 32]>>,
     /// Per-sender sequence counters to avoid collisions in by_sender keys.
     by_sender_seq: HashMap<SenderKey, u64>,
+    /// Transaction hashes currently proposed but not yet finalized.
+    in_flight: HashSet<[u8; 32]>,
     /// Phantom marker for T.
     _marker: PhantomData<T>,
 }
@@ -76,6 +78,7 @@ impl<T: MempoolTx> Mempool<T> {
             by_priority: BinaryHeap::new(),
             by_sender: HashMap::new(),
             by_sender_seq: HashMap::new(),
+            in_flight: HashSet::new(),
             _marker: PhantomData,
         }
     }
@@ -263,6 +266,49 @@ impl<T: MempoolTx> Mempool<T> {
         (selected, total_gas)
     }
 
+    /// Select transactions for a block proposal and mark them as in-flight.
+    ///
+    /// Selected transactions are popped from the priority queue and tracked in
+    /// the `in_flight` set. Repeated calls return different transactions.
+    /// Call [`finalize`] after execution to confirm which were executed and
+    /// return the rest to the pool.
+    ///
+    /// # Arguments
+    /// * `max_gas` - Maximum cumulative gas (0 means no gas limit)
+    /// * `max_txs` - Maximum number of transactions (0 means no count limit)
+    pub fn propose(&mut self, max_gas: u64, max_txs: usize) -> (Vec<Arc<T>>, u64) {
+        let (selected, total_gas) = self.select_with_gas_budget(max_gas, max_txs);
+        for tx in &selected {
+            self.in_flight.insert(tx.tx_id());
+        }
+        (selected, total_gas)
+    }
+
+    /// Finalize a block proposal: remove executed txs, return the rest to the pool.
+    ///
+    /// Executed transactions are permanently removed from all indexes.
+    /// Any in-flight transactions not in the `executed` set are returned
+    /// to the priority queue for future proposals.
+    pub fn finalize(&mut self, executed: &[[u8; 32]]) {
+        // Remove executed txs from all indexes
+        self.remove_many(executed);
+
+        // Clean executed from in_flight
+        for hash in executed {
+            self.in_flight.remove(hash);
+        }
+
+        // Return non-executed in-flight txs back to priority queue
+        for hash in self.in_flight.drain() {
+            if let Some(tx) = self.by_hash.get(&hash) {
+                self.by_priority.push(OrderedEntry {
+                    hash,
+                    key: tx.ordering_key(),
+                });
+            }
+        }
+    }
+
     /// Peek at the highest priority transaction without removing it.
     pub fn peek(&self) -> Option<Arc<T>> {
         self.by_priority
@@ -284,6 +330,7 @@ impl<T: MempoolTx> Mempool<T> {
         self.by_priority.clear();
         self.by_sender.clear();
         self.by_sender_seq.clear();
+        self.in_flight.clear();
     }
 }
 
@@ -705,6 +752,100 @@ mod tests {
         let (selected, total_gas) = pool.select_with_gas_budget(0, 0);
         assert_eq!(selected.len(), 5);
         assert_eq!(total_gas, 50_000);
+    }
+
+    #[test]
+    fn test_propose_marks_in_flight() {
+        let mut pool: Mempool<TestGasTx> = Mempool::new();
+
+        for i in 0..5 {
+            let tx =
+                TestGasTx::new(i, (100 - i) as u128, i as u64, &[i; 20]).with_gas_limit(10_000);
+            pool.add(tx).unwrap();
+        }
+
+        // First propose: returns all 5
+        let (selected1, _) = pool.propose(0, 0);
+        assert_eq!(selected1.len(), 5);
+
+        // Second propose: heap is drained, should return 0
+        let (selected2, _) = pool.propose(0, 0);
+        assert_eq!(selected2.len(), 0);
+    }
+
+    #[test]
+    fn test_finalize_returns_unexecuted() {
+        let mut pool: Mempool<TestGasTx> = Mempool::new();
+
+        for i in 0..5 {
+            let tx =
+                TestGasTx::new(i, (100 - i) as u128, i as u64, &[i; 20]).with_gas_limit(10_000);
+            pool.add(tx).unwrap();
+        }
+
+        // Propose all 5
+        let (selected, _) = pool.propose(0, 0);
+        assert_eq!(selected.len(), 5);
+
+        // Finalize only 2 as executed -- the other 3 should return to pool
+        pool.finalize(&[[0u8; 32], [1u8; 32]]);
+
+        // Pool should still have the 3 non-executed txs in by_hash
+        assert_eq!(pool.len(), 3);
+
+        // They should be selectable again via propose
+        let (re_proposed, _) = pool.propose(0, 0);
+        assert_eq!(re_proposed.len(), 3);
+    }
+
+    #[test]
+    fn test_finalize_removes_executed() {
+        let mut pool: Mempool<TestGasTx> = Mempool::new();
+
+        for i in 0..3 {
+            let tx = TestGasTx::new(i, 100, i as u64, &[i; 20]).with_gas_limit(10_000);
+            pool.add(tx).unwrap();
+        }
+
+        let (selected, _) = pool.propose(0, 0);
+        assert_eq!(selected.len(), 3);
+
+        // Finalize all as executed
+        let executed: Vec<[u8; 32]> = selected.iter().map(|tx| tx.tx_id()).collect();
+        pool.finalize(&executed);
+
+        // All txs should be gone
+        assert_eq!(pool.len(), 0);
+        assert!(pool.is_empty());
+    }
+
+    #[test]
+    fn test_propose_after_finalize() {
+        let mut pool: Mempool<TestGasTx> = Mempool::new();
+
+        // Add 5 txs with descending gas price
+        for i in 0..5 {
+            let tx =
+                TestGasTx::new(i, (100 - i) as u128, i as u64, &[i; 20]).with_gas_limit(10_000);
+            pool.add(tx).unwrap();
+        }
+
+        // Propose all 5
+        let (batch1, _) = pool.propose(0, 0);
+        assert_eq!(batch1.len(), 5);
+
+        // Execute only the first 2 (highest priority)
+        pool.finalize(&[batch1[0].tx_id(), batch1[1].tx_id()]);
+        assert_eq!(pool.len(), 3);
+
+        // Propose again -- should get the remaining 3
+        let (batch2, _) = pool.propose(0, 0);
+        assert_eq!(batch2.len(), 3);
+
+        // Execute all remaining
+        let executed: Vec<[u8; 32]> = batch2.iter().map(|tx| tx.tx_id()).collect();
+        pool.finalize(&executed);
+        assert!(pool.is_empty());
     }
 
     #[test]

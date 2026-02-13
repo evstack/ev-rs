@@ -4,6 +4,7 @@ import { AgentGrid } from "../components/AgentGrid";
 import { PaymentStream } from "../components/PaymentStream";
 import { MetricsPanel } from "../components/MetricsPanel";
 import { TpsCounter } from "../components/TpsCounter";
+import { useChainStats } from "../hooks/useChainStats";
 
 const WS_URL = `ws://${window.location.hostname}:3000/ws/events`;
 
@@ -46,6 +47,35 @@ const styles = {
     gridTemplateColumns: "1fr 1fr",
     gap: 24,
   },
+  chainGrid: {
+    display: "grid",
+    gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+    gap: 12,
+  },
+  chainCard: {
+    backgroundColor: "#111",
+    border: "1px solid #2a2a2a",
+    borderRadius: 8,
+    padding: 12,
+  },
+  chainLabel: {
+    fontSize: 11,
+    color: "#888",
+    marginBottom: 4,
+    textTransform: "uppercase" as const,
+    letterSpacing: 0.8,
+  },
+  chainValue: {
+    fontSize: 22,
+    fontWeight: 600,
+    color: "#fff",
+    fontVariantNumeric: "tabular-nums",
+  },
+  chainSubvalue: {
+    fontSize: 12,
+    color: "#777",
+    marginTop: 4,
+  },
   fullWidth: {
     gridColumn: "1 / -1",
   },
@@ -67,6 +97,7 @@ const styles = {
 export function Dashboard() {
   const { events, connected, error } = useEventStream(WS_URL);
   const metrics = useMetrics(events);
+  const { data: chainStats, error: chainError, loading: chainLoading } = useChainStats(1000);
 
   return (
     <div style={styles.container}>
@@ -86,8 +117,46 @@ export function Dashboard() {
           {error}
         </div>
       )}
+      {chainError && (
+        <div style={{ color: "#ef4444", padding: 8, backgroundColor: "#1a1a1a", borderRadius: 4 }}>
+          Chain stats error: {chainError}
+        </div>
+      )}
 
       <div style={styles.grid}>
+        <div style={{ ...styles.section, ...styles.fullWidth }}>
+          <div style={styles.sectionTitle}>EV Node</div>
+          <div style={styles.chainGrid}>
+            <div style={styles.chainCard}>
+              <div style={styles.chainLabel}>Latest Block</div>
+              <div style={styles.chainValue}>
+                {chainLoading || !chainStats ? "..." : Number(chainStats.blockNumber).toLocaleString()}
+              </div>
+            </div>
+            <div style={styles.chainCard}>
+              <div style={styles.chainLabel}>Txs In Latest Block</div>
+              <div style={styles.chainValue}>
+                {chainLoading || !chainStats
+                  ? "..."
+                  : chainStats.latestBlockTxCount === null
+                    ? "n/a"
+                    : chainStats.latestBlockTxCount.toLocaleString()}
+              </div>
+              <div style={styles.chainSubvalue}>
+                {chainStats?.latestBlockTimestamp
+                  ? new Date(chainStats.latestBlockTimestamp).toLocaleTimeString()
+                  : "timestamp n/a"}
+              </div>
+            </div>
+            <div style={styles.chainCard}>
+              <div style={styles.chainLabel}>Observed Payment Txs</div>
+              <div style={styles.chainValue}>
+                {chainLoading || !chainStats ? "..." : chainStats.observedPaymentTxs.toLocaleString()}
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div style={{ ...styles.section, ...styles.fullWidth }}>
           <div style={styles.sectionTitle}>Metrics</div>
           <MetricsPanel metrics={metrics} />

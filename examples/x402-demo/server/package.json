@@ -10,12 +10,13 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "hono": "^4.6.0",
-    "@x402/core": "^2.2.0",
-    "@simplewebauthn/server": "^11.0.0",
-    "viem": "^2.21.0",
     "@grpc/grpc-js": "^1.12.0",
-    "@grpc/proto-loader": "^0.7.0"
+    "@grpc/proto-loader": "^0.7.0",
+    "@simplewebauthn/server": "^11.0.0",
+    "@x402/core": "^2.2.0",
+    "@x402/hono": "2.2.0",
+    "hono": "^4.6.0",
+    "viem": "^2.21.0"
   },
   "devDependencies": {
     "@types/bun": "latest",

@@ -33,12 +33,19 @@ export class ApiError extends Error {
 
 export type PaymentRequired = {
   x402Version: number;
+  resource?: {
+    url: string;
+    description: string;
+    mimeType: string;
+  };
   accepts: Array<{
     scheme: string;
     network: string;
     asset: string;
     amount: string;
     payTo: string;
+    maxTimeoutSeconds?: number;
+    extra?: Record<string, unknown>;
   }>;
   description?: string;
 };
@@ -164,12 +171,96 @@ export async function getPricing() {
   }>("/api/pricing");
 }
 
-// Payment helper
-export function createPaymentSignature(txHash: string): string {
+export type HealthResponse = {
+  status: string;
+  chain: {
+    id: number;
+    blockNumber: string;
+  };
+};
+
+export async function getHealth() {
+  return api<HealthResponse>("/health");
+}
+
+export type EventsSummaryResponse = {
+  metrics: {
+    totalPayments: number;
+    successfulPayments: number;
+    failedPayments: number;
+    totalRequests: number;
+  };
+};
+
+export async function getEventsSummary() {
+  return api<EventsSummaryResponse>("/api/events");
+}
+
+type RpcResponse<T> = {
+  result?: T;
+  error?: unknown;
+};
+
+async function callRpc<T>(method: string, params: unknown[]): Promise<T | null> {
+  const res = await fetch("/rpc", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params,
+    }),
+  });
+
+  const data = (await res.json()) as RpcResponse<T>;
+  if (data.error || data.result === undefined) return null;
+  return data.result;
+}
+
+export async function getLatestBlockTxCountViaRpc(): Promise<number | null> {
+  const result = await callRpc<string | null>(
+    "eth_getBlockTransactionCountByNumber",
+    ["latest"]
+  );
+  if (typeof result !== "string") return null;
+  return Number.parseInt(result, 16);
+}
+
+export type ChainStats = {
+  chainId: number;
+  blockNumber: string;
+  latestBlockTxCount: number | null;
+  latestBlockTimestamp: string | null;
+  observedPaymentTxs: number;
+  observedServedRequests: number;
+};
+
+export async function getChainStats() {
+  return api<ChainStats>("/api/chain");
+}
+
+// Payment helper — builds v2 PaymentPayload with resource + accepted
+export function createPaymentSignature(
+  txHash: string,
+  paymentRequired?: PaymentRequired,
+): string {
   const payload = {
     x402Version: 2,
-    scheme: "exact",
-    network: "evolve:1337",
+    resource: paymentRequired?.resource ?? {
+      url: "",
+      description: "",
+      mimeType: "application/json",
+    },
+    accepted: paymentRequired?.accepts?.[0] ?? {
+      scheme: "exact",
+      network: "evolve:1337",
+      asset: "native",
+      amount: "0",
+      payTo: "",
+      maxTimeoutSeconds: 300,
+      extra: {},
+    },
     payload: { txHash },
   };
   return btoa(JSON.stringify(payload));

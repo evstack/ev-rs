@@ -15,6 +15,12 @@ use crate::error::{ChainIndexError, ChainIndexResult};
 use crate::types::{StoredBlock, StoredLog, StoredReceipt, StoredTransaction, TxLocation};
 use evolve_storage::Storage;
 
+/// Maximum number of transaction hashes per storage chunk.
+const TX_HASH_CHUNK_SIZE: usize = 32;
+
+/// Maximum number of log entries per storage chunk.
+const LOG_CHUNK_SIZE: usize = 16;
+
 /// Storage key prefixes for chain data.
 mod keys {
     use alloy_primitives::B256;
@@ -25,6 +31,10 @@ mod keys {
     pub const BLOCK_NUMBER: &[u8] = b"blk:n:";
     /// Transaction hashes in block: `blk:t:{number}` -> Vec<B256>
     pub const BLOCK_TXS: &[u8] = b"blk:t:";
+    /// Chunked transaction hashes count by block: `blk:t:c:{number}` -> u32
+    pub const BLOCK_TXS_CHUNK_COUNT: &[u8] = b"blk:t:c:";
+    /// Chunked transaction hashes by block/index: `blk:t:k:{number}:{idx}` -> Vec<B256>
+    pub const BLOCK_TXS_CHUNK: &[u8] = b"blk:t:k:";
     /// Transaction data by hash: `tx:d:{hash}` -> StoredTransaction
     pub const TX_DATA: &[u8] = b"tx:d:";
     /// Transaction location: `tx:l:{hash}` -> TxLocation
@@ -33,6 +43,10 @@ mod keys {
     pub const TX_RECEIPT: &[u8] = b"tx:r:";
     /// Logs by block: `log:b:{number}` -> Vec<StoredLog>
     pub const LOGS_BY_BLOCK: &[u8] = b"log:b:";
+    /// Chunked logs count by block: `log:b:c:{number}` -> u32
+    pub const LOGS_BY_BLOCK_CHUNK_COUNT: &[u8] = b"log:b:c:";
+    /// Chunked logs by block/index: `log:b:k:{number}:{idx}` -> Vec<StoredLog>
+    pub const LOGS_BY_BLOCK_CHUNK: &[u8] = b"log:b:k:";
     /// Latest block number: `meta:latest` -> u64
     pub const META_LATEST: &[u8] = b"meta:latest";
 
@@ -51,6 +65,19 @@ mod keys {
     pub fn block_txs_key(number: u64) -> Vec<u8> {
         let mut key = BLOCK_TXS.to_vec();
         key.extend_from_slice(&number.to_be_bytes());
+        key
+    }
+
+    pub fn block_txs_chunk_count_key(number: u64) -> Vec<u8> {
+        let mut key = BLOCK_TXS_CHUNK_COUNT.to_vec();
+        key.extend_from_slice(&number.to_be_bytes());
+        key
+    }
+
+    pub fn block_txs_chunk_key(number: u64, chunk_index: u32) -> Vec<u8> {
+        let mut key = BLOCK_TXS_CHUNK.to_vec();
+        key.extend_from_slice(&number.to_be_bytes());
+        key.extend_from_slice(&chunk_index.to_be_bytes());
         key
     }
 
@@ -75,6 +102,19 @@ mod keys {
     pub fn logs_by_block_key(number: u64) -> Vec<u8> {
         let mut key = LOGS_BY_BLOCK.to_vec();
         key.extend_from_slice(&number.to_be_bytes());
+        key
+    }
+
+    pub fn logs_by_block_chunk_count_key(number: u64) -> Vec<u8> {
+        let mut key = LOGS_BY_BLOCK_CHUNK_COUNT.to_vec();
+        key.extend_from_slice(&number.to_be_bytes());
+        key
+    }
+
+    pub fn logs_by_block_chunk_key(number: u64, chunk_index: u32) -> Vec<u8> {
+        let mut key = LOGS_BY_BLOCK_CHUNK.to_vec();
+        key.extend_from_slice(&number.to_be_bytes());
+        key.extend_from_slice(&chunk_index.to_be_bytes());
         key
     }
 }
@@ -236,6 +276,33 @@ impl<S: Storage + 'static> ChainIndex for PersistentChainIndex<S> {
     }
 
     fn get_block_transactions(&self, number: u64) -> ChainIndexResult<Vec<B256>> {
+        // New chunked layout.
+        let chunk_count_key = keys::block_txs_chunk_count_key(number);
+        if let Some(bytes) = self.storage.get(&chunk_count_key)? {
+            if bytes.len() != 4 {
+                return Err(ChainIndexError::Deserialization(
+                    "invalid block tx chunk count format".to_string(),
+                ));
+            }
+            let mut count_bytes = [0u8; 4];
+            count_bytes.copy_from_slice(&bytes);
+            let count = u32::from_be_bytes(count_bytes);
+            let mut hashes = Vec::new();
+            for idx in 0..count {
+                let key = keys::block_txs_chunk_key(number, idx);
+                let chunk_bytes = self.storage.get(&key)?.ok_or_else(|| {
+                    ChainIndexError::Deserialization(format!(
+                        "missing tx chunk {} for block {}",
+                        idx, number
+                    ))
+                })?;
+                let mut chunk: Vec<B256> = serde_json::from_slice(&chunk_bytes)?;
+                hashes.append(&mut chunk);
+            }
+            return Ok(hashes);
+        }
+
+        // Legacy single-value layout.
         let key = keys::block_txs_key(number);
         match self.storage.get(&key)? {
             Some(bytes) => {
@@ -296,6 +363,33 @@ impl<S: Storage + 'static> ChainIndex for PersistentChainIndex<S> {
     }
 
     fn get_logs_by_block(&self, number: u64) -> ChainIndexResult<Vec<StoredLog>> {
+        // New chunked layout.
+        let chunk_count_key = keys::logs_by_block_chunk_count_key(number);
+        if let Some(bytes) = self.storage.get(&chunk_count_key)? {
+            if bytes.len() != 4 {
+                return Err(ChainIndexError::Deserialization(
+                    "invalid block logs chunk count format".to_string(),
+                ));
+            }
+            let mut count_bytes = [0u8; 4];
+            count_bytes.copy_from_slice(&bytes);
+            let count = u32::from_be_bytes(count_bytes);
+            let mut logs = Vec::new();
+            for idx in 0..count {
+                let key = keys::logs_by_block_chunk_key(number, idx);
+                let chunk_bytes = self.storage.get(&key)?.ok_or_else(|| {
+                    ChainIndexError::Deserialization(format!(
+                        "missing log chunk {} for block {}",
+                        idx, number
+                    ))
+                })?;
+                let mut chunk: Vec<StoredLog> = serde_json::from_slice(&chunk_bytes)?;
+                logs.append(&mut chunk);
+            }
+            return Ok(logs);
+        }
+
+        // Legacy single-value layout.
         let key = keys::logs_by_block_key(number);
         match self.storage.get(&key)? {
             Some(bytes) => {
@@ -333,12 +427,23 @@ impl<S: Storage + 'static> ChainIndex for PersistentChainIndex<S> {
             value: block_number.to_be_bytes().to_vec(),
         });
 
-        // Store transaction hashes for this block
+        // Store transaction hashes for this block in chunked format to avoid
+        // oversize values for high-tx blocks.
         let tx_hashes: Vec<B256> = transactions.iter().map(|tx| tx.hash).collect();
+        let tx_hash_chunks: Vec<Vec<B256>> = tx_hashes
+            .chunks(TX_HASH_CHUNK_SIZE)
+            .map(|c| c.to_vec())
+            .collect();
         ops.push(evolve_storage::Operation::Set {
-            key: keys::block_txs_key(block_number),
-            value: serde_json::to_vec(&tx_hashes)?,
+            key: keys::block_txs_chunk_count_key(block_number),
+            value: (tx_hash_chunks.len() as u32).to_be_bytes().to_vec(),
         });
+        for (idx, chunk) in tx_hash_chunks.iter().enumerate() {
+            ops.push(evolve_storage::Operation::Set {
+                key: keys::block_txs_chunk_key(block_number, idx as u32),
+                value: serde_json::to_vec(chunk)?,
+            });
+        }
 
         // Store each transaction
         for (idx, tx) in transactions.iter().enumerate() {
@@ -364,11 +469,26 @@ impl<S: Storage + 'static> ChainIndex for PersistentChainIndex<S> {
             });
         }
 
-        // Store logs by block
+        // Store logs by block in chunked format to avoid oversize values.
         if !all_logs.is_empty() {
+            let log_chunks: Vec<Vec<StoredLog>> = all_logs
+                .chunks(LOG_CHUNK_SIZE)
+                .map(|c| c.to_vec())
+                .collect();
             ops.push(evolve_storage::Operation::Set {
-                key: keys::logs_by_block_key(block_number),
-                value: serde_json::to_vec(&all_logs)?,
+                key: keys::logs_by_block_chunk_count_key(block_number),
+                value: (log_chunks.len() as u32).to_be_bytes().to_vec(),
+            });
+            for (idx, chunk) in log_chunks.iter().enumerate() {
+                ops.push(evolve_storage::Operation::Set {
+                    key: keys::logs_by_block_chunk_key(block_number, idx as u32),
+                    value: serde_json::to_vec(chunk)?,
+                });
+            }
+        } else {
+            ops.push(evolve_storage::Operation::Set {
+                key: keys::logs_by_block_chunk_count_key(block_number),
+                value: 0u32.to_be_bytes().to_vec(),
             });
         }
 
@@ -667,6 +787,164 @@ mod tests {
 
         assert_eq!(index2.latest_block_number().unwrap(), Some(4));
         assert!(index2.get_block(3).unwrap().is_some());
+    }
+
+    /// Tests chunked tx hash roundtrip with more than TX_HASH_CHUNK_SIZE txs.
+    #[test]
+    fn test_chunked_txs_roundtrip() {
+        let storage = Arc::new(MockStorage::new());
+        let index = PersistentChainIndex::new(storage);
+
+        let mut block = make_test_stored_block(1);
+        let tx_count = super::TX_HASH_CHUNK_SIZE + 10; // 42 txs -- spans 2 chunks
+        block.transaction_count = tx_count as u32;
+
+        let txs: Vec<StoredTransaction> = (0..tx_count)
+            .map(|i| {
+                let hash = B256::from_slice(&{
+                    let mut bytes = [0u8; 32];
+                    bytes[0..8].copy_from_slice(&(i as u64).to_be_bytes());
+                    bytes
+                });
+                make_test_stored_transaction(hash, 1, block.hash, i as u32)
+            })
+            .collect();
+        let receipts: Vec<StoredReceipt> = txs
+            .iter()
+            .enumerate()
+            .map(|(i, tx)| make_test_stored_receipt(tx.hash, 1, block.hash, i as u32, true))
+            .collect();
+
+        let expected_hashes: Vec<B256> = txs.iter().map(|tx| tx.hash).collect();
+        index.store_block(block, txs, receipts).unwrap();
+
+        let retrieved = index.get_block_transactions(1).unwrap();
+        assert_eq!(retrieved.len(), tx_count);
+        assert_eq!(retrieved, expected_hashes);
+    }
+
+    /// Tests chunk boundary conditions: exactly one full chunk, one-over, and zero txs.
+    #[test]
+    fn test_chunked_txs_boundary() {
+        let storage = Arc::new(MockStorage::new());
+        let index = PersistentChainIndex::new(storage);
+
+        // Exactly TX_HASH_CHUNK_SIZE (one full chunk)
+        let block = make_test_stored_block(1);
+        let count = super::TX_HASH_CHUNK_SIZE;
+        let txs: Vec<StoredTransaction> = (0..count)
+            .map(|i| {
+                let hash = B256::repeat_byte(i as u8);
+                make_test_stored_transaction(hash, 1, block.hash, i as u32)
+            })
+            .collect();
+        let receipts: Vec<StoredReceipt> = txs
+            .iter()
+            .enumerate()
+            .map(|(i, tx)| make_test_stored_receipt(tx.hash, 1, block.hash, i as u32, true))
+            .collect();
+        index.store_block(block.clone(), txs, receipts).unwrap();
+        assert_eq!(index.get_block_transactions(1).unwrap().len(), count);
+
+        // TX_HASH_CHUNK_SIZE + 1 (boundary)
+        let block2 = make_test_stored_block(2);
+        let count2 = super::TX_HASH_CHUNK_SIZE + 1;
+        let txs2: Vec<StoredTransaction> = (0..count2)
+            .map(|i| {
+                let mut bytes = [0u8; 32];
+                bytes[0] = 0xBB;
+                bytes[1..9].copy_from_slice(&(i as u64).to_be_bytes());
+                let hash = B256::from_slice(&bytes);
+                make_test_stored_transaction(hash, 2, block2.hash, i as u32)
+            })
+            .collect();
+        let receipts2: Vec<StoredReceipt> = txs2
+            .iter()
+            .enumerate()
+            .map(|(i, tx)| make_test_stored_receipt(tx.hash, 2, block2.hash, i as u32, true))
+            .collect();
+        index.store_block(block2, txs2, receipts2).unwrap();
+        assert_eq!(index.get_block_transactions(2).unwrap().len(), count2);
+
+        // 0 txs
+        let block3 = make_test_stored_block(3);
+        index.store_block(block3, vec![], vec![]).unwrap();
+        assert_eq!(index.get_block_transactions(3).unwrap().len(), 0);
+    }
+
+    /// Tests chunked log roundtrip with more than LOG_CHUNK_SIZE logs.
+    #[test]
+    fn test_chunked_logs_roundtrip() {
+        let storage = Arc::new(MockStorage::new());
+        let index = PersistentChainIndex::new(storage);
+
+        let block = make_test_stored_block(1);
+        let tx_hash = B256::repeat_byte(0xAA);
+        let tx = make_test_stored_transaction(tx_hash, 1, block.hash, 0);
+
+        let log_count = super::LOG_CHUNK_SIZE + 5; // 21 logs -- spans 2 chunks
+        let mut receipt = make_test_stored_receipt(tx_hash, 1, block.hash, 0, true);
+        receipt.logs = (0..log_count)
+            .map(|i| StoredLog {
+                address: Address::repeat_byte(i as u8),
+                topics: vec![B256::repeat_byte(i as u8)],
+                data: Bytes::from(vec![i as u8]),
+            })
+            .collect();
+
+        index.store_block(block, vec![tx], vec![receipt]).unwrap();
+
+        let logs = index.get_logs_by_block(1).unwrap();
+        assert_eq!(logs.len(), log_count);
+        // Verify ordering preserved
+        for (i, log) in logs.iter().enumerate() {
+            assert_eq!(log.address, Address::repeat_byte(i as u8));
+        }
+    }
+
+    /// Tests that a missing chunk key returns an error instead of silent data loss.
+    #[test]
+    fn test_missing_chunk_returns_error() {
+        let storage = Arc::new(MockStorage::new());
+        let index = PersistentChainIndex::new(Arc::clone(&storage));
+
+        // Store a block with enough txs to create 2 chunks
+        let block = make_test_stored_block(1);
+        let count = super::TX_HASH_CHUNK_SIZE + 1;
+        let txs: Vec<StoredTransaction> = (0..count)
+            .map(|i| {
+                let mut bytes = [0u8; 32];
+                bytes[0..8].copy_from_slice(&(i as u64).to_be_bytes());
+                let hash = B256::from_slice(&bytes);
+                make_test_stored_transaction(hash, 1, block.hash, i as u32)
+            })
+            .collect();
+        let receipts: Vec<StoredReceipt> = txs
+            .iter()
+            .enumerate()
+            .map(|(i, tx)| make_test_stored_receipt(tx.hash, 1, block.hash, i as u32, true))
+            .collect();
+        index.store_block(block, txs, receipts).unwrap();
+
+        // Verify it works first
+        assert_eq!(index.get_block_transactions(1).unwrap().len(), count);
+
+        // Delete the second chunk key from storage directly
+        let chunk_key = super::keys::block_txs_chunk_key(1, 1);
+        {
+            let mut data = storage.data.write().unwrap();
+            data.remove(&chunk_key);
+        }
+
+        // Now reading should return an error, not silently skip
+        let result = index.get_block_transactions(1);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("missing tx chunk"),
+            "Expected 'missing tx chunk' error, got: {}",
+            err_msg
+        );
     }
 }
 

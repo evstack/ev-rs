@@ -1,4 +1,5 @@
 import {
+  type Hash,
   createWalletClient,
   createPublicClient,
   http,
@@ -9,7 +10,7 @@ import { Agent, createAgentConfig } from "./agent.js";
 import { MetricsCollector } from "./metrics.js";
 import type { PoolConfig, PoolMetrics, RequestResult } from "./types.js";
 import {
-  HARDHAT_AGENT_KEYS,
+  getAgentPrivateKeys,
   TOKEN_ACCOUNT_CANDIDATES,
   accountIdToAddress,
   addressToAccountId,
@@ -34,7 +35,8 @@ export class AgentPool {
   }
 
   async initialize(): Promise<void> {
-    const agentCount = Math.min(this.config.agentCount, HARDHAT_AGENT_KEYS.length);
+    const agentKeys = getAgentPrivateKeys(this.config.agentCount);
+    const agentCount = agentKeys.length;
     console.log(`Initializing pool with ${agentCount} agents...`);
 
     const publicClient = createPublicClient({
@@ -73,7 +75,7 @@ export class AgentPool {
     // Discover token account ID by trial-funding the first agent.
     // eth_getCode is not implemented, so we try each candidate with a real transfer.
     let tokenAccountId: bigint | null = null;
-    const firstKey = HARDHAT_AGENT_KEYS[0];
+    const firstKey = agentKeys[0];
     const firstAgentConfig = createAgentConfig(
       `agent-000`,
       firstKey,
@@ -125,9 +127,13 @@ export class AgentPool {
     this.metrics.registerAgent(fundedFirstConfig.id, fundedFirstConfig.address);
     console.log(`Funded agent ${fundedFirstConfig.id} (${fundedFirstConfig.address.slice(0, 10)}...) with ${this.config.fundingAmount} tokens`);
 
-    // Fund remaining agents
+    // Fund remaining agents in parallel: batch-send all txs, then wait for the last receipt
+    const fundingTxHashes: Hash[] = [];
+    const pendingAgents: { config: ReturnType<typeof createAgentConfig> }[] = [];
+    const tokenAddress = accountIdToAddress(tokenAccountId);
+
     for (let i = 1; i < agentCount; i++) {
-      const privateKey = HARDHAT_AGENT_KEYS[i];
+      const privateKey = agentKeys[i];
       const agentConfig = createAgentConfig(
         `agent-${i.toString().padStart(3, "0")}`,
         privateKey,
@@ -139,7 +145,6 @@ export class AgentPool {
 
       const agentAccountId = addressToAccountId(agentConfig.address);
       const data = buildTransferData(agentAccountId, this.config.fundingAmount);
-      const tokenAddress = accountIdToAddress(tokenAccountId);
 
       console.log(
         `Funding agent ${agentConfig.id} (${agentConfig.address.slice(0, 10)}...) with ${this.config.fundingAmount} tokens`
@@ -152,8 +157,18 @@ export class AgentPool {
         gas: 100_000n,
       });
 
-      await chainPublicClient.waitForTransactionReceipt({ hash: txHash });
+      fundingTxHashes.push(txHash);
+      pendingAgents.push({ config: agentConfig });
+    }
 
+    // Wait only for the last receipt - all prior ones are confirmed by then
+    if (fundingTxHashes.length > 0) {
+      const lastTxHash = fundingTxHashes[fundingTxHashes.length - 1];
+      await chainPublicClient.waitForTransactionReceipt({ hash: lastTxHash });
+    }
+
+    // Create all agents after funding is confirmed
+    for (const { config: agentConfig } of pendingAgents) {
       const agent = new Agent(
         agentConfig,
         this.config.serverUrl,
@@ -191,7 +206,19 @@ export class AgentPool {
     console.log("\nStarting agents...");
     this.metrics.start();
 
-    await Promise.all(this.agents.map((agent) => agent.start()));
+    // Stagger agent starts to spread load evenly
+    const staggerWindowMs = 1000 / this.config.requestsPerSecond;
+    await Promise.all(
+      this.agents.map((agent) => {
+        const delay = Math.random() * staggerWindowMs;
+        return new Promise<void>((resolve) =>
+          setTimeout(async () => {
+            await agent.start();
+            resolve();
+          }, delay)
+        );
+      })
+    );
 
     this.metricsInterval = setInterval(() => {
       const poolMetrics = this.metrics.getPoolMetrics();

@@ -1,5 +1,6 @@
 import { bytesToHex, keccak256, toBytes } from "viem";
 import type { Hex } from "viem";
+import { generatePrivateKey } from "viem/accounts";
 
 // Token account candidates (the token gets one of these IDs during genesis)
 export const TOKEN_ACCOUNT_CANDIDATES = [65535n, 65537n];
@@ -24,6 +25,14 @@ export const HARDHAT_AGENT_KEYS: Hex[] = [
   "0xde9be858da4a475276426320d5e9262ecfc3ba460bfac56360bfa6c4c28b4ee0", // #18
   "0xdf57089febbacf7ba0bc227dafbffa9fc08a93fdc68e1e42411a14efcf23656e", // #19
 ];
+
+export function getAgentPrivateKeys(agentCount: number): Hex[] {
+  const keys = [...HARDHAT_AGENT_KEYS];
+  while (keys.length < agentCount) {
+    keys.push(generatePrivateKey());
+  }
+  return keys.slice(0, agentCount);
+}
 
 export function u128ToLeBytes(value: bigint): Uint8Array {
   const bytes = new Uint8Array(16);

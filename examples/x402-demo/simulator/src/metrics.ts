@@ -12,7 +12,6 @@ export class MetricsCollector {
 
   start(): void {
     this.startTime = Date.now();
-    this.agentMetrics.clear();
     this.latencies = [];
     this.recentRequests = [];
   }

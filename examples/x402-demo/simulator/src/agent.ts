@@ -1,13 +1,18 @@
 import {
   type Address,
+  type Chain,
   type Hash,
   type Hex,
+  type HttpTransport,
+  type PublicClient,
+  type WalletClient,
   createWalletClient,
   createPublicClient,
+  keccak256,
   http,
   defineChain,
 } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { privateKeyToAccount, type PrivateKeyAccount } from "viem/accounts";
 import type {
   AgentConfig,
   PaymentPayload,
@@ -21,12 +26,19 @@ import {
   buildTransferData,
 } from "./evolve-utils.js";
 
+const MAX_INFLIGHT = 5;
+
 export class Agent {
   private config: AgentConfig;
   private serverUrl: string;
   private rpcUrl: string;
+  private account: PrivateKeyAccount;
+  private chain: Chain;
+  private walletClient: WalletClient<HttpTransport, Chain, PrivateKeyAccount>;
+  private publicClient: PublicClient<HttpTransport, Chain>;
+  private nextNonce: number | null = null;
   private running: boolean = false;
-  private requestLoop: ReturnType<typeof setTimeout> | null = null;
+  private activeWorkers: Promise<void>[] = [];
   private onResult: ((result: RequestResult) => void) | null = null;
 
   constructor(
@@ -37,6 +49,23 @@ export class Agent {
     this.config = config;
     this.serverUrl = serverUrl;
     this.rpcUrl = rpcUrl;
+    this.account = privateKeyToAccount(this.config.privateKey);
+    this.chain = defineChain({
+      id: this.config.chainId,
+      name: "Evolve Testnet",
+      nativeCurrency: { decimals: 18, name: "Evolve", symbol: "EVO" },
+      rpcUrls: { default: { http: [this.rpcUrl] } },
+    });
+    this.walletClient = createWalletClient({
+      account: this.account,
+      chain: this.chain,
+      transport: http(this.rpcUrl),
+    });
+    this.publicClient = createPublicClient({
+      chain: this.chain,
+      transport: http(this.rpcUrl, { timeout: 60_000 }),
+      pollingInterval: 100,
+    });
   }
 
   get id(): string {
@@ -54,32 +83,32 @@ export class Agent {
   async start(): Promise<void> {
     if (this.running) return;
     this.running = true;
-    this.scheduleNextRequest();
+    for (let i = 0; i < MAX_INFLIGHT; i++) {
+      this.activeWorkers.push(this.runRequestLoop());
+    }
   }
 
   async stop(): Promise<void> {
     this.running = false;
-    if (this.requestLoop) {
-      clearTimeout(this.requestLoop);
-      this.requestLoop = null;
-    }
+    await Promise.all(this.activeWorkers);
+    this.activeWorkers = [];
   }
 
-  private scheduleNextRequest(): void {
-    if (!this.running) return;
+  private async runRequestLoop(): Promise<void> {
+    while (this.running) {
+      const delayMs = (MAX_INFLIGHT * 1000) / this.config.requestsPerSecond;
+      const jitter = Math.random() * delayMs * 0.2;
+      await new Promise((resolve) => setTimeout(resolve, delayMs + jitter));
 
-    const delayMs = 1000 / this.config.requestsPerSecond;
-    const jitter = Math.random() * delayMs * 0.2;
+      if (!this.running) break;
 
-    this.requestLoop = setTimeout(async () => {
       try {
         const result = await this.makeRequest();
         this.onResult?.(result);
       } catch (err) {
         console.error(`Agent ${this.config.id} request error:`, err);
       }
-      this.scheduleNextRequest();
-    }, delayMs + jitter);
+    }
   }
 
   private selectEndpoint(): WeightedEndpoint {
@@ -150,18 +179,18 @@ export class Agent {
       ) as PaymentRequired;
 
       const amount = BigInt(paymentRequired.accepts[0].amount);
-      const payTo = paymentRequired.accepts[0].payTo;
+      const payTo = paymentRequired.accepts[0].payTo as Address;
 
       // Step 3: Submit payment via token transfer
       const paymentStartTime = Date.now();
       const txHash = await this.submitPayment(payTo, amount);
       const paymentLatencyMs = Date.now() - paymentStartTime;
 
-      // Step 4: Retry with payment proof
+      // Step 4: Retry with payment proof (v2 format with resource + accepted)
       const paymentPayload: PaymentPayload = {
         x402Version: 2,
-        scheme: "exact",
-        network: paymentRequired.accepts[0].network,
+        resource: paymentRequired.resource,
+        accepted: paymentRequired.accepts[0],
         payload: { txHash },
       };
 
@@ -217,48 +246,67 @@ export class Agent {
   }
 
   private async submitPayment(to: Address, amount: bigint): Promise<Hash> {
-    const account = privateKeyToAccount(this.config.privateKey);
+    // Pay via token transfer calldata.
+    // We manage nonce locally because the RPC nonce endpoints can lag under load.
+    if (this.nextNonce === null) {
+      this.nextNonce = await this.publicClient.getTransactionCount({
+        address: this.account.address,
+        blockTag: "pending",
+      });
+    }
 
-    const chain = defineChain({
-      id: this.config.chainId,
-      name: "Evolve Testnet",
-      nativeCurrency: { decimals: 18, name: "Evolve", symbol: "EVO" },
-      rpcUrls: { default: { http: [this.rpcUrl] } },
-    });
-
-    const walletClient = createWalletClient({
-      account,
-      chain,
-      transport: http(this.rpcUrl),
-    });
-
-    // Pay via token transfer calldata
     const payToAccountId = addressToAccountId(to);
     const data = buildTransferData(payToAccountId, amount);
     const tokenAddress = accountIdToAddress(this.config.tokenAccountId);
 
-    const txHash = await walletClient.sendTransaction({
-      to: tokenAddress,
-      data,
-      value: 0n,
-      gas: 100_000n,
-    });
+    // Claim nonce synchronously before any await to prevent races between concurrent workers
+    const nonce = this.nextNonce;
+    this.nextNonce = nonce + 1;
 
-    const publicClient = createPublicClient({
-      chain,
-      transport: http(this.rpcUrl),
-    });
+    let hash: Hash;
+    try {
+      hash = await this.walletClient.sendTransaction({
+        nonce,
+        to: tokenAddress,
+        data,
+        value: 0n,
+        gas: 100_000n,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
 
-    await publicClient.waitForTransactionReceipt({ hash: txHash });
+      if (/transaction already in mempool|already known/i.test(msg)) {
+        const rawTxMatch = msg.match(/"params":\["(0x[0-9a-fA-F]+)"\]/);
+        if (rawTxMatch?.[1]) {
+          hash = keccak256(rawTxMatch[1] as `0x${string}`);
+          await this.publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+          return hash;
+        }
+      }
 
-    return txHash;
+      if (/nonce too high/i.test(msg)) {
+        this.nextNonce = await this.publicClient.getTransactionCount({
+          address: this.account.address,
+          blockTag: "pending",
+        });
+      } else if (!/nonce/i.test(msg) && !/already in mempool/i.test(msg)) {
+        // Non-nonce error: the tx was not sent, rollback the nonce
+        this.nextNonce = nonce;
+      }
+
+      throw err;
+    }
+
+    try {
+      await this.publicClient.waitForTransactionReceipt({ hash, timeout: 60_000 });
+      return hash;
+    } catch (err) {
+      throw err;
+    }
   }
 
   async getBalance(): Promise<bigint> {
-    const publicClient = createPublicClient({
-      transport: http(this.rpcUrl),
-    });
-    return publicClient.getBalance({ address: this.config.address });
+    return this.publicClient.getBalance({ address: this.config.address });
   }
 }
 

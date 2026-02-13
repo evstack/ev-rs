@@ -1,8 +1,29 @@
 import { describe, it, expect } from "bun:test";
 import { Hono } from "hono";
-import { x402Middleware, type RouteConfig } from "../src/x402.js";
 import type { EvolveClient } from "../src/evolve.js";
-import type { Address, Hash } from "viem";
+import type { Address } from "viem";
+import type { Network } from "@x402/core/types";
+import type { RoutesConfig } from "@x402/core/http";
+import { x402ResourceServer } from "@x402/core/server";
+import { EvolveFacilitatorClient } from "../src/x402/evolve-facilitator.js";
+import { EvolveSchemeServer } from "../src/x402/evolve-scheme-server.js";
+import { paymentMiddleware } from "../src/x402/hono-middleware.js";
+
+const TEST_NETWORK: Network = "evolve:1337";
+const TEST_PAY_TO: Address = "0x0000000000000000000000000000000000000001";
+
+const TEST_ROUTES: RoutesConfig = {
+  "POST /api/paid": {
+    accepts: {
+      scheme: "exact",
+      payTo: TEST_PAY_TO,
+      price: "100",
+      network: TEST_NETWORK,
+    },
+    description: "Test",
+    mimeType: "application/json",
+  },
+};
 
 function createMockClient(receiptStatus: "success" | "reverted" | null): EvolveClient {
   return {
@@ -15,24 +36,35 @@ function createMockClient(receiptStatus: "success" | "reverted" | null): EvolveC
 
 function createTestApp(client: EvolveClient) {
   const app = new Hono();
-  app.use(
-    "/api/*",
-    x402Middleware({
-      routes: { "POST /api/paid": { price: 100n, description: "Test" } },
-      payTo: "0x0000000000000000000000000000000000000001" as Address,
-      network: "evolve:1337",
-      asset: "native",
-      client,
-    })
-  );
+  const facilitator = new EvolveFacilitatorClient(client, TEST_NETWORK);
+  const resourceServer = new x402ResourceServer(facilitator);
+  resourceServer.register(TEST_NETWORK, new EvolveSchemeServer());
+  app.use("/api/*", paymentMiddleware(TEST_ROUTES, resourceServer));
   app.post("/api/paid", (c) => c.json({ ok: true }));
   app.get("/api/free", (c) => c.json({ ok: true }));
   return app;
 }
 
-function encodePayment(txHash: string, version = 2) {
+function encodePayment(
+  txHash: string,
+  resource = { url: "http://localhost/api/paid", description: "Test", mimeType: "application/json" },
+  accepted = {
+    scheme: "exact",
+    network: TEST_NETWORK,
+    asset: "native",
+    amount: "100",
+    payTo: TEST_PAY_TO,
+    maxTimeoutSeconds: 300,
+    extra: {},
+  },
+) {
   return Buffer.from(
-    JSON.stringify({ x402Version: version, payload: { txHash } })
+    JSON.stringify({
+      x402Version: 2,
+      resource,
+      accepted,
+      payload: { txHash },
+    })
   ).toString("base64");
 }
 
@@ -42,10 +74,15 @@ describe("X402 Payment Flow", () => {
     const res = await app.request("/api/paid", { method: "POST" });
 
     expect(res.status).toBe(402);
-    expect(res.headers.get("PAYMENT-REQUIRED")).toBeTruthy();
+    const paymentHeader = res.headers.get("PAYMENT-REQUIRED");
+    expect(paymentHeader).toBeTruthy();
 
-    const body = await res.json();
-    expect(body.price).toBe("100");
+    // Verify the payment requirement header is valid base64 JSON with required fields
+    const decoded = JSON.parse(Buffer.from(paymentHeader!, "base64").toString());
+    expect(decoded.accepts).toBeDefined();
+    expect(decoded.accepts.length).toBeGreaterThan(0);
+    expect(decoded.accepts[0].payTo).toBeDefined();
+    expect(decoded.accepts[0].network).toBe(TEST_NETWORK);
   });
 
   it("allows access with valid payment proof", async () => {
@@ -59,6 +96,8 @@ describe("X402 Payment Flow", () => {
 
     expect(res.status).toBe(200);
     expect(res.headers.get("PAYMENT-RESPONSE")).toBeTruthy();
+    const body = await res.json();
+    expect(body).toEqual({ ok: true });
   });
 
   it("rejects when transaction not found", async () => {
@@ -70,7 +109,8 @@ describe("X402 Payment Flow", () => {
     });
 
     expect(res.status).toBe(402);
-    expect((await res.json()).reason).toBe("Transaction not found");
+    const paymentHeader = res.headers.get("PAYMENT-REQUIRED");
+    expect(paymentHeader).toBeTruthy();
   });
 
   it("rejects reused transaction (replay protection)", async () => {
@@ -78,16 +118,20 @@ describe("X402 Payment Flow", () => {
     const txHash = "0x" + "c".repeat(64);
     const headers = { "PAYMENT-SIGNATURE": encodePayment(txHash) };
 
-    await app.request("/api/paid", { method: "POST", headers });
-    const res = await app.request("/api/paid", { method: "POST", headers });
+    const first = await app.request("/api/paid", { method: "POST", headers });
+    expect(first.status).toBe(200);
 
+    const res = await app.request("/api/paid", { method: "POST", headers });
     expect(res.status).toBe(402);
-    expect((await res.json()).reason).toBe("Transaction already used");
+    const paymentHeader = res.headers.get("PAYMENT-REQUIRED");
+    expect(paymentHeader).toBeTruthy();
   });
 
   it("passes through unprotected routes", async () => {
     const app = createTestApp(createMockClient("success"));
     const res = await app.request("/api/free");
     expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body).toEqual({ ok: true });
   });
 });

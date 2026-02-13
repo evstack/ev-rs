@@ -15,6 +15,7 @@ export interface Metrics {
   totalRequests: number;
   successfulRequests: number;
   failedRequests: number;
+  mempoolErrors: number;
   successRate: number;
   avgLatencyMs: number;
   p50LatencyMs: number;
@@ -29,6 +30,11 @@ function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0;
   const idx = Math.ceil((p / 100) * sorted.length) - 1;
   return sorted[Math.max(0, idx)];
+}
+
+function isMempoolError(message?: string): boolean {
+  if (!message) return false;
+  return /transaction already in mempool|already known/i.test(message);
 }
 
 export function useMetrics(events: PaymentEvent[]): Metrics {
@@ -70,6 +76,7 @@ export function useMetrics(events: PaymentEvent[]): Metrics {
     let totalRequests = 0;
     let successfulRequests = 0;
     let failedRequests = 0;
+    let mempoolErrors = 0;
 
     for (const event of events) {
       if (!event.agentId) continue;
@@ -108,6 +115,9 @@ export function useMetrics(events: PaymentEvent[]): Metrics {
           failedRequests++;
           agent.failedRequests++;
           agent.lastStatus = "failed";
+          if (isMempoolError(event.error)) {
+            mempoolErrors++;
+          }
           break;
 
         case "payment_submitted":
@@ -140,6 +150,7 @@ export function useMetrics(events: PaymentEvent[]): Metrics {
       totalRequests,
       successfulRequests,
       failedRequests,
+      mempoolErrors,
       successRate: Math.round(successRate * 10) / 10,
       avgLatencyMs: Math.round(avgLatencyMs),
       p50LatencyMs: percentile(sortedLatencies, 50),
