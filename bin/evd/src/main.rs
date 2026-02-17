@@ -31,8 +31,8 @@
 //! # Start with default testapp genesis
 //! evd run
 //!
-//! # Start with a custom genesis file (e.g. for x402 demo)
-//! evd run --genesis-file examples/x402-demo/genesis.json
+//! # Start with a custom genesis file
+//! evd run --genesis-file path/to/genesis.json
 //!
 //! # Custom addresses
 //! evd run --grpc-addr 0.0.0.0:50051 --rpc-addr 0.0.0.0:8545
