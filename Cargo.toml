@@ -81,6 +81,7 @@ commonware-utils = "2026.2.0"
 commonware-codec = "2026.2.0"
 commonware-consensus = "2026.2.0"
 commonware-broadcast = "2026.2.0"
+commonware-macros = "2026.2.0"
 commonware-p2p = "2026.2.0"
 commonware-resolver = "2026.2.0"
 evolve_consensus = { path = "crates/consensus" }

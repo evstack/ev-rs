@@ -2,6 +2,19 @@
 //!
 //! [`ConsensusRunner`] manages the full lifecycle of consensus + P2P subsystems:
 //! network initialization, engine startup, and graceful shutdown.
+//!
+//! # With Marshal (Production)
+//!
+//! For ordered finalized block delivery, initialize the marshal via
+//! [`crate::marshal`] and pass the [`MarshalMailbox`](crate::MarshalMailbox)
+//! as the `reporter` parameter to [`start`](ConsensusRunner::start). The
+//! marshal actor then delivers blocks in sequential height order to the
+//! application reporter. See [`crate::marshal`] for the full wiring pattern.
+//!
+//! # Without Marshal (Testing)
+//!
+//! For testing, pass any `Reporter` implementation directly — the simplex
+//! engine will report raw activity events without ordering guarantees.
 
 use crate::config::ConsensusConfig;
 use crate::engine::{SimplexScheme, SimplexSetup};
@@ -25,6 +38,28 @@ use rand_core::CryptoRngCore;
 /// 2. Call [`start`](Self::start) with the runtime context, automaton, scheme,
 ///    blocker, and network channels.
 /// 3. The returned [`Handle`] completes when the runtime signals shutdown.
+///
+/// # Marshal Integration
+///
+/// For production use with ordered block delivery:
+///
+/// ```rust,ignore
+/// use evolve_consensus::marshal::*;
+///
+/// // 1. Create archive stores
+/// let certs = immutable::Archive::init(ctx, archive_config(&prefix, "certs", codec)).await?;
+/// let blocks = immutable::Archive::init(ctx, archive_config(&prefix, "blocks", ())).await?;
+///
+/// // 2. Initialize marshal
+/// let marshal_cfg = init_marshal_config::<S, B>(&MarshalConfig::default(), scheme, ());
+/// let (actor, mailbox, height) = MarshalActor::init(ctx, certs, blocks, marshal_cfg).await;
+///
+/// // 3. Pass marshal mailbox as reporter to ConsensusRunner::start()
+/// let engine_handle = runner.start(ctx, automaton, relay, mailbox, scheme, blocker, ...);
+///
+/// // 4. Start marshal actor (delivers ordered blocks to app reporter)
+/// let marshal_handle = actor.start(app_reporter, broadcast_buffer, resolver);
+/// ```
 pub struct ConsensusRunner {
     consensus_config: ConsensusConfig,
     _network_config: NetworkConfig,
@@ -41,8 +76,10 @@ impl ConsensusRunner {
 
     /// Start the consensus engine with the given runtime context and components.
     ///
-    /// Builds a simplex engine from the provided components, then starts it
-    /// with the given P2P channel pairs.
+    /// The `reporter` parameter accepts any [`Reporter`] implementation.
+    /// For production, pass a [`MarshalMailbox`](crate::MarshalMailbox) to
+    /// enable ordered block delivery through the marshal actor.
+    /// For testing, pass a mock reporter directly.
     ///
     /// # Returns
     ///
