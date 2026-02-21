@@ -601,3 +601,256 @@ where
         Ok(Response::new(FilterTxsResponse { statuses }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+    use tonic::Code;
+
+    use crate::proto::evnode::v1::executor_service_server::ExecutorService;
+
+    #[derive(Default)]
+    struct MockStorage;
+
+    impl ReadonlyKV for MockStorage {
+        fn get(&self, _key: &[u8]) -> Result<Option<Vec<u8>>, evolve_core::ErrorCode> {
+            Ok(None)
+        }
+    }
+
+    #[derive(Default)]
+    struct MockCodes;
+
+    impl AccountsCodeStorage for MockCodes {
+        fn with_code<F, R>(&self, _identifier: &str, f: F) -> Result<R, evolve_core::ErrorCode>
+        where
+            F: FnOnce(Option<&dyn evolve_core::AccountCode>) -> R,
+        {
+            Ok(f(None))
+        }
+
+        fn list_identifiers(&self) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    struct MockStf {
+        emit_genesis_change: bool,
+        run_genesis_calls: AtomicUsize,
+    }
+
+    impl MockStf {
+        fn new(emit_genesis_change: bool) -> Self {
+            Self {
+                emit_genesis_change,
+                run_genesis_calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl EvnodeStfExecutor<MockStorage, MockCodes> for MockStf {
+        fn execute_block<'a>(
+            &self,
+            _storage: &'a MockStorage,
+            _codes: &'a MockCodes,
+            _block: &ExecutorBlock,
+        ) -> (BlockResult, ExecutionState<'a, MockStorage>) {
+            panic!("execute_block is not used by these tests")
+        }
+
+        fn run_genesis<'a>(
+            &self,
+            _storage: &'a MockStorage,
+            _codes: &'a MockCodes,
+            _initial_height: u64,
+            _genesis_time: u64,
+        ) -> Result<(Vec<StateChange>, B256), EvnodeError> {
+            self.run_genesis_calls.fetch_add(1, Ordering::SeqCst);
+            let changes = if self.emit_genesis_change {
+                vec![StateChange::Set {
+                    key: b"k".to_vec(),
+                    value: b"v".to_vec(),
+                }]
+            } else {
+                Vec::new()
+            };
+            Ok((changes, B256::ZERO))
+        }
+    }
+
+    fn mk_service(
+        emit_genesis_change: bool,
+    ) -> ExecutorServiceImpl<MockStf, MockStorage, MockCodes> {
+        ExecutorServiceImpl::new(
+            MockStf::new(emit_genesis_change),
+            MockStorage,
+            MockCodes,
+            ExecutorServiceConfig::default(),
+        )
+    }
+
+    #[tokio::test]
+    async fn init_chain_rejects_zero_initial_height() {
+        let service = mk_service(false);
+        let req = InitChainRequest {
+            genesis_time: None,
+            initial_height: 0,
+            chain_id: "test-chain".to_string(),
+        };
+
+        let err = service
+            .init_chain(Request::new(req))
+            .await
+            .expect_err("init_chain must reject zero initial_height");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("initial_height must be > 0"));
+    }
+
+    #[tokio::test]
+    async fn init_chain_sets_state_and_pending_changes() {
+        let changes = vec![StateChange::Set {
+            key: b"k".to_vec(),
+            value: b"v".to_vec(),
+        }];
+        let expected_root = compute_state_root(&changes);
+        let service = mk_service(true);
+        let req = InitChainRequest {
+            genesis_time: Some(Timestamp {
+                seconds: 123,
+                nanos: 0,
+            }),
+            initial_height: 7,
+            chain_id: "chain-A".to_string(),
+        };
+
+        let resp = service
+            .init_chain(Request::new(req))
+            .await
+            .expect("init_chain should succeed")
+            .into_inner();
+
+        assert_eq!(resp.state_root, expected_root.to_vec());
+        assert!(service.state.initialized.load(Ordering::SeqCst));
+        assert_eq!(service.state.initial_height.load(Ordering::SeqCst), 7);
+        assert_eq!(service.state.current_height.load(Ordering::SeqCst), 7);
+        assert_eq!(service.state.genesis_time.load(Ordering::SeqCst), 123);
+        assert_eq!(*service.state.chain_id.read().await, "chain-A".to_string());
+        assert_eq!(*service.state.last_state_root.read().await, expected_root);
+        assert_eq!(service.state.pending_changes.read().await.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn init_chain_cannot_be_called_twice() {
+        let service = mk_service(false);
+        let req = InitChainRequest {
+            genesis_time: None,
+            initial_height: 1,
+            chain_id: "test-chain".to_string(),
+        };
+
+        service
+            .init_chain(Request::new(req.clone()))
+            .await
+            .expect("first init should succeed");
+        let err = service
+            .init_chain(Request::new(req))
+            .await
+            .expect_err("second init should fail");
+
+        assert_eq!(err.code(), Code::FailedPrecondition);
+        assert!(err.message().contains("chain already initialized"));
+    }
+
+    #[tokio::test]
+    async fn set_final_requires_initialized_chain() {
+        let service = mk_service(false);
+
+        let err = service
+            .set_final(Request::new(SetFinalRequest { block_height: 1 }))
+            .await
+            .expect_err("set_final should fail before initialization");
+
+        assert_eq!(err.code(), Code::FailedPrecondition);
+        assert!(err.message().contains("chain not initialized"));
+    }
+
+    #[tokio::test]
+    async fn set_final_rejects_height_above_current() {
+        let service = mk_service(false);
+        service
+            .init_chain(Request::new(InitChainRequest {
+                genesis_time: None,
+                initial_height: 5,
+                chain_id: "chain-final".to_string(),
+            }))
+            .await
+            .expect("init should succeed");
+
+        let err = service
+            .set_final(Request::new(SetFinalRequest { block_height: 6 }))
+            .await
+            .expect_err("set_final should reject higher-than-current height");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err
+            .message()
+            .contains("cannot finalize height 6 > current height 5"));
+    }
+
+    #[tokio::test]
+    async fn set_final_updates_finalized_height() {
+        let service = mk_service(false);
+        service
+            .init_chain(Request::new(InitChainRequest {
+                genesis_time: None,
+                initial_height: 3,
+                chain_id: "chain-final-ok".to_string(),
+            }))
+            .await
+            .expect("init should succeed");
+
+        service
+            .set_final(Request::new(SetFinalRequest { block_height: 3 }))
+            .await
+            .expect("set_final should succeed");
+
+        assert_eq!(service.state.finalized_height.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn filter_txs_marks_invalid_transactions_for_removal() {
+        let service = mk_service(false);
+        service
+            .init_chain(Request::new(InitChainRequest {
+                genesis_time: None,
+                initial_height: 1,
+                chain_id: "chain-filter".to_string(),
+            }))
+            .await
+            .expect("init should succeed");
+
+        let req = FilterTxsRequest {
+            txs: vec![vec![0x01], vec![0x02, 0x03], vec![]],
+            max_bytes: 0,
+            max_gas: 0,
+            has_force_included_transaction: false,
+        };
+
+        let resp = service
+            .filter_txs(Request::new(req))
+            .await
+            .expect("filter_txs should succeed")
+            .into_inner();
+
+        assert_eq!(
+            resp.statuses,
+            vec![
+                FilterStatus::FilterRemove as i32,
+                FilterStatus::FilterRemove as i32,
+                FilterStatus::FilterRemove as i32
+            ]
+        );
+    }
+}
