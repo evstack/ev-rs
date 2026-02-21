@@ -2,6 +2,59 @@ use commonware_utils::sequence::FixedBytes;
 use evolve_core::{define_error, ErrorCode};
 use std::fmt;
 
+/// A 32-byte block hash used as a key in block storage.
+///
+/// This is a fixed-size key suitable for use with `commonware_storage::archive::prunable::Archive`.
+pub type BlockHash = FixedBytes<32>;
+
+/// Configuration for the block archive storage.
+///
+/// Block storage is implemented as a `commonware_storage::archive::prunable::Archive`, which is
+/// completely independent of QMDB. Writes to block storage do NOT affect the app hash
+/// (state root / `CommitHash`).
+#[derive(Debug, Clone)]
+pub struct BlockStorageConfig {
+    /// Partition prefix used for block storage journal files.
+    ///
+    /// Two partitions are created from this prefix:
+    /// - `{prefix}-block-index` for the key journal
+    /// - `{prefix}-block-data` for the value blob
+    pub partition_prefix: String,
+
+    /// Number of blocks per archive section (granularity of pruning).
+    ///
+    /// Lower values allow finer-grained pruning at the cost of more open file handles.
+    /// Default: 65536 (prune in ~64k block increments).
+    pub blocks_per_section: u64,
+
+    /// Write buffer size for the key journal, in bytes.
+    ///
+    /// Default: 1MB
+    pub key_write_buffer: usize,
+
+    /// Write buffer size for the value blob, in bytes.
+    ///
+    /// Default: 4MB (blocks can be large)
+    pub value_write_buffer: usize,
+
+    /// Read buffer size for journal replay on startup, in bytes.
+    ///
+    /// Default: 4096 bytes
+    pub replay_buffer: usize,
+}
+
+impl Default for BlockStorageConfig {
+    fn default() -> Self {
+        Self {
+            partition_prefix: "evolve-blocks".to_string(),
+            blocks_per_section: 65_536,
+            key_write_buffer: 1024 * 1024,       // 1MB
+            value_write_buffer: 4 * 1024 * 1024, // 4MB
+            replay_buffer: 4096,
+        }
+    }
+}
+
 /// Represents a commit hash from the storage layer
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 pub struct CommitHash([u8; 32]);
