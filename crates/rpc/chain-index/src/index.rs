@@ -159,6 +159,7 @@ impl PersistentChainIndex {
                  tx_type INTEGER NOT NULL,
                  FOREIGN KEY (block_number) REFERENCES blocks(number)
              );
+             CREATE INDEX IF NOT EXISTS idx_receipts_block ON receipts(block_number);
 
              CREATE TABLE IF NOT EXISTS logs (
                  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -171,6 +172,7 @@ impl PersistentChainIndex {
              );
              CREATE INDEX IF NOT EXISTS idx_logs_block ON logs(block_number);
              CREATE INDEX IF NOT EXISTS idx_logs_address ON logs(address);
+             CREATE INDEX IF NOT EXISTS idx_logs_tx ON logs(transaction_hash);
 
              CREATE TABLE IF NOT EXISTS metadata (
                  key TEXT PRIMARY KEY,
@@ -195,7 +197,7 @@ impl PersistentChainIndex {
     }
 
     fn row_to_stored_block(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredBlock> {
-        use alloy_primitives::{Address, Bytes};
+        use alloy_primitives::Bytes;
 
         let number: i64 = row.get(0)?;
         let hash_bytes: Vec<u8> = row.get(1)?;
@@ -212,22 +214,22 @@ impl PersistentChainIndex {
 
         Ok(StoredBlock {
             number: number as u64,
-            hash: B256::from_slice(&hash_bytes),
-            parent_hash: B256::from_slice(&parent_hash_bytes),
-            state_root: B256::from_slice(&state_root_bytes),
-            transactions_root: B256::from_slice(&transactions_root_bytes),
-            receipts_root: B256::from_slice(&receipts_root_bytes),
+            hash: b256_from_row(&hash_bytes, 1)?,
+            parent_hash: b256_from_row(&parent_hash_bytes, 2)?,
+            state_root: b256_from_row(&state_root_bytes, 3)?,
+            transactions_root: b256_from_row(&transactions_root_bytes, 4)?,
+            receipts_root: b256_from_row(&receipts_root_bytes, 5)?,
             timestamp: timestamp as u64,
             gas_used: gas_used as u64,
             gas_limit: gas_limit as u64,
             transaction_count: transaction_count as u32,
-            miner: Address::from_slice(&miner_bytes),
+            miner: address_from_row(&miner_bytes, 10)?,
             extra_data: Bytes::from(extra_data_bytes),
         })
     }
 
     fn row_to_stored_transaction(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredTransaction> {
-        use alloy_primitives::{Address, Bytes, U256};
+        use alloy_primitives::{Bytes, U256};
 
         let hash_bytes: Vec<u8> = row.get(0)?;
         let block_number: i64 = row.get(1)?;
@@ -246,13 +248,18 @@ impl PersistentChainIndex {
         let tx_type: i64 = row.get(14)?;
         let chain_id: Option<i64> = row.get(15)?;
 
+        let to = to_bytes
+            .as_deref()
+            .map(|b| address_from_row(b, 5))
+            .transpose()?;
+
         Ok(StoredTransaction {
-            hash: B256::from_slice(&hash_bytes),
+            hash: b256_from_row(&hash_bytes, 0)?,
             block_number: block_number as u64,
-            block_hash: B256::from_slice(&block_hash_bytes),
+            block_hash: b256_from_row(&block_hash_bytes, 2)?,
             transaction_index: transaction_index as u32,
-            from: Address::from_slice(&from_bytes),
-            to: to_bytes.as_deref().map(Address::from_slice),
+            from: address_from_row(&from_bytes, 4)?,
+            to,
             value: U256::from_be_slice(&value_bytes),
             gas: gas as u64,
             gas_price: U256::from_be_slice(&gas_price_bytes),
@@ -267,8 +274,6 @@ impl PersistentChainIndex {
     }
 
     fn row_to_stored_receipt(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredReceipt> {
-        use alloy_primitives::Address;
-
         let transaction_hash_bytes: Vec<u8> = row.get(0)?;
         let transaction_index: i64 = row.get(1)?;
         let block_hash_bytes: Vec<u8> = row.get(2)?;
@@ -281,16 +286,25 @@ impl PersistentChainIndex {
         let status: i64 = row.get(9)?;
         let tx_type: i64 = row.get(10)?;
 
+        let to = to_bytes
+            .as_deref()
+            .map(|b| address_from_row(b, 5))
+            .transpose()?;
+        let contract_address = contract_address_bytes
+            .as_deref()
+            .map(|b| address_from_row(b, 8))
+            .transpose()?;
+
         Ok(StoredReceipt {
-            transaction_hash: B256::from_slice(&transaction_hash_bytes),
+            transaction_hash: b256_from_row(&transaction_hash_bytes, 0)?,
             transaction_index: transaction_index as u32,
-            block_hash: B256::from_slice(&block_hash_bytes),
+            block_hash: b256_from_row(&block_hash_bytes, 2)?,
             block_number: block_number as u64,
-            from: Address::from_slice(&from_bytes),
-            to: to_bytes.as_deref().map(Address::from_slice),
+            from: address_from_row(&from_bytes, 4)?,
+            to,
             cumulative_gas_used: cumulative_gas_used as u64,
             gas_used: gas_used as u64,
-            contract_address: contract_address_bytes.as_deref().map(Address::from_slice),
+            contract_address,
             logs: vec![], // logs are stored separately
             status: status as u8,
             tx_type: tx_type as u8,
@@ -371,7 +385,7 @@ impl ChainIndex for PersistentChainIndex {
         let hashes: rusqlite::Result<Vec<B256>> = stmt
             .query_map(params![number as i64], |row| {
                 let bytes: Vec<u8> = row.get(0)?;
-                Ok(B256::from_slice(&bytes))
+                b256_from_row(&bytes, 0)
             })?
             .collect();
 
@@ -478,8 +492,8 @@ impl ChainIndex for PersistentChainIndex {
         let block_number = block.number;
         let block_hash = block.hash;
 
-        let conn = self.connection.lock().unwrap();
-        let tx = conn.unchecked_transaction()?;
+        let mut conn = self.connection.lock().unwrap();
+        let tx = conn.transaction()?;
 
         // Delete existing data for this block number (handles re-indexing the same block)
         tx.execute(
@@ -523,8 +537,8 @@ impl ChainIndex for PersistentChainIndex {
         }
 
         // Insert receipts and logs
-        for receipt in &receipts {
-            insert_receipt(&tx, receipt)?;
+        for (idx, receipt) in receipts.iter().enumerate() {
+            insert_receipt(&tx, receipt, idx as i64)?;
             for log in &receipt.logs {
                 insert_log(&tx, block_number, receipt.transaction_hash, log)?;
             }
@@ -580,7 +594,11 @@ fn insert_transaction(
     Ok(())
 }
 
-fn insert_receipt(tx: &rusqlite::Transaction<'_>, receipt: &StoredReceipt) -> ChainIndexResult<()> {
+fn insert_receipt(
+    tx: &rusqlite::Transaction<'_>,
+    receipt: &StoredReceipt,
+    array_index: i64,
+) -> ChainIndexResult<()> {
     tx.execute(
         "INSERT OR REPLACE INTO receipts
          (transaction_hash, transaction_index, block_hash, block_number, from_addr, to_addr,
@@ -588,7 +606,7 @@ fn insert_receipt(tx: &rusqlite::Transaction<'_>, receipt: &StoredReceipt) -> Ch
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             receipt.transaction_hash.as_slice(),
-            receipt.transaction_index as i64,
+            array_index,
             receipt.block_hash.as_slice(),
             receipt.block_number as i64,
             receipt.from.as_slice(),
@@ -651,17 +669,39 @@ fn parse_stored_log(
     topics_json: &[u8],
     data_bytes: &[u8],
 ) -> rusqlite::Result<StoredLog> {
-    use alloy_primitives::{Address, Bytes};
+    use alloy_primitives::Bytes;
 
     let topics: Vec<B256> = serde_json::from_slice(topics_json).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Blob, Box::new(e))
     })?;
 
     Ok(StoredLog {
-        address: Address::from_slice(address_bytes),
+        address: address_from_row(address_bytes, 0)?,
         topics,
         data: Bytes::from(data_bytes.to_vec()),
     })
+}
+
+fn b256_from_row(bytes: &[u8], col: usize) -> rusqlite::Result<B256> {
+    if bytes.len() != 32 {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            col,
+            rusqlite::types::Type::Blob,
+            format!("expected 32 bytes for B256, got {}", bytes.len()).into(),
+        ));
+    }
+    Ok(B256::from_slice(bytes))
+}
+
+fn address_from_row(bytes: &[u8], col: usize) -> rusqlite::Result<alloy_primitives::Address> {
+    if bytes.len() != 20 {
+        return Err(rusqlite::Error::FromSqlConversionFailure(
+            col,
+            rusqlite::types::Type::Blob,
+            format!("expected 20 bytes for Address, got {}", bytes.len()).into(),
+        ));
+    }
+    Ok(alloy_primitives::Address::from_slice(bytes))
 }
 
 fn u256_to_be_bytes(value: alloy_primitives::U256) -> [u8; 32] {
