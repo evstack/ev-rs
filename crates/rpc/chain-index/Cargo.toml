@@ -34,6 +34,8 @@ lru = "0.12"
 sha2.workspace = true
 futures = "0.3"
 rusqlite.workspace = true
+r2d2 = "0.8"
+r2d2_sqlite = "0.32"
 
 [dev-dependencies]
 proptest = "1.4"

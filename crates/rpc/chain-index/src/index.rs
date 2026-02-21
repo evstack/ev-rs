@@ -1,14 +1,14 @@
 //! Chain index trait and persistent implementation.
 //!
 //! The `ChainIndex` trait defines operations for storing and retrieving chain data.
-//! `PersistentChainIndex` implements this trait using a SQLite database.
-//!
-//! Note: This uses synchronous methods. The SQLite connection is wrapped in a
-//! `Mutex` since `rusqlite::Connection` is not `Sync`.
+//! `PersistentChainIndex` implements this trait using a SQLite database with a
+//! connection pool (r2d2) for concurrent reads and a dedicated writer connection.
 
 use std::sync::Mutex;
 
 use alloy_primitives::B256;
+use r2d2::Pool;
+use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::{params, Connection};
 
 use crate::cache::ChainCache;
@@ -57,17 +57,49 @@ pub trait ChainIndex: Send + Sync {
 }
 
 /// Persistent chain index backed by SQLite.
+///
+/// Uses a connection pool for concurrent reads and a dedicated writer connection
+/// for serialized writes. SQLite WAL mode allows readers to proceed without
+/// blocking the writer and vice versa.
 pub struct PersistentChainIndex {
-    connection: Mutex<Connection>,
+    /// Connection pool for read operations (concurrent).
+    read_pool: Pool<SqliteConnectionManager>,
+    /// Dedicated connection for write operations (serialized).
+    writer: Mutex<Connection>,
     cache: ChainCache,
+}
+
+/// Configure a connection with standard PRAGMAs for WAL mode.
+fn configure_connection(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL;
+         PRAGMA synchronous=NORMAL;
+         PRAGMA foreign_keys=ON;",
+    )
 }
 
 impl PersistentChainIndex {
     /// Create a new persistent chain index backed by an on-disk SQLite database.
     pub fn new(db_path: impl AsRef<std::path::Path>) -> ChainIndexResult<Self> {
-        let conn = Connection::open(db_path)?;
+        // Writer connection -- dedicated for store_block
+        let writer = Connection::open(&db_path)?;
+        configure_connection(&writer)?;
+
+        // Read pool -- concurrent read-only connections
+        let manager = SqliteConnectionManager::file(&db_path)
+            .with_flags(
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .with_init(|conn| configure_connection(conn));
+        let read_pool = Pool::builder()
+            .max_size(4)
+            .build(manager)
+            .map_err(|e| ChainIndexError::Sqlite(e.to_string()))?;
+
         let index = Self {
-            connection: Mutex::new(conn),
+            read_pool,
+            writer: Mutex::new(writer),
             cache: ChainCache::with_defaults(),
         };
         index.init_schema()?;
@@ -75,14 +107,36 @@ impl PersistentChainIndex {
     }
 
     /// Create an in-memory chain index for testing.
+    ///
+    /// In-memory SQLite DBs are per-connection, so tests use a single shared
+    /// connection for both reads and writes via a file-based shared cache URI.
     pub fn in_memory() -> ChainIndexResult<Self> {
-        let conn = Connection::open_in_memory()?;
+        // Use a named in-memory DB with shared cache so all connections see the same data.
+        let uri = format!("file:test_{}?mode=memory&cache=shared", unique_id());
+        let writer = Connection::open(&uri)?;
+        configure_connection(&writer)?;
+
+        let manager = SqliteConnectionManager::file(&uri)
+            .with_init(|conn| configure_connection(conn));
+        let read_pool = Pool::builder()
+            .max_size(2)
+            .build(manager)
+            .map_err(|e| ChainIndexError::Sqlite(e.to_string()))?;
+
         let index = Self {
-            connection: Mutex::new(conn),
+            read_pool,
+            writer: Mutex::new(writer),
             cache: ChainCache::with_defaults(),
         };
         index.init_schema()?;
         Ok(index)
+    }
+
+    /// Get a read connection from the pool.
+    fn read_conn(&self) -> ChainIndexResult<r2d2::PooledConnection<SqliteConnectionManager>> {
+        self.read_pool
+            .get()
+            .map_err(|e| ChainIndexError::Sqlite(e.to_string()))
     }
 
     /// Get direct access to the cache.
@@ -102,13 +156,9 @@ impl PersistentChainIndex {
     }
 
     fn init_schema(&self) -> ChainIndexResult<()> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.writer.lock().unwrap();
         conn.execute_batch(
-            "PRAGMA journal_mode=WAL;
-             PRAGMA synchronous=NORMAL;
-             PRAGMA foreign_keys=ON;
-
-             CREATE TABLE IF NOT EXISTS blocks (
+            "CREATE TABLE IF NOT EXISTS blocks (
                  number INTEGER PRIMARY KEY,
                  hash BLOB NOT NULL UNIQUE,
                  parent_hash BLOB NOT NULL,
@@ -183,7 +233,7 @@ impl PersistentChainIndex {
     }
 
     fn load_latest_block_number(&self) -> ChainIndexResult<Option<u64>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.read_conn()?;
         let result: rusqlite::Result<i64> = conn.query_row(
             "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'latest_block'",
             [],
@@ -325,7 +375,7 @@ impl ChainIndex for PersistentChainIndex {
             return Ok(Some((*block).clone()));
         }
 
-        let conn = self.connection.lock().unwrap();
+        let conn = self.read_conn()?;
         let result = conn.query_row(
             "SELECT number, hash, parent_hash, state_root, transactions_root, receipts_root,
                     timestamp, gas_used, gas_limit, transaction_count, miner, extra_data
@@ -362,7 +412,7 @@ impl ChainIndex for PersistentChainIndex {
             return Ok(Some(n));
         }
 
-        let conn = self.connection.lock().unwrap();
+        let conn = self.read_conn()?;
         let result: rusqlite::Result<i64> = conn.query_row(
             "SELECT number FROM blocks WHERE hash = ?",
             params![hash.as_slice()],
@@ -377,7 +427,7 @@ impl ChainIndex for PersistentChainIndex {
     }
 
     fn get_block_transactions(&self, number: u64) -> ChainIndexResult<Vec<B256>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.read_conn()?;
         let mut stmt = conn.prepare(
             "SELECT hash FROM transactions WHERE block_number = ? ORDER BY transaction_index",
         )?;
@@ -397,7 +447,7 @@ impl ChainIndex for PersistentChainIndex {
             return Ok(Some((*tx).clone()));
         }
 
-        let conn = self.connection.lock().unwrap();
+        let conn = self.read_conn()?;
         let result = conn.query_row(
             "SELECT hash, block_number, block_hash, transaction_index, from_addr, to_addr,
                     value, gas, gas_price, input, nonce, v, r, s, tx_type, chain_id
@@ -417,7 +467,7 @@ impl ChainIndex for PersistentChainIndex {
     }
 
     fn get_transaction_location(&self, hash: B256) -> ChainIndexResult<Option<TxLocation>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.read_conn()?;
         let result: rusqlite::Result<(i64, i64)> = conn.query_row(
             "SELECT block_number, transaction_index FROM transactions WHERE hash = ?",
             params![hash.as_slice()],
@@ -439,7 +489,7 @@ impl ChainIndex for PersistentChainIndex {
             return Ok(Some((*receipt).clone()));
         }
 
-        let conn = self.connection.lock().unwrap();
+        let conn = self.read_conn()?;
         let result = conn.query_row(
             "SELECT transaction_hash, transaction_index, block_hash, block_number,
                     from_addr, to_addr, cumulative_gas_used, gas_used, contract_address,
@@ -463,7 +513,7 @@ impl ChainIndex for PersistentChainIndex {
     }
 
     fn get_logs_by_block(&self, number: u64) -> ChainIndexResult<Vec<StoredLog>> {
-        let conn = self.connection.lock().unwrap();
+        let conn = self.read_conn()?;
         let mut stmt = conn
             .prepare("SELECT address, topics, data FROM logs WHERE block_number = ? ORDER BY id")?;
 
@@ -492,7 +542,7 @@ impl ChainIndex for PersistentChainIndex {
         let block_number = block.number;
         let block_hash = block.hash;
 
-        let mut conn = self.connection.lock().unwrap();
+        let mut conn = self.writer.lock().unwrap();
         let tx = conn.transaction()?;
 
         // Delete existing data for this block number (handles re-indexing the same block)
@@ -680,6 +730,13 @@ fn parse_stored_log(
         topics,
         data: Bytes::from(data_bytes.to_vec()),
     })
+}
+
+/// Generate a unique ID for in-memory shared-cache SQLite databases.
+fn unique_id() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
 fn b256_from_row(bytes: &[u8], col: usize) -> rusqlite::Result<B256> {
