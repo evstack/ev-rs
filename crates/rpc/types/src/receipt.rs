@@ -120,6 +120,7 @@ impl RpcReceipt {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn test_receipt_serialization() {
@@ -134,9 +135,11 @@ mod tests {
             21000,
             vec![],
         );
-        let json = serde_json::to_string(&receipt).unwrap();
-        assert!(json.contains("\"status\":\"0x1\""));
-        assert!(json.contains("\"gasUsed\":\"0x5208\""));
+        let json_value: Value = serde_json::to_value(&receipt).unwrap();
+        assert_eq!(json_value["status"], "0x1");
+        assert_eq!(json_value["gasUsed"], "0x5208");
+        assert_eq!(json_value["cumulativeGasUsed"], "0x5208");
+        assert_eq!(json_value["transactionIndex"], "0x0");
     }
 
     #[test]

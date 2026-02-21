@@ -64,7 +64,6 @@ pub use evolve_simulator;
 mod tests {
     use super::*;
     use evolve_core::AccountId;
-    use std::path::Path;
     use tempfile::TempDir;
 
     fn make_test_trace() -> ExecutionTrace {
@@ -133,41 +132,5 @@ mod tests {
 
         let result = replayer.run_to_breakpoint();
         assert!(matches!(result, StepResult::HitBreakpoint(_)));
-    }
-
-    #[test]
-    fn test_state_inspector() {
-        let trace = make_test_trace();
-        let inspector = StateInspector::at_end(&trace);
-
-        let summary = inspector.summary();
-        assert_eq!(summary.total_keys, 1);
-    }
-
-    #[test]
-    fn test_trace_query() {
-        let trace = make_test_trace();
-
-        let blocks = TraceQuery::new(&trace).blocks().count();
-        assert_eq!(blocks, 2); // start + end
-
-        let state_changes = TraceQuery::new(&trace).state_changes().count();
-        assert_eq!(state_changes, 1);
-    }
-
-    #[test]
-    fn test_format_detection() {
-        assert_eq!(
-            detect_format_from_extension(Path::new("test.trace")),
-            Some(TraceFormat::Binary)
-        );
-        assert_eq!(
-            detect_format_from_extension(Path::new("test.trace.gz")),
-            Some(TraceFormat::BinaryCompressed)
-        );
-        assert_eq!(
-            detect_format_from_extension(Path::new("test.trace.json")),
-            Some(TraceFormat::Json)
-        );
     }
 }

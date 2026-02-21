@@ -222,3 +222,88 @@ pub fn filter_valid_signatures<Tx>(
 
     (valid_txs, indices)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct TestTx {
+        id: u8,
+    }
+
+    struct EvenIdVerifier;
+
+    impl SignatureVerifier<TestTx> for EvenIdVerifier {
+        fn verify_signature(&self, tx: &TestTx) -> SdkResult<()> {
+            if tx.id % 2 == 0 {
+                Ok(())
+            } else {
+                Err(ErrorCode::new(0xAA))
+            }
+        }
+    }
+
+    #[test]
+    fn verify_signatures_parallel_preserves_index_and_errors() {
+        let txs = vec![
+            TestTx { id: 0 },
+            TestTx { id: 1 },
+            TestTx { id: 2 },
+            TestTx { id: 3 },
+        ];
+
+        let results = verify_signatures_parallel(&txs, &EvenIdVerifier);
+
+        assert_eq!(results.len(), txs.len());
+        assert_eq!(results[0].index, 0);
+        assert!(results[0].result.is_ok());
+        assert_eq!(results[1].index, 1);
+        assert_eq!(results[1].result.unwrap_err().id, 0xAA);
+        assert_eq!(results[2].index, 2);
+        assert!(results[2].result.is_ok());
+        assert_eq!(results[3].index, 3);
+        assert_eq!(results[3].result.unwrap_err().id, 0xAA);
+    }
+
+    #[test]
+    fn filter_valid_signatures_keeps_only_valid_and_original_indices() {
+        let txs = vec![
+            TestTx { id: 10 },
+            TestTx { id: 11 },
+            TestTx { id: 12 },
+            TestTx { id: 13 },
+        ];
+        let results = vec![
+            SignatureVerificationResult {
+                index: 0,
+                result: Ok(()),
+            },
+            SignatureVerificationResult {
+                index: 1,
+                result: Err(ErrorCode::new(0x01)),
+            },
+            SignatureVerificationResult {
+                index: 2,
+                result: Ok(()),
+            },
+            SignatureVerificationResult {
+                index: 3,
+                result: Err(ErrorCode::new(0x02)),
+            },
+        ];
+
+        let (valid_txs, indices) = filter_valid_signatures(txs, &results);
+
+        assert_eq!(valid_txs, vec![TestTx { id: 10 }, TestTx { id: 12 }]);
+        assert_eq!(indices, vec![0, 2]);
+    }
+
+    #[test]
+    fn noop_signature_verifier_always_succeeds() {
+        let verifier = NoOpSignatureVerifier;
+        let tx = TestTx { id: 255 };
+
+        assert!(verifier.verify_signature(&tx).is_ok());
+    }
+}

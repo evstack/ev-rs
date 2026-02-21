@@ -195,6 +195,35 @@ mod tests {
     use super::*;
     use crate::message::Message;
     use borsh::{BorshDeserialize, BorshSerialize};
+    use std::collections::BTreeMap;
+
+    struct TestEnv {
+        whoami: AccountId,
+        sender: AccountId,
+        funds: Vec<FungibleAsset>,
+    }
+
+    impl EnvironmentQuery for TestEnv {
+        fn whoami(&self) -> AccountId {
+            self.whoami
+        }
+
+        fn sender(&self) -> AccountId {
+            self.sender
+        }
+
+        fn funds(&self) -> &[FungibleAsset] {
+            &self.funds
+        }
+
+        fn block(&self) -> BlockContext {
+            BlockContext::new(0, 0)
+        }
+
+        fn do_query(&mut self, _to: AccountId, _data: &InvokeRequest) -> SdkResult<InvokeResponse> {
+            Err(ERR_UNKNOWN_FUNCTION)
+        }
+    }
 
     #[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize)]
     struct TestPayload {
@@ -222,5 +251,59 @@ mod tests {
         // Verify payload can be retrieved
         let retrieved: TestPayload = request.get().expect("get should succeed");
         assert_eq!(retrieved, payload);
+    }
+
+    #[test]
+    fn test_one_coin_success() {
+        let mut funds = BTreeMap::new();
+        funds.insert(
+            0,
+            FungibleAsset {
+                asset_id: AccountId::new(1),
+                amount: 100,
+            },
+        );
+        let env = TestEnv {
+            whoami: AccountId::new(10),
+            sender: AccountId::new(20),
+            funds: funds.into_values().collect(),
+        };
+
+        let coin = one_coin(&env).expect("one_coin should succeed with exactly one fund");
+        assert_eq!(coin.asset_id, AccountId::new(1));
+        assert_eq!(coin.amount, 100);
+    }
+
+    #[test]
+    fn test_one_coin_fails_with_zero_funds() {
+        let env = TestEnv {
+            whoami: AccountId::new(10),
+            sender: AccountId::new(20),
+            funds: vec![],
+        };
+
+        let err = one_coin(&env).expect_err("one_coin should fail with zero funds");
+        assert_eq!(err, ERR_ONE_COIN);
+    }
+
+    #[test]
+    fn test_one_coin_fails_with_multiple_funds() {
+        let env = TestEnv {
+            whoami: AccountId::new(10),
+            sender: AccountId::new(20),
+            funds: vec![
+                FungibleAsset {
+                    asset_id: AccountId::new(1),
+                    amount: 10,
+                },
+                FungibleAsset {
+                    asset_id: AccountId::new(2),
+                    amount: 20,
+                },
+            ],
+        };
+
+        let err = one_coin(&env).expect_err("one_coin should fail with multiple funds");
+        assert_eq!(err, ERR_ONE_COIN);
     }
 }

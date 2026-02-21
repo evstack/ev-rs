@@ -1086,10 +1086,18 @@ mod tests {
 
         let result = EthApiServer::block_number(&server).await;
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err().code(),
-            crate::error::codes::INTERNAL_ERROR
-        );
+        let err = result.unwrap_err();
+        assert_eq!(err.code(), crate::error::codes::INTERNAL_ERROR);
+        assert_eq!(err.message(), "test error");
+    }
+
+    #[tokio::test]
+    async fn test_block_number_success() {
+        let provider = MockStateProvider::new().with_block_number(777);
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        let result = EthApiServer::block_number(&server).await.unwrap();
+        assert_eq!(result, U64::from(777));
     }
 
     // ==================== Fee history tests ====================
@@ -1112,6 +1120,10 @@ mod tests {
 
         assert_eq!(result.base_fee_per_gas.len(), 1025); // capped at 1024 + 1
         assert_eq!(result.gas_used_ratio.len(), 1024);
+        assert_eq!(result.oldest_block, U64::ZERO);
+        assert!(result.reward.is_none());
+        assert!(result.base_fee_per_gas.iter().all(|fee| *fee == U256::ZERO));
+        assert!(result.gas_used_ratio.iter().all(|ratio| *ratio == 0.0));
     }
 
     // ==================== Transaction count extraction ====================
@@ -1379,6 +1391,11 @@ mod tests {
         let names: Vec<_> = result.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"Token"));
         assert!(names.contains(&"NFT"));
+        for schema in &result {
+            assert!(schema.init.is_some());
+            assert_eq!(schema.exec_functions.len(), 1);
+            assert_eq!(schema.query_functions.len(), 1);
+        }
     }
 
     #[tokio::test]

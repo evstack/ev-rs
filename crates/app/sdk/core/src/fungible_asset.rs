@@ -98,6 +98,39 @@ mod tests {
         let result = asset1.increase(asset2);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), crate::ERR_INCOMPATIBLE_FA);
+        assert_eq!(asset1.amount, 100);
+    }
+
+    #[test]
+    fn test_decrease_different_id() {
+        let mut asset1 = FungibleAsset {
+            asset_id: AccountId::new(1111),
+            amount: 100,
+        };
+        let asset2 = FungibleAsset {
+            asset_id: AccountId::new(2222),
+            amount: 50,
+        };
+        let result = asset1.decrease(asset2);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), crate::ERR_INCOMPATIBLE_FA);
+        assert_eq!(asset1.amount, 100);
+    }
+
+    #[test]
+    fn test_increase_overflow() {
+        let mut asset1 = FungibleAsset {
+            asset_id: AccountId::new(1),
+            amount: u128::MAX,
+        };
+        let asset2 = FungibleAsset {
+            asset_id: AccountId::new(1),
+            amount: 1,
+        };
+        let result = asset1.increase(asset2);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), crate::ERR_OVERFLOW);
+        assert_eq!(asset1.amount, u128::MAX);
     }
 
     #[test]
@@ -113,5 +146,6 @@ mod tests {
         let result = asset1.decrease(asset2);
         assert!(result.is_err());
         assert_eq!(result.unwrap_err(), crate::ERR_INSUFFICIENT_BALANCE);
+        assert_eq!(asset1.amount, 100);
     }
 }

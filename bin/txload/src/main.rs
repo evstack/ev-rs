@@ -525,3 +525,127 @@ async fn run_loadtest(config: LoadtestConfig) -> Result<(), String> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixed_key() -> SigningKey {
+        parse_signing_key("0x1111111111111111111111111111111111111111111111111111111111111111")
+            .expect("fixed key should parse")
+    }
+
+    #[test]
+    fn parse_signing_key_accepts_prefixed_and_unprefixed_hex() {
+        let with_prefix =
+            parse_signing_key("0x1111111111111111111111111111111111111111111111111111111111111111")
+                .expect("with-prefix key should parse");
+        let without_prefix =
+            parse_signing_key("1111111111111111111111111111111111111111111111111111111111111111")
+                .expect("without-prefix key should parse");
+
+        assert_eq!(
+            wallet_address(&with_prefix),
+            wallet_address(&without_prefix)
+        );
+    }
+
+    #[test]
+    fn parse_signing_key_rejects_wrong_length() {
+        let err = parse_signing_key("0x1234").expect_err("short key must fail");
+        assert!(err.contains("private key must be 32 bytes"));
+    }
+
+    #[test]
+    fn parse_hex_u64_handles_common_cases() {
+        assert_eq!(parse_hex_u64("0x0").unwrap(), 0);
+        assert_eq!(parse_hex_u64("0Xff").unwrap(), 255);
+        assert_eq!(parse_hex_u64("a").unwrap(), 10);
+        assert_eq!(parse_hex_u64("").unwrap(), 0);
+        assert!(parse_hex_u64("0xzz").is_err());
+    }
+
+    #[test]
+    fn build_transfer_calldata_has_selector_and_borsh_args() {
+        let recipient = AccountId::new(42);
+        let amount = 999_u128;
+
+        let calldata = build_transfer_calldata(recipient, amount).unwrap();
+        assert!(calldata.len() > 4);
+        assert_eq!(&calldata[0..4], &transfer_selector());
+
+        let decoded: (AccountId, u128) = borsh::from_slice(&calldata[4..]).unwrap();
+        assert_eq!(decoded.0, recipient);
+        assert_eq!(decoded.1, amount);
+    }
+
+    #[test]
+    fn create_signed_tx_is_type_2_and_deterministic() {
+        let key = fixed_key();
+        let params = TxBuildParams {
+            chain_id: 1,
+            to: wallet_address(&key),
+            gas_limit: 21_000,
+            max_priority_fee_per_gas: 1_000_000_000,
+            max_fee_per_gas: 2_000_000_000,
+        };
+        let input = vec![1, 2, 3, 4];
+
+        let tx1 = create_signed_tx(&key, 7, input.clone(), params);
+        let tx2 = create_signed_tx(&key, 7, input, params);
+
+        assert!(!tx1.is_empty());
+        assert_eq!(tx1[0], 0x02);
+        assert_eq!(tx1, tx2);
+    }
+
+    #[tokio::test]
+    async fn run_loadtest_validates_config_before_network() {
+        let key = fixed_key();
+        let token_account = wallet_address(&key);
+
+        let base = LoadtestConfig {
+            rpc_url: "http://127.0.0.1:8545".to_string(),
+            chain_id: 1,
+            token_account,
+            funder_key: key,
+            workers: 2,
+            target_tps: 1,
+            duration_secs: 1,
+            fanout_amount: 1,
+            tx_amount: 1,
+            gas_limit: 21_000,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: 1,
+            funding_settle_secs: 0,
+            request_timeout_ms: 100,
+        };
+
+        let err_workers = run_loadtest(LoadtestConfig { workers: 1, ..base })
+            .await
+            .expect_err("workers < 2 should fail");
+        assert!(err_workers.contains("workers must be >= 2"));
+
+        let key2 = fixed_key();
+        let token2 = wallet_address(&key2);
+        let err_tps = run_loadtest(LoadtestConfig {
+            rpc_url: "http://127.0.0.1:8545".to_string(),
+            chain_id: 1,
+            token_account: token2,
+            funder_key: key2,
+            workers: 2,
+            target_tps: 0,
+            duration_secs: 1,
+            fanout_amount: 1,
+            tx_amount: 1,
+            gas_limit: 21_000,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: 1,
+            funding_settle_secs: 0,
+            request_timeout_ms: 100,
+        })
+        .await
+        .expect_err("target_tps == 0 should fail");
+        assert!(err_tps.contains("target_tps must be > 0"));
+    }
+}

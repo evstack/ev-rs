@@ -126,6 +126,98 @@ pub mod scheduler_account {
 
 #[cfg(test)]
 mod tests {
+    use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
+    use evolve_core::{AccountId, ERR_UNAUTHORIZED};
+    use evolve_testing::MockEnv;
+
+    use crate::scheduler_account::Scheduler;
+
+    fn setup_scheduler() -> (Scheduler, MockEnv) {
+        let scheduler = Scheduler::default();
+        let contract_address = AccountId::new(1);
+        let mut env = MockEnv::new(contract_address, RUNTIME_ACCOUNT_ID);
+
+        scheduler
+            .initialize(Vec::new(), Vec::new(), &mut env)
+            .expect("scheduler init must succeed");
+
+        (scheduler, env)
+    }
+
     #[test]
-    fn all_works() {}
+    fn update_begin_blockers_requires_runtime_sender() {
+        let (scheduler, mut env) = setup_scheduler();
+        env = env.with_sender(AccountId::new(999));
+
+        let result = scheduler.update_begin_blockers(vec![AccountId::new(10)], &mut env);
+        assert!(matches!(result, Err(e) if e == ERR_UNAUTHORIZED));
+
+        let stored = scheduler
+            .begin_block_accounts
+            .may_get(&mut env)
+            .unwrap()
+            .unwrap();
+        assert!(stored.is_empty());
+    }
+
+    #[test]
+    fn update_end_blockers_requires_runtime_sender() {
+        let (scheduler, mut env) = setup_scheduler();
+        env = env.with_sender(AccountId::new(999));
+
+        let result = scheduler.update_end_blockers(vec![AccountId::new(20)], &mut env);
+        assert!(matches!(result, Err(e) if e == ERR_UNAUTHORIZED));
+
+        let stored = scheduler
+            .end_block_accounts
+            .may_get(&mut env)
+            .unwrap()
+            .unwrap();
+        assert!(stored.is_empty());
+    }
+
+    #[test]
+    fn runtime_can_update_blockers() {
+        let (scheduler, mut env) = setup_scheduler();
+
+        scheduler
+            .update_begin_blockers(vec![AccountId::new(10), AccountId::new(11)], &mut env)
+            .unwrap();
+        scheduler
+            .update_end_blockers(vec![AccountId::new(20)], &mut env)
+            .unwrap();
+
+        let begin = scheduler
+            .begin_block_accounts
+            .may_get(&mut env)
+            .unwrap()
+            .unwrap();
+        let end = scheduler
+            .end_block_accounts
+            .may_get(&mut env)
+            .unwrap()
+            .unwrap();
+        assert_eq!(begin.len(), 2);
+        assert_eq!(end.len(), 1);
+    }
+
+    #[test]
+    fn schedule_methods_require_runtime_sender() {
+        let (scheduler, mut env) = setup_scheduler();
+        env = env.with_sender(AccountId::new(999));
+
+        let begin_result = scheduler.schedule_begin_block(&mut env);
+        assert!(matches!(begin_result, Err(e) if e == ERR_UNAUTHORIZED));
+
+        let end_result = scheduler.schedule_end_block(&mut env);
+        assert!(matches!(end_result, Err(e) if e == ERR_UNAUTHORIZED));
+    }
+
+    #[test]
+    fn runtime_can_schedule_with_empty_blockers() {
+        let (scheduler, mut env) = setup_scheduler();
+
+        assert!(scheduler.schedule_begin_block(&mut env).is_ok());
+        assert!(scheduler.schedule_end_block(&mut env).is_ok());
+    }
 }

@@ -104,7 +104,7 @@ pub mod account {
 
 #[cfg(test)]
 mod tests {
-    use evolve_core::AccountId;
+    use evolve_core::{AccountId, ERR_UNAUTHORIZED};
     use evolve_testing::MockEnv;
 
     use crate::account::{NoncelessAccount, ERR_TIMESTAMP_REPLAY};
@@ -134,10 +134,11 @@ mod tests {
     fn test_verify_and_update_success() {
         let (account, mut env) = setup_account(42);
 
-        let result = account.verify_and_update(1000, &mut env);
-        assert!(result.is_ok());
-
+        account.verify_and_update(1000, &mut env).unwrap();
         assert_eq!(account.get_last_timestamp(&mut env).unwrap(), 1000);
+
+        account.verify_and_update(1500, &mut env).unwrap();
+        assert_eq!(account.get_last_timestamp(&mut env).unwrap(), 1500);
     }
 
     #[test]
@@ -150,14 +151,17 @@ mod tests {
         // Same timestamp fails
         let result = account.verify_and_update(1000, &mut env);
         assert!(matches!(result, Err(e) if e == ERR_TIMESTAMP_REPLAY));
+        assert_eq!(account.get_last_timestamp(&mut env).unwrap(), 1000);
 
         // Lower timestamp fails
         let result = account.verify_and_update(500, &mut env);
         assert!(matches!(result, Err(e) if e == ERR_TIMESTAMP_REPLAY));
+        assert_eq!(account.get_last_timestamp(&mut env).unwrap(), 1000);
 
         // Higher timestamp succeeds
         let result = account.verify_and_update(2000, &mut env);
         assert!(result.is_ok());
+        assert_eq!(account.get_last_timestamp(&mut env).unwrap(), 2000);
     }
 
     #[test]
@@ -168,6 +172,7 @@ mod tests {
         env = env.with_sender(AccountId::new(999));
 
         let result = account.verify_and_update(1000, &mut env);
-        assert!(result.is_err());
+        assert!(matches!(result, Err(e) if e == ERR_UNAUTHORIZED));
+        assert_eq!(account.get_last_timestamp(&mut env).unwrap(), 0);
     }
 }

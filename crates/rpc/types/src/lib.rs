@@ -187,14 +187,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_account_id_address_roundtrip() {
-        let account_id = evolve_core::AccountId::new(12345);
-        let address = account_id_to_address(account_id);
-        let recovered = address_to_account_id(address);
-        assert_eq!(account_id, recovered);
-    }
-
-    #[test]
     fn test_block_tag_serialization() {
         let tag = BlockTag::Latest;
         let json = serde_json::to_string(&tag).unwrap();

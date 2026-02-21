@@ -144,12 +144,17 @@ impl RpcBlock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn test_block_serialization() {
         let block = RpcBlock::minimal(1, B256::ZERO, B256::ZERO, 1234567890);
-        let json = serde_json::to_string(&block).unwrap();
-        assert!(json.contains("\"number\":\"0x1\""));
-        assert!(json.contains("\"timestamp\":\"0x499602d2\""));
+        let json_value: Value = serde_json::to_value(&block).unwrap();
+        assert_eq!(json_value["number"], "0x1");
+        assert_eq!(json_value["timestamp"], "0x499602d2");
+        assert_eq!(json_value["gasLimit"], "0x1c9c380");
+        assert_eq!(json_value["gasUsed"], "0x0");
+        assert_eq!(json_value["transactions"], serde_json::json!([]));
+        assert_eq!(json_value["uncles"], serde_json::json!([]));
     }
 }

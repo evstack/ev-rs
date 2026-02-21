@@ -356,5 +356,58 @@ mod tests {
             ]),
         };
         assert!(SubscriptionManager::log_matches_filter(&log, &Some(params)));
+
+        // Multiple topics (OR semantics) matches
+        let params = LogSubscriptionParams {
+            address: None,
+            topics: Some(vec![Some(LogFilterTopic::Multiple(vec![
+                B256::repeat_byte(0xff),
+                B256::repeat_byte(0x01),
+            ]))]),
+        };
+        assert!(SubscriptionManager::log_matches_filter(&log, &Some(params)));
+
+        // Topic index out of bounds should fail when a filter is provided
+        let params = LogSubscriptionParams {
+            address: None,
+            topics: Some(vec![
+                None,
+                None,
+                Some(LogFilterTopic::Single(B256::repeat_byte(0x03))),
+            ]),
+        };
+        assert!(!SubscriptionManager::log_matches_filter(
+            &log,
+            &Some(params)
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_logs_receives_published_log() {
+        let manager = SubscriptionManager::new();
+        let mut rx = manager.subscribe_logs();
+        let log = RpcLog {
+            address: Address::repeat_byte(0x01),
+            topics: vec![B256::repeat_byte(0x02)],
+            data: Bytes::from_static(&[0xAA, 0xBB]),
+            block_number: Some(U64::from(10)),
+            transaction_hash: Some(B256::repeat_byte(0x03)),
+            transaction_index: Some(U64::from(1)),
+            block_hash: Some(B256::repeat_byte(0x04)),
+            log_index: Some(U64::from(0)),
+            removed: false,
+        };
+
+        manager.publish_log(log.clone());
+        let received = rx.recv().await.expect("log broadcast must be received");
+        assert_eq!(received.address, log.address);
+        assert_eq!(received.topics, log.topics);
+        assert_eq!(received.data, log.data);
+        assert_eq!(received.block_number, log.block_number);
+        assert_eq!(received.transaction_hash, log.transaction_hash);
+        assert_eq!(received.transaction_index, log.transaction_index);
+        assert_eq!(received.block_hash, log.block_hash);
+        assert_eq!(received.log_index, log.log_index);
+        assert_eq!(received.removed, log.removed);
     }
 }

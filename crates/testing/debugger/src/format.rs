@@ -248,6 +248,17 @@ mod tests {
         builder.finish()
     }
 
+    fn make_large_trace() -> ExecutionTrace {
+        let mut builder = TraceBuilder::new(42, StateSnapshot::empty());
+        builder.block_start(0, 1000);
+        for i in 0..1000u32 {
+            let key = format!("balance:user:{}", i % 10).into_bytes();
+            builder.state_change(key, None, Some(vec![b'x'; 64]));
+        }
+        builder.block_end(0, [0; 32]);
+        builder.finish()
+    }
+
     #[test]
     fn test_binary_roundtrip() {
         let trace = make_test_trace();
@@ -283,15 +294,21 @@ mod tests {
 
     #[test]
     fn test_compression_reduces_size() {
-        let trace = make_test_trace();
+        let trace = make_large_trace();
 
         let uncompressed = serialize_trace(&trace, TraceFormat::Binary).unwrap();
         let compressed = serialize_trace(&trace, TraceFormat::BinaryCompressed).unwrap();
 
-        // For small traces, compression might not help much, but let's at least
-        // verify both work
         assert!(!uncompressed.is_empty());
         assert!(!compressed.is_empty());
+        assert!(
+            compressed.len() < uncompressed.len(),
+            "compressed payload should be smaller for repetitive large traces"
+        );
+
+        let loaded = deserialize_trace(&compressed).unwrap();
+        assert_eq!(loaded.seed, trace.seed);
+        assert_eq!(loaded.len(), trace.len());
     }
 
     #[test]
