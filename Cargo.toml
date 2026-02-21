@@ -27,6 +27,7 @@ members = [
     "crates/testing/debugger",
     "crates/testing/cli",
     "crates/consensus",
+    "crates/p2p",
 ]
 resolver = "2"
 
@@ -68,6 +69,7 @@ evolve_simulator = { path = "crates/testing/simulator" }
 evolve_debugger = { path = "crates/testing/debugger" }
 evolve_node = { path = "crates/app/node" }
 evolve_testapp = { path = "bin/testapp" }
+evolve_p2p = { path = "crates/p2p" }
 
 # outside deps
 linkme = { version = "0.3", default-features = false }
@@ -78,6 +80,8 @@ commonware-utils = "2026.2.0"
 commonware-codec = "2026.2.0"
 commonware-consensus = "2026.2.0"
 commonware-broadcast = "2026.2.0"
+commonware-p2p = "2026.2.0"
+commonware-resolver = "2026.2.0"
 evolve_consensus = { path = "crates/consensus" }
 borsh = { features = ["derive"], version = "1.5.5" }
 clap = { version = "4.5.31", features = ["derive"] }
