@@ -4,6 +4,8 @@
 //! working with the Evolve STF.
 
 use alloy_primitives::{Address, Bloom, Bytes, B256, B64, U256};
+use borsh::{BorshDeserialize, BorshSerialize};
+use evolve_core::encoding::Encodable;
 use evolve_core::BlockContext;
 use evolve_stf_traits::Block as BlockTrait;
 
@@ -167,6 +169,52 @@ impl<Tx> BlockTrait<Tx> for Block<Tx> {
 
     fn gas_limit(&self) -> u64 {
         self.header.gas_limit
+    }
+}
+
+/// Borsh-serializable block snapshot for archive storage.
+///
+/// Contains the essential block data needed for P2P sync and block serving.
+/// Transactions are stored as their encoded byte representation.
+#[derive(BorshSerialize, BorshDeserialize)]
+pub struct ArchivedBlock {
+    pub number: u64,
+    pub timestamp: u64,
+    pub parent_hash: [u8; 32],
+    pub state_root: [u8; 32],
+    pub block_hash: [u8; 32],
+    pub gas_limit: u64,
+    pub gas_used: u64,
+    pub transactions: Vec<Vec<u8>>,
+}
+
+impl<Tx: Encodable> Block<Tx> {
+    /// Create an archived snapshot of this block for storage.
+    ///
+    /// Encodes each transaction via `Encodable::encode()` and captures
+    /// the block hash, state root, and gas used from execution results.
+    pub fn to_archived(
+        &self,
+        block_hash: B256,
+        state_root: B256,
+        gas_used: u64,
+    ) -> Result<ArchivedBlock, evolve_core::ErrorCode> {
+        let transactions: Vec<Vec<u8>> = self
+            .transactions
+            .iter()
+            .map(|tx| tx.encode())
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(ArchivedBlock {
+            number: self.header.number,
+            timestamp: self.header.timestamp,
+            parent_hash: self.header.parent_hash.0,
+            state_root: state_root.0,
+            block_hash: block_hash.0,
+            gas_limit: self.header.gas_limit,
+            gas_used,
+            transactions,
+        })
     }
 }
 

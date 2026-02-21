@@ -1,3 +1,4 @@
+pub mod block_store;
 pub mod cache;
 pub mod metrics;
 pub mod mock;
@@ -5,6 +6,7 @@ pub mod qmdb_impl;
 pub mod types;
 pub mod warming;
 
+pub use block_store::{BlockStorage, BlockStorageError};
 pub use cache::{CachedStorage, CachedValue, DbCache, ShardedDbCache};
 pub use metrics::{OptionalMetrics, StorageMetrics};
 pub use mock::MockStorage;
