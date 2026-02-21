@@ -27,12 +27,15 @@ use crate::types::{
     StorageValueChunk, MAX_VALUE_DATA_SIZE,
 };
 use async_trait::async_trait;
-use commonware_cryptography::sha256::Sha256;
-use commonware_runtime::{utils::buffer::pool::PoolRef, Clock, Metrics, Storage as RStorage};
+use commonware_cryptography::{sha256::Sha256, DigestOf};
+use commonware_runtime::{buffer::paged::CacheRef, Clock, Metrics, Storage as RStorage};
 use commonware_storage::qmdb::{
-    current::{unordered::fixed::Db, FixedConfig},
+    current::{
+        db::{Merkleized, Unmerkleized},
+        unordered::fixed::Db,
+        FixedConfig,
+    },
     store::{Durable, NonDurable},
-    Merkleized, Unmerkleized,
 };
 use commonware_storage::translator::EightCap;
 use evolve_core::{ErrorCode, ReadonlyKV};
@@ -45,8 +48,16 @@ use tokio::sync::RwLock;
 
 /// Type alias for QMDB in Clean state (Merkleized, Durable)
 /// N = 64 because SHA256 digest is 32 bytes, and N must be 2 * digest_size
-type QmdbClean<C> =
-    Db<C, StorageKey, StorageValueChunk, Sha256, EightCap, 64, Merkleized<Sha256>, Durable>;
+type QmdbClean<C> = Db<
+    C,
+    StorageKey,
+    StorageValueChunk,
+    Sha256,
+    EightCap,
+    64,
+    Merkleized<DigestOf<Sha256>>,
+    Durable,
+>;
 
 /// Type alias for QMDB in Mutable state (Unmerkleized, NonDurable)
 type QmdbMutable<C> =
@@ -196,7 +207,7 @@ where
             bitmap_metadata_partition: format!("{}_bitmap-metadata", config.partition_prefix),
             translator: EightCap,
             thread_pool: None,
-            buffer_pool: PoolRef::new(page_size, capacity),
+            page_cache: CacheRef::new(page_size, capacity),
         };
 
         // Initialize QMDB - starts in Clean state (Merkleized, Durable)

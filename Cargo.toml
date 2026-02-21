@@ -26,6 +26,7 @@ members = [
     "crates/testing/simulator",
     "crates/testing/debugger",
     "crates/testing/cli",
+    "crates/p2p",
 ]
 resolver = "2"
 
@@ -67,14 +68,17 @@ evolve_simulator = { path = "crates/testing/simulator" }
 evolve_debugger = { path = "crates/testing/debugger" }
 evolve_node = { path = "crates/app/node" }
 evolve_testapp = { path = "bin/testapp" }
+evolve_p2p = { path = "crates/p2p" }
 
 # outside deps
 linkme = { version = "0.3", default-features = false }
-commonware-cryptography = "0.0.65"
-commonware-runtime = "0.0.65"
-commonware-storage = "0.0.65"
-commonware-utils = "0.0.65"
-commonware-codec = "0.0.65"
+commonware-cryptography = "2026.2.0"
+commonware-runtime = "2026.2.0"
+commonware-storage = "2026.2.0"
+commonware-utils = "2026.2.0"
+commonware-codec = "2026.2.0"
+commonware-p2p = "2026.2.0"
+commonware-resolver = "2026.2.0"
 borsh = { features = ["derive"], version = "1.5.5" }
 clap = { version = "4.5.31", features = ["derive"] }
 fixed = { version = "1.29", features = ["borsh", "serde"] }
