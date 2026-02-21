@@ -92,6 +92,7 @@ alloy-primitives = "0.8"
 alloy-consensus = "0.9"
 alloy-rlp = "0.3"
 alloy-eips = "0.9"
+bytes = "1.5"
 rusqlite = { version = "0.38", features = ["bundled"] }
 [workspace.lints.rust]
 # missing_docs = "deny"

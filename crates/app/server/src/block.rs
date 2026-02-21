@@ -193,14 +193,19 @@ impl<Tx: Encodable> Block<Tx> {
     ///
     /// Encodes each transaction via `Encodable::encode()` and captures
     /// the block hash, state root, and gas used from execution results.
-    pub fn to_archived(&self, block_hash: B256, state_root: B256, gas_used: u64) -> ArchivedBlock {
-        let transactions = self
+    pub fn to_archived(
+        &self,
+        block_hash: B256,
+        state_root: B256,
+        gas_used: u64,
+    ) -> Result<ArchivedBlock, evolve_core::ErrorCode> {
+        let transactions: Vec<Vec<u8>> = self
             .transactions
             .iter()
-            .filter_map(|tx| tx.encode().ok())
-            .collect();
+            .map(|tx| tx.encode())
+            .collect::<Result<Vec<_>, _>>()?;
 
-        ArchivedBlock {
+        Ok(ArchivedBlock {
             number: self.header.number,
             timestamp: self.header.timestamp,
             parent_hash: self.header.parent_hash.0,
@@ -209,7 +214,7 @@ impl<Tx: Encodable> Block<Tx> {
             gas_limit: self.header.gas_limit,
             gas_used,
             transactions,
-        }
+        })
     }
 }
 

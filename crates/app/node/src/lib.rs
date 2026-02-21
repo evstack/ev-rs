@@ -192,18 +192,29 @@ async fn build_block_archive(context: TokioContext) -> Option<OnBlockArchive> {
         }
     };
 
-    let store = Arc::new(tokio::sync::Mutex::new(store));
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<(u64, ArchiveBlockHash, bytes::Bytes)>(64);
+
+    // Single consumer task ensures blocks are written in order.
+    tokio::spawn(async move {
+        let mut store = store;
+        while let Some((block_number, block_hash, block_bytes)) = rx.recv().await {
+            if let Err(e) = store.put_sync(block_number, block_hash, block_bytes).await {
+                tracing::warn!("Failed to archive block {}: {:?}", block_number, e);
+            }
+        }
+    });
+
     tracing::info!("Block archive storage enabled");
 
     let cb: OnBlockArchive = Arc::new(move |block_number, block_hash, block_bytes| {
-        let store = Arc::clone(&store);
         let hash_bytes = ArchiveBlockHash::new(block_hash.0);
-        tokio::spawn(async move {
-            let mut guard = store.lock().await;
-            if let Err(e) = guard.put_sync(block_number, hash_bytes, block_bytes).await {
-                tracing::warn!("Failed to archive block {}: {:?}", block_number, e);
-            }
-        });
+        if let Err(e) = tx.try_send((block_number, hash_bytes, block_bytes)) {
+            tracing::warn!(
+                "Block archive channel full or closed for block {}: {}",
+                block_number,
+                e
+            );
+        }
     });
 
     Some(cb)

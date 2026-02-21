@@ -434,15 +434,25 @@ where
         // Archive the block if a callback is configured.
         // Runs off the hot path via a spawned task (fire-and-forget).
         if let Some(ref cb) = self.on_block_archive {
-            let archived = block.to_archived(block_hash, state_root, gas_used);
-            if let Ok(encoded) = borsh::to_vec(&archived) {
-                let cb = Arc::clone(cb);
-                let archived_bytes = bytes::Bytes::from(encoded);
-                tokio::spawn(async move {
-                    cb(height, block_hash, archived_bytes);
-                });
-            } else {
-                tracing::warn!("Failed to borsh-encode archived block {}", height);
+            match block.to_archived(block_hash, state_root, gas_used) {
+                Ok(archived) => {
+                    if let Ok(encoded) = borsh::to_vec(&archived) {
+                        let cb = Arc::clone(cb);
+                        let archived_bytes = bytes::Bytes::from(encoded);
+                        tokio::spawn(async move {
+                            cb(height, block_hash, archived_bytes);
+                        });
+                    } else {
+                        tracing::warn!("Failed to borsh-encode archived block {}", height);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Failed to encode transactions for block {}: {:?}",
+                        height,
+                        e
+                    );
+                }
             }
         }
 

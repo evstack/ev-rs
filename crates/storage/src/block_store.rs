@@ -53,6 +53,13 @@ pub enum BlockStorageError {
     InvalidConfig(String),
 }
 
+/// Page size for the key journal buffer pool (bytes).
+const KEY_JOURNAL_PAGE_SIZE: u16 = 4096;
+
+/// Number of cached pages in the key journal buffer pool.
+/// Total cache: KEY_JOURNAL_PAGE_SIZE * KEY_JOURNAL_CACHE_PAGES = 256KB by default.
+const KEY_JOURNAL_CACHE_PAGES: usize = 64;
+
 /// Archive-backed block storage.
 ///
 /// Stores block data indexed by both block number and block hash. Independent
@@ -65,13 +72,6 @@ pub enum BlockStorageError {
 ///
 /// `BlockStorage` requires `&mut self` for writes and `&self` for reads. It
 /// should be wrapped in a lock (`tokio::sync::Mutex`) when shared across tasks.
-/// Page size for the key journal buffer pool (bytes).
-const KEY_JOURNAL_PAGE_SIZE: u16 = 4096;
-
-/// Number of cached pages in the key journal buffer pool.
-/// Total cache: KEY_JOURNAL_PAGE_SIZE * KEY_JOURNAL_CACHE_PAGES = 256KB by default.
-const KEY_JOURNAL_CACHE_PAGES: usize = 64;
-
 pub struct BlockStorage<C>
 where
     C: RStorage + Clock + Metrics + Clone + Send + Sync + 'static,
@@ -483,14 +483,28 @@ mod tests {
         });
     }
 
-    /// Verifies the core requirement: block storage does NOT affect the QMDB commit hash.
-    ///
-    /// We create a QmdbStorage, take a commit hash, then write many blocks to a separate
-    /// BlockStorage, then commit QMDB again and verify the hash is unchanged.
+    /// Set up a QMDB + BlockStorage pair for isolation tests.
+    async fn setup_qmdb_and_block_store(
+        context: commonware_runtime::tokio::Context,
+        state_config: crate::types::StorageConfig,
+    ) -> (
+        crate::QmdbStorage<commonware_runtime::tokio::Context>,
+        BlockStorage<commonware_runtime::tokio::Context>,
+    ) {
+        let qmdb = crate::QmdbStorage::new(context.clone(), state_config)
+            .await
+            .unwrap();
+        let block_config = BlockStorageConfig {
+            partition_prefix: "test-blocks".to_string(),
+            ..Default::default()
+        };
+        let block_store = BlockStorage::new(context, block_config).await.unwrap();
+        (qmdb, block_store)
+    }
+
+    /// Verifies block storage writes do NOT affect the QMDB commit hash.
     #[test]
     fn test_block_storage_does_not_affect_commit_hash() {
-        use crate::QmdbStorage;
-
         let temp_dir = TempDir::new().unwrap();
         let state_config = crate::types::StorageConfig {
             path: temp_dir.path().to_path_buf(),
@@ -503,12 +517,8 @@ mod tests {
 
         let runner = Runner::new(runtime_config);
         runner.start(|context| async move {
-            // Set up QmdbStorage (state)
-            let qmdb = QmdbStorage::new(context.clone(), state_config)
-                .await
-                .unwrap();
+            let (qmdb, mut block_store) = setup_qmdb_and_block_store(context, state_config).await;
 
-            // Write some state and commit to get a baseline hash
             qmdb.apply_batch(vec![crate::types::Operation::Set {
                 key: b"account_1".to_vec(),
                 value: b"balance_100".to_vec(),
@@ -516,15 +526,6 @@ mod tests {
             .await
             .unwrap();
             let hash_before = qmdb.commit_state().await.unwrap();
-
-            // Write blocks to the SEPARATE block storage
-            let block_config = BlockStorageConfig {
-                partition_prefix: "test-blocks".to_string(),
-                ..Default::default()
-            };
-            let mut block_store = BlockStorage::new(context.clone(), block_config)
-                .await
-                .unwrap();
 
             for i in 0..100u64 {
                 let hash = make_block_hash(i as u8);
@@ -536,30 +537,61 @@ mod tests {
             }
             block_store.sync().await.unwrap();
 
-            // Commit QMDB again (no new state writes) — hash must be identical
             let hash_after = qmdb.commit_state().await.unwrap();
-
             assert_eq!(
                 hash_before.as_bytes(),
                 hash_after.as_bytes(),
                 "block storage writes must not change the QMDB commit hash"
             );
+        });
+    }
 
-            // Stronger proof: write new state AFTER block storage writes.
-            // The hash should change only due to the state write, proving block
-            // storage didn't corrupt the QMDB namespace.
+    /// Verifies QMDB remains functional after block storage writes.
+    #[test]
+    fn test_qmdb_functional_after_block_storage_writes() {
+        let temp_dir = TempDir::new().unwrap();
+        let state_config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+        runner.start(|context| async move {
+            let (qmdb, mut block_store) = setup_qmdb_and_block_store(context, state_config).await;
+
+            qmdb.apply_batch(vec![crate::types::Operation::Set {
+                key: b"account_1".to_vec(),
+                value: b"balance_100".to_vec(),
+            }])
+            .await
+            .unwrap();
+            let hash_before = qmdb.commit_state().await.unwrap();
+
+            for i in 0..10u64 {
+                let hash = make_block_hash(i as u8);
+                block_store
+                    .put(i, hash, make_block_bytes(b"block data"))
+                    .await
+                    .unwrap();
+            }
+            block_store.sync().await.unwrap();
+
             qmdb.apply_batch(vec![crate::types::Operation::Set {
                 key: b"account_2".to_vec(),
                 value: b"balance_200".to_vec(),
             }])
             .await
             .unwrap();
-            let hash_with_new_state = qmdb.commit_state().await.unwrap();
+            let hash_after = qmdb.commit_state().await.unwrap();
 
             assert_ne!(
+                hash_before.as_bytes(),
                 hash_after.as_bytes(),
-                hash_with_new_state.as_bytes(),
-                "new state write must change the QMDB commit hash (proves QMDB is still functional after block storage writes)"
+                "new state write must change the QMDB commit hash"
             );
         });
     }
