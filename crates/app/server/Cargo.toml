@@ -19,6 +19,7 @@ evolve_tx_eth = { workspace = true }
 
 alloy-primitives = { workspace = true }
 borsh = { workspace = true }
+bytes = "1"
 tokio = { workspace = true }
 async-trait = { workspace = true }
 tracing = { workspace = true }

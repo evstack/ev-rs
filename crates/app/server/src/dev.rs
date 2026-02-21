@@ -38,6 +38,7 @@ use crate::error::ServerError;
 use alloy_primitives::{Address, B256};
 use commonware_runtime::Spawner;
 use evolve_chain_index::{build_index_data, BlockMetadata, ChainIndex};
+use evolve_core::encoding::Encodable;
 use evolve_core::ReadonlyKV;
 use evolve_eth_jsonrpc::SharedSubscriptionManager;
 use evolve_mempool::{Mempool, MempoolTx, SharedMempool};
@@ -51,6 +52,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tokio::sync::RwLock;
+
+/// Callback invoked after each block is produced with its archived bytes.
+///
+/// Arguments: block number, block hash, borsh-encoded `ArchivedBlock` bytes.
+pub type OnBlockArchive = Arc<dyn Fn(u64, B256, bytes::Bytes) + Send + Sync>;
 
 /// Configuration for dev mode block production.
 #[derive(Debug, Clone)]
@@ -172,6 +178,8 @@ pub struct DevConsensus<Stf, S, Codes, Tx: MempoolTx, I = NoopChainIndex> {
     subscriptions: Option<SharedSubscriptionManager>,
     /// Whether block indexing is enabled on block production.
     index_blocks: bool,
+    /// Optional callback for archiving block data.
+    on_block_archive: Option<OnBlockArchive>,
     /// Phantom for Tx type.
     _tx: std::marker::PhantomData<Tx>,
 }
@@ -197,6 +205,7 @@ impl<Stf, S, Codes, Tx: MempoolTx> DevConsensus<Stf, S, Codes, Tx, NoopChainInde
             chain_index: None,
             subscriptions: None,
             index_blocks: false,
+            on_block_archive: None,
             _tx: std::marker::PhantomData,
         }
     }
@@ -232,6 +241,7 @@ impl<Stf, S, Codes, Tx: MempoolTx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             chain_index: Some(chain_index),
             subscriptions: Some(subscriptions),
             index_blocks: true,
+            on_block_archive: None,
             _tx: std::marker::PhantomData,
         }
     }
@@ -257,6 +267,7 @@ impl<Stf, S, Codes, Tx: MempoolTx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             chain_index: Some(chain_index),
             subscriptions: Some(subscriptions),
             index_blocks: true,
+            on_block_archive: None,
             _tx: std::marker::PhantomData,
         }
     }
@@ -291,6 +302,7 @@ impl<Stf, S, Codes, Tx: MempoolTx, I> DevConsensus<Stf, S, Codes, Tx, I> {
             chain_index: None,
             subscriptions: None,
             index_blocks: false,
+            on_block_archive: None,
             _tx: std::marker::PhantomData,
         }
     }
@@ -340,11 +352,17 @@ impl<Stf, S, Codes, Tx: MempoolTx, I> DevConsensus<Stf, S, Codes, Tx, I> {
         self.index_blocks = enabled;
         self
     }
+
+    /// Set a callback for archiving block data after production.
+    pub fn with_block_archive(mut self, cb: OnBlockArchive) -> Self {
+        self.on_block_archive = Some(cb);
+        self
+    }
 }
 
 impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I>
 where
-    Tx: Transaction + MempoolTx + Send + Sync + 'static,
+    Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
@@ -412,6 +430,21 @@ where
         // Update state
         *self.state.last_hash.write().await = block_hash;
         self.state.last_timestamp.store(timestamp, Ordering::SeqCst);
+
+        // Archive the block if a callback is configured.
+        // Runs off the hot path via a spawned task (fire-and-forget).
+        if let Some(ref cb) = self.on_block_archive {
+            let archived = block.to_archived(block_hash, state_root, gas_used);
+            if let Ok(encoded) = borsh::to_vec(&archived) {
+                let cb = Arc::clone(cb);
+                let archived_bytes = bytes::Bytes::from(encoded);
+                tokio::spawn(async move {
+                    cb(height, block_hash, archived_bytes);
+                });
+            } else {
+                tracing::warn!("Failed to borsh-encode archived block {}", height);
+            }
+        }
 
         // Index the block for RPC queries if chain index is configured.
         // This runs off the block-production hot path so indexing I/O does not delay
@@ -542,7 +575,7 @@ where
 /// Works with any transaction type that implements `MempoolTx`.
 impl<Stf, S, Codes, Tx, I> DevConsensus<Stf, S, Codes, Tx, I>
 where
-    Tx: Transaction + MempoolTx + Clone + Send + Sync + 'static,
+    Tx: Transaction + MempoolTx + Encodable + Clone + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,

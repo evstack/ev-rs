@@ -27,8 +27,10 @@ pub mod dev;
 mod error;
 mod persistence;
 
-pub use block::{Block, BlockBuilder, BlockHeader};
-pub use dev::{DevConfig, DevConsensus, NoopChainIndex, ProducedBlock, StfExecutor};
+pub use block::{ArchivedBlock, Block, BlockBuilder, BlockHeader};
+pub use dev::{
+    DevConfig, DevConsensus, NoopChainIndex, OnBlockArchive, ProducedBlock, StfExecutor,
+};
 pub use error::ServerError;
 pub use evolve_mempool::{
     new_shared_mempool, Mempool, MempoolError, MempoolResult, MempoolTx, SharedMempool,

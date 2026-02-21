@@ -20,16 +20,20 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use commonware_runtime::tokio::{Config as TokioConfig, Context as TokioContext, Runner};
 use commonware_runtime::{Runner as RunnerTrait, Spawner};
 use evolve_chain_index::{ChainStateProvider, ChainStateProviderConfig, PersistentChainIndex};
+use evolve_core::encoding::Encodable;
 use evolve_core::ReadonlyKV;
 use evolve_eth_jsonrpc::{start_server_with_subscriptions, RpcServerConfig, SubscriptionManager};
 use evolve_mempool::{new_shared_mempool, Mempool, MempoolTx, SharedMempool};
 use evolve_rpc_types::SyncStatus;
-use evolve_server::StfExecutor;
 use evolve_server::{
     load_chain_state, save_chain_state, ChainState, DevConfig, DevConsensus, CHAIN_STATE_KEY,
 };
+use evolve_server::{OnBlockArchive, StfExecutor};
 use evolve_stf_traits::{AccountsCodeStorage, StateChange, Transaction};
-use evolve_storage::{MockStorage, Operation, Storage, StorageConfig};
+use evolve_storage::types::BlockHash as ArchiveBlockHash;
+use evolve_storage::{
+    BlockStorage, BlockStorageConfig, MockStorage, Operation, Storage, StorageConfig,
+};
 use evolve_tx_eth::TxContext;
 use std::future::Future;
 
@@ -84,7 +88,7 @@ pub fn build_dev_node_with_mempool<Stf, Codes, S, Tx>(
     config: DevConfig,
 ) -> DevNodeMempoolHandles<Stf, S, Codes, Tx>
 where
-    Tx: Transaction + MempoolTx + Send + Sync + 'static,
+    Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
@@ -163,6 +167,48 @@ pub struct GenesisOutput<G> {
 
 type RuntimeContext = TokioContext;
 
+/// Check if block archival is enabled via environment variable.
+fn block_archive_enabled() -> bool {
+    std::env::var("EVOLVE_BLOCK_ARCHIVE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Build the block archive callback if enabled.
+///
+/// Creates a `BlockStorage` backed by the commonware archive and returns
+/// an `OnBlockArchive` callback that writes each produced block into it.
+async fn build_block_archive(context: TokioContext) -> Option<OnBlockArchive> {
+    if !block_archive_enabled() {
+        return None;
+    }
+
+    let config = BlockStorageConfig::default();
+    let store = match BlockStorage::new(context, config).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Failed to initialize block archive: {:?}", e);
+            return None;
+        }
+    };
+
+    let store = Arc::new(tokio::sync::Mutex::new(store));
+    tracing::info!("Block archive storage enabled");
+
+    let cb: OnBlockArchive = Arc::new(move |block_number, block_hash, block_bytes| {
+        let store = Arc::clone(&store);
+        let hash_bytes = ArchiveBlockHash::new(block_hash.0);
+        tokio::spawn(async move {
+            let mut guard = store.lock().await;
+            if let Err(e) = guard.put_sync(block_number, hash_bytes, block_bytes).await {
+                tracing::warn!("Failed to archive block {}: {:?}", block_number, e);
+            }
+        });
+    });
+
+    Some(cb)
+}
+
 /// Run the dev node with default settings (RPC enabled).
 pub fn run_dev_node<
     Stf,
@@ -184,7 +230,7 @@ pub fn run_dev_node<
     run_genesis: RunGenesis,
     build_storage: BuildStorage,
 ) where
-    Tx: Transaction + MempoolTx + Send + Sync + 'static,
+    Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
@@ -233,7 +279,7 @@ pub fn run_dev_node_with_rpc<
     build_storage: BuildStorage,
     rpc_config: RpcConfig,
 ) where
-    Tx: Transaction + MempoolTx + Send + Sync + 'static,
+    Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
@@ -283,6 +329,7 @@ pub fn run_dev_node_with_rpc<
         async move {
             // Clone context early since build_storage takes ownership
             let context_for_shutdown = context.clone();
+            let context_for_archive = context.clone();
             let storage = (build_storage)(context, storage_config)
                 .await
                 .expect("failed to create storage");
@@ -322,6 +369,9 @@ pub fn run_dev_node_with_rpc<
                 chain_id: rpc_config.chain_id,
                 ..Default::default()
             };
+
+            // Build block archive callback if enabled
+            let archive_cb = build_block_archive(context_for_archive).await;
 
             // Set up RPC infrastructure if enabled
             let rpc_handle = if rpc_config.enabled {
@@ -369,17 +419,20 @@ pub fn run_dev_node_with_rpc<
                 .expect("failed to start RPC server");
 
                 // Create DevConsensus with RPC support
-                let dev: Arc<DevConsensus<Stf, S, Codes, Tx, PersistentChainIndex>> = Arc::new(
-                    DevConsensus::with_rpc(
-                        stf,
-                        storage,
-                        codes,
-                        dev_config,
-                        chain_index,
-                        subscriptions,
-                    )
-                    .with_indexing_enabled(rpc_config.enable_block_indexing),
-                );
+                let mut consensus = DevConsensus::with_rpc(
+                    stf,
+                    storage,
+                    codes,
+                    dev_config,
+                    chain_index,
+                    subscriptions,
+                )
+                .with_indexing_enabled(rpc_config.enable_block_indexing);
+                if let Some(cb) = archive_cb {
+                    consensus = consensus.with_block_archive(cb);
+                }
+                let dev: Arc<DevConsensus<Stf, S, Codes, Tx, PersistentChainIndex>> =
+                    Arc::new(consensus);
 
                 tracing::info!(
                     "Block interval: {:?}, starting at height {}",
@@ -421,8 +474,12 @@ pub fn run_dev_node_with_rpc<
                 Some(handle)
             } else {
                 // No RPC - use simple DevConsensus
+                let mut consensus = DevConsensus::new(stf, storage, codes, dev_config);
+                if let Some(cb) = archive_cb {
+                    consensus = consensus.with_block_archive(cb);
+                }
                 let dev: Arc<DevConsensus<Stf, S, Codes, Tx, evolve_server::NoopChainIndex>> =
-                    Arc::new(DevConsensus::new(stf, storage, codes, dev_config));
+                    Arc::new(consensus);
 
                 tracing::info!(
                     "Block interval: {:?}, starting at height {}",
@@ -501,7 +558,7 @@ pub fn run_dev_node_with_rpc_and_mempool<
     build_storage: BuildStorage,
     rpc_config: RpcConfig,
 ) where
-    Tx: Transaction + MempoolTx + Send + Sync + 'static,
+    Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
@@ -711,6 +768,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
 
         async move {
             let context_for_shutdown = context.clone();
+            let context_for_archive = context.clone();
             let storage = (build_storage)(context, storage_config)
                 .await
                 .expect("failed to create storage");
@@ -750,6 +808,9 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
             };
 
             let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
+
+            // Build block archive callback if enabled
+            let archive_cb = build_block_archive(context_for_archive).await;
 
             let rpc_handle = if rpc_config.enabled {
                 let chain_index = Arc::new(
@@ -791,19 +852,21 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                 .await
                 .expect("failed to start RPC server");
 
+                let mut consensus = DevConsensus::with_rpc_and_mempool(
+                    stf,
+                    storage,
+                    codes,
+                    dev_config,
+                    chain_index,
+                    subscriptions,
+                    mempool.clone(),
+                )
+                .with_indexing_enabled(rpc_config.enable_block_indexing);
+                if let Some(cb) = archive_cb {
+                    consensus = consensus.with_block_archive(cb);
+                }
                 let dev: Arc<DevConsensus<Stf, S, Codes, TxContext, PersistentChainIndex>> =
-                    Arc::new(
-                        DevConsensus::with_rpc_and_mempool(
-                            stf,
-                            storage,
-                            codes,
-                            dev_config,
-                            chain_index,
-                            subscriptions,
-                            mempool.clone(),
-                        )
-                        .with_indexing_enabled(rpc_config.enable_block_indexing),
-                    );
+                    Arc::new(consensus);
 
                 tracing::info!(
                     "Block interval: {:?}, max_txs_per_block: {}, starting at height {}",
@@ -841,8 +904,12 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
 
                 Some(handle)
             } else {
+                let mut consensus = DevConsensus::with_mempool(stf, storage, codes, dev_config, mempool);
+                if let Some(cb) = archive_cb {
+                    consensus = consensus.with_block_archive(cb);
+                }
                 let dev: Arc<DevConsensus<Stf, S, Codes, TxContext, evolve_server::NoopChainIndex>> =
-                    Arc::new(DevConsensus::with_mempool(stf, storage, codes, dev_config, mempool));
+                    Arc::new(consensus);
 
                 tracing::info!(
                     "Block interval: {:?}, max_txs_per_block: {}, starting at height {}",
@@ -952,7 +1019,7 @@ pub fn init_dev_node<
     run_genesis: RunGenesis,
     build_storage: BuildStorage,
 ) where
-    Tx: Transaction + MempoolTx + Send + Sync + 'static,
+    Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,

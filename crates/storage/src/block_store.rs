@@ -51,7 +51,6 @@ pub enum BlockStorageError {
 
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
-
 }
 
 /// Archive-backed block storage.
@@ -89,8 +88,8 @@ where
     /// If block data was previously stored, the in-memory index is rebuilt from
     /// the key journal on startup (no value reads are performed during init).
     pub async fn new(context: C, config: BlockStorageConfig) -> Result<Self, BlockStorageError> {
-        let blocks_per_section = std::num::NonZeroU64::new(config.blocks_per_section)
-            .ok_or_else(|| {
+        let blocks_per_section =
+            std::num::NonZeroU64::new(config.blocks_per_section).ok_or_else(|| {
                 BlockStorageError::InvalidConfig("blocks_per_section must be non-zero".to_string())
             })?;
 
