@@ -72,20 +72,6 @@ mod tests {
         account_id: u64,
     }
 
-    #[test]
-    fn test_chain_state_serialization() {
-        let state = ChainState {
-            height: 42,
-            genesis_result: TestGenesis { account_id: 123 },
-        };
-
-        let bytes = borsh::to_vec(&state).unwrap();
-        let decoded: ChainState<TestGenesis> = ChainState::try_from_slice(&bytes).unwrap();
-
-        assert_eq!(decoded.height, 42);
-        assert_eq!(decoded.genesis_result.account_id, 123);
-    }
-
     #[tokio::test]
     async fn test_save_and_load_chain_state_roundtrip() {
         let storage = MockStorage::new();

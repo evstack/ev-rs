@@ -122,6 +122,9 @@ pub fn event_to_log(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evolve_core::{events_api::Event, AccountId, Message};
+    use serde_json::Value;
+    use sha2::{Digest, Sha256};
 
     #[test]
     fn test_log_serialization() {
@@ -135,9 +138,13 @@ mod tests {
             0,
             0,
         );
-        let json = serde_json::to_string(&log).unwrap();
-        assert!(json.contains("\"blockNumber\":\"0x64\""));
-        assert!(json.contains("\"removed\":false"));
+        let json_value: Value = serde_json::to_value(&log).unwrap();
+        assert_eq!(json_value["blockNumber"], "0x64");
+        assert_eq!(json_value["removed"], false);
+        assert_eq!(
+            json_value["address"],
+            "0x0000000000000000000000000000000000000000"
+        );
     }
 
     #[test]
@@ -145,5 +152,31 @@ mod tests {
         let log = RpcLog::pending(Address::ZERO, vec![], Bytes::new());
         assert!(log.block_number.is_none());
         assert!(log.transaction_hash.is_none());
+    }
+
+    #[test]
+    fn test_event_to_log_maps_source_name_and_contents() {
+        let event = Event {
+            source: AccountId::new(42),
+            name: "Transfer".to_string(),
+            contents: Message::from_bytes(vec![0xAB, 0xCD]),
+        };
+        let block_hash = B256::from([0x11; 32]);
+        let tx_hash = B256::from([0x22; 32]);
+
+        let log = event_to_log(&event, 7, block_hash, tx_hash, 3, 2).expect("conversion must work");
+
+        let mut hasher = Sha256::new();
+        hasher.update(b"Transfer");
+        let expected_topic0 = B256::from_slice(&hasher.finalize());
+
+        assert_eq!(log.address, crate::account_id_to_address(event.source));
+        assert_eq!(log.topics, vec![expected_topic0]);
+        assert_eq!(log.data.as_ref(), &[0xAB, 0xCD]);
+        assert_eq!(log.block_number, Some(U64::from(7)));
+        assert_eq!(log.transaction_hash, Some(tx_hash));
+        assert_eq!(log.transaction_index, Some(U64::from(3)));
+        assert_eq!(log.block_hash, Some(block_hash));
+        assert_eq!(log.log_index, Some(U64::from(2)));
     }
 }

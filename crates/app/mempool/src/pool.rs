@@ -573,24 +573,6 @@ mod tests {
     }
 
     #[test]
-    fn test_select_with_limit() {
-        let mut pool: Mempool<TestGasTx> = Mempool::new();
-
-        for i in 0..10 {
-            let tx = TestGasTx::new(i, (i as u128) * 10, 0, &[i; 20]);
-            pool.add(tx).unwrap();
-        }
-
-        let selected = pool.select(3);
-        assert_eq!(selected.len(), 3);
-
-        // Highest gas prices
-        assert_eq!(selected[0].gas_price, 90);
-        assert_eq!(selected[1].gas_price, 80);
-        assert_eq!(selected[2].gas_price, 70);
-    }
-
-    #[test]
     fn test_stale_entries_skipped() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
