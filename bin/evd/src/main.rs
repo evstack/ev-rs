@@ -216,8 +216,13 @@ fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
 
             // Create shared mempool
             let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
-            // Create chain index (shared between RPC and block callback)
-            let chain_index = Arc::new(PersistentChainIndex::new(Arc::new(storage.clone())));
+            // Create chain index backed by SQLite
+            let chain_index_db_path =
+                std::path::PathBuf::from(&config.storage.path).join("chain-index.sqlite");
+            let chain_index = Arc::new(
+                PersistentChainIndex::new(&chain_index_db_path)
+                    .expect("failed to open chain index database"),
+            );
             if let Err(e) = chain_index.initialize() {
                 tracing::warn!("Failed to initialize chain index: {:?}", e);
             }

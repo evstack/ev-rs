@@ -1,123 +1,19 @@
 //! Chain index trait and persistent implementation.
 //!
 //! The `ChainIndex` trait defines operations for storing and retrieving chain data.
-//! `PersistentChainIndex` implements this trait using the storage layer.
+//! `PersistentChainIndex` implements this trait using a SQLite database.
 //!
-//! Note: This uses synchronous methods to avoid Send bound issues with the underlying
-//! storage. Reads are already synchronous, and writes use `futures::executor::block_on`.
+//! Note: This uses synchronous methods. The SQLite connection is wrapped in a
+//! `Mutex` since `rusqlite::Connection` is not `Sync`.
 
-use std::sync::Arc;
+use std::sync::Mutex;
 
 use alloy_primitives::B256;
+use rusqlite::{params, Connection};
 
 use crate::cache::ChainCache;
 use crate::error::{ChainIndexError, ChainIndexResult};
 use crate::types::{StoredBlock, StoredLog, StoredReceipt, StoredTransaction, TxLocation};
-use evolve_storage::Storage;
-
-/// Maximum number of transaction hashes per storage chunk.
-const TX_HASH_CHUNK_SIZE: usize = 32;
-
-/// Maximum number of log entries per storage chunk.
-const LOG_CHUNK_SIZE: usize = 16;
-
-/// Storage key prefixes for chain data.
-mod keys {
-    use alloy_primitives::B256;
-
-    /// Block header by number: `blk:h:{number}` -> StoredBlock
-    pub const BLOCK_HEADER: &[u8] = b"blk:h:";
-    /// Block number by hash: `blk:n:{hash}` -> u64
-    pub const BLOCK_NUMBER: &[u8] = b"blk:n:";
-    /// Transaction hashes in block: `blk:t:{number}` -> Vec<B256>
-    pub const BLOCK_TXS: &[u8] = b"blk:t:";
-    /// Chunked transaction hashes count by block: `blk:t:c:{number}` -> u32
-    pub const BLOCK_TXS_CHUNK_COUNT: &[u8] = b"blk:t:c:";
-    /// Chunked transaction hashes by block/index: `blk:t:k:{number}:{idx}` -> Vec<B256>
-    pub const BLOCK_TXS_CHUNK: &[u8] = b"blk:t:k:";
-    /// Transaction data by hash: `tx:d:{hash}` -> StoredTransaction
-    pub const TX_DATA: &[u8] = b"tx:d:";
-    /// Transaction location: `tx:l:{hash}` -> TxLocation
-    pub const TX_LOCATION: &[u8] = b"tx:l:";
-    /// Receipt by tx hash: `tx:r:{hash}` -> StoredReceipt
-    pub const TX_RECEIPT: &[u8] = b"tx:r:";
-    /// Logs by block: `log:b:{number}` -> Vec<StoredLog>
-    pub const LOGS_BY_BLOCK: &[u8] = b"log:b:";
-    /// Chunked logs count by block: `log:b:c:{number}` -> u32
-    pub const LOGS_BY_BLOCK_CHUNK_COUNT: &[u8] = b"log:b:c:";
-    /// Chunked logs by block/index: `log:b:k:{number}:{idx}` -> Vec<StoredLog>
-    pub const LOGS_BY_BLOCK_CHUNK: &[u8] = b"log:b:k:";
-    /// Latest block number: `meta:latest` -> u64
-    pub const META_LATEST: &[u8] = b"meta:latest";
-
-    pub fn block_header_key(number: u64) -> Vec<u8> {
-        let mut key = BLOCK_HEADER.to_vec();
-        key.extend_from_slice(&number.to_be_bytes());
-        key
-    }
-
-    pub fn block_number_key(hash: &B256) -> Vec<u8> {
-        let mut key = BLOCK_NUMBER.to_vec();
-        key.extend_from_slice(hash.as_slice());
-        key
-    }
-
-    pub fn block_txs_key(number: u64) -> Vec<u8> {
-        let mut key = BLOCK_TXS.to_vec();
-        key.extend_from_slice(&number.to_be_bytes());
-        key
-    }
-
-    pub fn block_txs_chunk_count_key(number: u64) -> Vec<u8> {
-        let mut key = BLOCK_TXS_CHUNK_COUNT.to_vec();
-        key.extend_from_slice(&number.to_be_bytes());
-        key
-    }
-
-    pub fn block_txs_chunk_key(number: u64, chunk_index: u32) -> Vec<u8> {
-        let mut key = BLOCK_TXS_CHUNK.to_vec();
-        key.extend_from_slice(&number.to_be_bytes());
-        key.extend_from_slice(&chunk_index.to_be_bytes());
-        key
-    }
-
-    pub fn tx_data_key(hash: &B256) -> Vec<u8> {
-        let mut key = TX_DATA.to_vec();
-        key.extend_from_slice(hash.as_slice());
-        key
-    }
-
-    pub fn tx_location_key(hash: &B256) -> Vec<u8> {
-        let mut key = TX_LOCATION.to_vec();
-        key.extend_from_slice(hash.as_slice());
-        key
-    }
-
-    pub fn tx_receipt_key(hash: &B256) -> Vec<u8> {
-        let mut key = TX_RECEIPT.to_vec();
-        key.extend_from_slice(hash.as_slice());
-        key
-    }
-
-    pub fn logs_by_block_key(number: u64) -> Vec<u8> {
-        let mut key = LOGS_BY_BLOCK.to_vec();
-        key.extend_from_slice(&number.to_be_bytes());
-        key
-    }
-
-    pub fn logs_by_block_chunk_count_key(number: u64) -> Vec<u8> {
-        let mut key = LOGS_BY_BLOCK_CHUNK_COUNT.to_vec();
-        key.extend_from_slice(&number.to_be_bytes());
-        key
-    }
-
-    pub fn logs_by_block_chunk_key(number: u64, chunk_index: u32) -> Vec<u8> {
-        let mut key = LOGS_BY_BLOCK_CHUNK.to_vec();
-        key.extend_from_slice(&number.to_be_bytes());
-        key.extend_from_slice(&chunk_index.to_be_bytes());
-        key
-    }
-}
 
 /// Trait for chain data indexing operations.
 ///
@@ -160,24 +56,33 @@ pub trait ChainIndex: Send + Sync {
     ) -> ChainIndexResult<()>;
 }
 
-/// Persistent chain index backed by storage.
-pub struct PersistentChainIndex<S: Storage> {
-    storage: Arc<S>,
+/// Persistent chain index backed by SQLite.
+pub struct PersistentChainIndex {
+    connection: Mutex<Connection>,
     cache: ChainCache,
 }
 
-impl<S: Storage> PersistentChainIndex<S> {
-    /// Create a new persistent chain index.
-    pub fn new(storage: Arc<S>) -> Self {
-        Self {
-            storage,
+impl PersistentChainIndex {
+    /// Create a new persistent chain index backed by an on-disk SQLite database.
+    pub fn new(db_path: impl AsRef<std::path::Path>) -> ChainIndexResult<Self> {
+        let conn = Connection::open(db_path)?;
+        let index = Self {
+            connection: Mutex::new(conn),
             cache: ChainCache::with_defaults(),
-        }
+        };
+        index.init_schema()?;
+        Ok(index)
     }
 
-    /// Create with custom cache configuration.
-    pub fn with_cache(storage: Arc<S>, cache: ChainCache) -> Self {
-        Self { storage, cache }
+    /// Create an in-memory chain index for testing.
+    pub fn in_memory() -> ChainIndexResult<Self> {
+        let conn = Connection::open_in_memory()?;
+        let index = Self {
+            connection: Mutex::new(conn),
+            cache: ChainCache::with_defaults(),
+        };
+        index.init_schema()?;
+        Ok(index)
     }
 
     /// Get direct access to the cache.
@@ -196,57 +101,240 @@ impl<S: Storage> PersistentChainIndex<S> {
         Ok(())
     }
 
+    fn init_schema(&self) -> ChainIndexResult<()> {
+        let conn = self.connection.lock().unwrap();
+        conn.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=NORMAL;
+             PRAGMA foreign_keys=ON;
+
+             CREATE TABLE IF NOT EXISTS blocks (
+                 number INTEGER PRIMARY KEY,
+                 hash BLOB NOT NULL UNIQUE,
+                 parent_hash BLOB NOT NULL,
+                 state_root BLOB NOT NULL,
+                 transactions_root BLOB NOT NULL,
+                 receipts_root BLOB NOT NULL,
+                 timestamp INTEGER NOT NULL,
+                 gas_used INTEGER NOT NULL,
+                 gas_limit INTEGER NOT NULL,
+                 transaction_count INTEGER NOT NULL,
+                 miner BLOB NOT NULL,
+                 extra_data BLOB NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_blocks_hash ON blocks(hash);
+
+             CREATE TABLE IF NOT EXISTS transactions (
+                 hash BLOB PRIMARY KEY,
+                 block_number INTEGER NOT NULL,
+                 block_hash BLOB NOT NULL,
+                 transaction_index INTEGER NOT NULL,
+                 from_addr BLOB NOT NULL,
+                 to_addr BLOB,
+                 value BLOB NOT NULL,
+                 gas INTEGER NOT NULL,
+                 gas_price BLOB NOT NULL,
+                 input BLOB NOT NULL,
+                 nonce INTEGER NOT NULL,
+                 v INTEGER NOT NULL,
+                 r BLOB NOT NULL,
+                 s BLOB NOT NULL,
+                 tx_type INTEGER NOT NULL,
+                 chain_id INTEGER,
+                 FOREIGN KEY (block_number) REFERENCES blocks(number)
+             );
+             CREATE INDEX IF NOT EXISTS idx_tx_block ON transactions(block_number);
+
+             CREATE TABLE IF NOT EXISTS receipts (
+                 transaction_hash BLOB PRIMARY KEY,
+                 transaction_index INTEGER NOT NULL,
+                 block_hash BLOB NOT NULL,
+                 block_number INTEGER NOT NULL,
+                 from_addr BLOB NOT NULL,
+                 to_addr BLOB,
+                 cumulative_gas_used INTEGER NOT NULL,
+                 gas_used INTEGER NOT NULL,
+                 contract_address BLOB,
+                 status INTEGER NOT NULL,
+                 tx_type INTEGER NOT NULL,
+                 FOREIGN KEY (block_number) REFERENCES blocks(number)
+             );
+
+             CREATE TABLE IF NOT EXISTS logs (
+                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 block_number INTEGER NOT NULL,
+                 transaction_hash BLOB NOT NULL,
+                 address BLOB NOT NULL,
+                 topics BLOB NOT NULL,
+                 data BLOB NOT NULL,
+                 FOREIGN KEY (block_number) REFERENCES blocks(number)
+             );
+             CREATE INDEX IF NOT EXISTS idx_logs_block ON logs(block_number);
+             CREATE INDEX IF NOT EXISTS idx_logs_address ON logs(address);
+
+             CREATE TABLE IF NOT EXISTS metadata (
+                 key TEXT PRIMARY KEY,
+                 value BLOB NOT NULL
+             );",
+        )?;
+        Ok(())
+    }
+
     fn load_latest_block_number(&self) -> ChainIndexResult<Option<u64>> {
-        let value = self.storage.get(keys::META_LATEST)?;
-        match value {
-            Some(bytes) if bytes.len() == 8 => {
-                let arr: [u8; 8] = bytes.try_into().unwrap();
-                Ok(Some(u64::from_be_bytes(arr)))
-            }
-            Some(_) => Err(ChainIndexError::Deserialization(
-                "invalid latest block format".to_string(),
-            )),
-            None => Ok(None),
+        let conn = self.connection.lock().unwrap();
+        let result: rusqlite::Result<i64> = conn.query_row(
+            "SELECT CAST(value AS INTEGER) FROM metadata WHERE key = 'latest_block'",
+            [],
+            |row| row.get(0),
+        );
+        match result {
+            Ok(n) => Ok(Some(n as u64)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
         }
+    }
+
+    fn row_to_stored_block(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredBlock> {
+        use alloy_primitives::{Address, Bytes};
+
+        let number: i64 = row.get(0)?;
+        let hash_bytes: Vec<u8> = row.get(1)?;
+        let parent_hash_bytes: Vec<u8> = row.get(2)?;
+        let state_root_bytes: Vec<u8> = row.get(3)?;
+        let transactions_root_bytes: Vec<u8> = row.get(4)?;
+        let receipts_root_bytes: Vec<u8> = row.get(5)?;
+        let timestamp: i64 = row.get(6)?;
+        let gas_used: i64 = row.get(7)?;
+        let gas_limit: i64 = row.get(8)?;
+        let transaction_count: i64 = row.get(9)?;
+        let miner_bytes: Vec<u8> = row.get(10)?;
+        let extra_data_bytes: Vec<u8> = row.get(11)?;
+
+        Ok(StoredBlock {
+            number: number as u64,
+            hash: B256::from_slice(&hash_bytes),
+            parent_hash: B256::from_slice(&parent_hash_bytes),
+            state_root: B256::from_slice(&state_root_bytes),
+            transactions_root: B256::from_slice(&transactions_root_bytes),
+            receipts_root: B256::from_slice(&receipts_root_bytes),
+            timestamp: timestamp as u64,
+            gas_used: gas_used as u64,
+            gas_limit: gas_limit as u64,
+            transaction_count: transaction_count as u32,
+            miner: Address::from_slice(&miner_bytes),
+            extra_data: Bytes::from(extra_data_bytes),
+        })
+    }
+
+    fn row_to_stored_transaction(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredTransaction> {
+        use alloy_primitives::{Address, Bytes, U256};
+
+        let hash_bytes: Vec<u8> = row.get(0)?;
+        let block_number: i64 = row.get(1)?;
+        let block_hash_bytes: Vec<u8> = row.get(2)?;
+        let transaction_index: i64 = row.get(3)?;
+        let from_bytes: Vec<u8> = row.get(4)?;
+        let to_bytes: Option<Vec<u8>> = row.get(5)?;
+        let value_bytes: Vec<u8> = row.get(6)?;
+        let gas: i64 = row.get(7)?;
+        let gas_price_bytes: Vec<u8> = row.get(8)?;
+        let input_bytes: Vec<u8> = row.get(9)?;
+        let nonce: i64 = row.get(10)?;
+        let v: i64 = row.get(11)?;
+        let r_bytes: Vec<u8> = row.get(12)?;
+        let s_bytes: Vec<u8> = row.get(13)?;
+        let tx_type: i64 = row.get(14)?;
+        let chain_id: Option<i64> = row.get(15)?;
+
+        Ok(StoredTransaction {
+            hash: B256::from_slice(&hash_bytes),
+            block_number: block_number as u64,
+            block_hash: B256::from_slice(&block_hash_bytes),
+            transaction_index: transaction_index as u32,
+            from: Address::from_slice(&from_bytes),
+            to: to_bytes.as_deref().map(Address::from_slice),
+            value: U256::from_be_slice(&value_bytes),
+            gas: gas as u64,
+            gas_price: U256::from_be_slice(&gas_price_bytes),
+            input: Bytes::from(input_bytes),
+            nonce: nonce as u64,
+            v: v as u64,
+            r: U256::from_be_slice(&r_bytes),
+            s: U256::from_be_slice(&s_bytes),
+            tx_type: tx_type as u8,
+            chain_id: chain_id.map(|c| c as u64),
+        })
+    }
+
+    fn row_to_stored_receipt(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredReceipt> {
+        use alloy_primitives::Address;
+
+        let transaction_hash_bytes: Vec<u8> = row.get(0)?;
+        let transaction_index: i64 = row.get(1)?;
+        let block_hash_bytes: Vec<u8> = row.get(2)?;
+        let block_number: i64 = row.get(3)?;
+        let from_bytes: Vec<u8> = row.get(4)?;
+        let to_bytes: Option<Vec<u8>> = row.get(5)?;
+        let cumulative_gas_used: i64 = row.get(6)?;
+        let gas_used: i64 = row.get(7)?;
+        let contract_address_bytes: Option<Vec<u8>> = row.get(8)?;
+        let status: i64 = row.get(9)?;
+        let tx_type: i64 = row.get(10)?;
+
+        Ok(StoredReceipt {
+            transaction_hash: B256::from_slice(&transaction_hash_bytes),
+            transaction_index: transaction_index as u32,
+            block_hash: B256::from_slice(&block_hash_bytes),
+            block_number: block_number as u64,
+            from: Address::from_slice(&from_bytes),
+            to: to_bytes.as_deref().map(Address::from_slice),
+            cumulative_gas_used: cumulative_gas_used as u64,
+            gas_used: gas_used as u64,
+            contract_address: contract_address_bytes.as_deref().map(Address::from_slice),
+            logs: vec![], // logs are stored separately
+            status: status as u8,
+            tx_type: tx_type as u8,
+        })
     }
 }
 
-impl<S: Storage + 'static> ChainIndex for PersistentChainIndex<S> {
+impl ChainIndex for PersistentChainIndex {
     fn latest_block_number(&self) -> ChainIndexResult<Option<u64>> {
-        // Check cache first
         if let Some(n) = self.cache.latest_block_number() {
             return Ok(Some(n));
         }
-        // Fall back to storage
         self.load_latest_block_number()
     }
 
     fn get_block(&self, number: u64) -> ChainIndexResult<Option<StoredBlock>> {
-        // Check cache first
         if let Some(block) = self.cache.get_block_by_number(number) {
             return Ok(Some((*block).clone()));
         }
 
-        // Load from storage (synchronous)
-        let key = keys::block_header_key(number);
-        match self.storage.get(&key)? {
-            Some(bytes) => {
-                let block: StoredBlock = serde_json::from_slice(&bytes)?;
-                // Populate cache
+        let conn = self.connection.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT number, hash, parent_hash, state_root, transactions_root, receipts_root,
+                    timestamp, gas_used, gas_limit, transaction_count, miner, extra_data
+             FROM blocks WHERE number = ?",
+            params![number as i64],
+            Self::row_to_stored_block,
+        );
+
+        match result {
+            Ok(block) => {
                 self.cache.insert_block(block.clone());
                 Ok(Some(block))
             }
-            None => Ok(None),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
         }
     }
 
     fn get_block_by_hash(&self, hash: B256) -> ChainIndexResult<Option<StoredBlock>> {
-        // Check cache first
         if let Some(block) = self.cache.get_block_by_hash(hash) {
             return Ok(Some((*block).clone()));
         }
 
-        // Look up block number by hash
         let number = match self.get_block_number(hash)? {
             Some(n) => n,
             None => return Ok(None),
@@ -256,148 +344,129 @@ impl<S: Storage + 'static> ChainIndex for PersistentChainIndex<S> {
     }
 
     fn get_block_number(&self, hash: B256) -> ChainIndexResult<Option<u64>> {
-        // Check cache first
         if let Some(n) = self.cache.get_block_number_by_hash(hash) {
             return Ok(Some(n));
         }
 
-        // Load from storage
-        let key = keys::block_number_key(&hash);
-        match self.storage.get(&key)? {
-            Some(bytes) if bytes.len() == 8 => {
-                let arr: [u8; 8] = bytes.try_into().unwrap();
-                Ok(Some(u64::from_be_bytes(arr)))
-            }
-            Some(_) => Err(ChainIndexError::Deserialization(
-                "invalid block number format".to_string(),
-            )),
-            None => Ok(None),
+        let conn = self.connection.lock().unwrap();
+        let result: rusqlite::Result<i64> = conn.query_row(
+            "SELECT number FROM blocks WHERE hash = ?",
+            params![hash.as_slice()],
+            |row| row.get(0),
+        );
+
+        match result {
+            Ok(n) => Ok(Some(n as u64)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
         }
     }
 
     fn get_block_transactions(&self, number: u64) -> ChainIndexResult<Vec<B256>> {
-        // New chunked layout.
-        let chunk_count_key = keys::block_txs_chunk_count_key(number);
-        if let Some(bytes) = self.storage.get(&chunk_count_key)? {
-            if bytes.len() != 4 {
-                return Err(ChainIndexError::Deserialization(
-                    "invalid block tx chunk count format".to_string(),
-                ));
-            }
-            let mut count_bytes = [0u8; 4];
-            count_bytes.copy_from_slice(&bytes);
-            let count = u32::from_be_bytes(count_bytes);
-            let mut hashes = Vec::new();
-            for idx in 0..count {
-                let key = keys::block_txs_chunk_key(number, idx);
-                let chunk_bytes = self.storage.get(&key)?.ok_or_else(|| {
-                    ChainIndexError::Deserialization(format!(
-                        "missing tx chunk {} for block {}",
-                        idx, number
-                    ))
-                })?;
-                let mut chunk: Vec<B256> = serde_json::from_slice(&chunk_bytes)?;
-                hashes.append(&mut chunk);
-            }
-            return Ok(hashes);
-        }
+        let conn = self.connection.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT hash FROM transactions WHERE block_number = ? ORDER BY transaction_index",
+        )?;
 
-        // Legacy single-value layout.
-        let key = keys::block_txs_key(number);
-        match self.storage.get(&key)? {
-            Some(bytes) => {
-                let hashes: Vec<B256> = serde_json::from_slice(&bytes)?;
-                Ok(hashes)
-            }
-            None => Ok(vec![]),
-        }
+        let hashes: rusqlite::Result<Vec<B256>> = stmt
+            .query_map(params![number as i64], |row| {
+                let bytes: Vec<u8> = row.get(0)?;
+                Ok(B256::from_slice(&bytes))
+            })?
+            .collect();
+
+        Ok(hashes?)
     }
 
     fn get_transaction(&self, hash: B256) -> ChainIndexResult<Option<StoredTransaction>> {
-        // Check cache first
         if let Some(tx) = self.cache.get_transaction(hash) {
             return Ok(Some((*tx).clone()));
         }
 
-        // Load from storage
-        let key = keys::tx_data_key(&hash);
-        match self.storage.get(&key)? {
-            Some(bytes) => {
-                let tx: StoredTransaction = serde_json::from_slice(&bytes)?;
-                // Populate cache
+        let conn = self.connection.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT hash, block_number, block_hash, transaction_index, from_addr, to_addr,
+                    value, gas, gas_price, input, nonce, v, r, s, tx_type, chain_id
+             FROM transactions WHERE hash = ?",
+            params![hash.as_slice()],
+            Self::row_to_stored_transaction,
+        );
+
+        match result {
+            Ok(tx) => {
                 self.cache.insert_transaction(tx.clone());
                 Ok(Some(tx))
             }
-            None => Ok(None),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
         }
     }
 
     fn get_transaction_location(&self, hash: B256) -> ChainIndexResult<Option<TxLocation>> {
-        let key = keys::tx_location_key(&hash);
-        match self.storage.get(&key)? {
-            Some(bytes) => {
-                let loc: TxLocation = serde_json::from_slice(&bytes)?;
-                Ok(Some(loc))
-            }
-            None => Ok(None),
+        let conn = self.connection.lock().unwrap();
+        let result: rusqlite::Result<(i64, i64)> = conn.query_row(
+            "SELECT block_number, transaction_index FROM transactions WHERE hash = ?",
+            params![hash.as_slice()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        );
+
+        match result {
+            Ok((block_number, transaction_index)) => Ok(Some(TxLocation {
+                block_number: block_number as u64,
+                transaction_index: transaction_index as u32,
+            })),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
         }
     }
 
     fn get_receipt(&self, hash: B256) -> ChainIndexResult<Option<StoredReceipt>> {
-        // Check cache first
         if let Some(receipt) = self.cache.get_receipt(hash) {
             return Ok(Some((*receipt).clone()));
         }
 
-        // Load from storage
-        let key = keys::tx_receipt_key(&hash);
-        match self.storage.get(&key)? {
-            Some(bytes) => {
-                let receipt: StoredReceipt = serde_json::from_slice(&bytes)?;
-                // Populate cache
+        let conn = self.connection.lock().unwrap();
+        let result = conn.query_row(
+            "SELECT transaction_hash, transaction_index, block_hash, block_number,
+                    from_addr, to_addr, cumulative_gas_used, gas_used, contract_address,
+                    status, tx_type
+             FROM receipts WHERE transaction_hash = ?",
+            params![hash.as_slice()],
+            Self::row_to_stored_receipt,
+        );
+
+        match result {
+            Ok(mut receipt) => {
+                // Load logs for this receipt
+                let logs = load_logs_for_tx(&conn, hash)?;
+                receipt.logs = logs;
                 self.cache.insert_receipt(receipt.clone());
                 Ok(Some(receipt))
             }
-            None => Ok(None),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
         }
     }
 
     fn get_logs_by_block(&self, number: u64) -> ChainIndexResult<Vec<StoredLog>> {
-        // New chunked layout.
-        let chunk_count_key = keys::logs_by_block_chunk_count_key(number);
-        if let Some(bytes) = self.storage.get(&chunk_count_key)? {
-            if bytes.len() != 4 {
-                return Err(ChainIndexError::Deserialization(
-                    "invalid block logs chunk count format".to_string(),
-                ));
-            }
-            let mut count_bytes = [0u8; 4];
-            count_bytes.copy_from_slice(&bytes);
-            let count = u32::from_be_bytes(count_bytes);
-            let mut logs = Vec::new();
-            for idx in 0..count {
-                let key = keys::logs_by_block_chunk_key(number, idx);
-                let chunk_bytes = self.storage.get(&key)?.ok_or_else(|| {
-                    ChainIndexError::Deserialization(format!(
-                        "missing log chunk {} for block {}",
-                        idx, number
-                    ))
-                })?;
-                let mut chunk: Vec<StoredLog> = serde_json::from_slice(&chunk_bytes)?;
-                logs.append(&mut chunk);
-            }
-            return Ok(logs);
-        }
+        let conn = self.connection.lock().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT address, topics, data FROM logs WHERE block_number = ? ORDER BY id")?;
 
-        // Legacy single-value layout.
-        let key = keys::logs_by_block_key(number);
-        match self.storage.get(&key)? {
-            Some(bytes) => {
-                let logs: Vec<StoredLog> = serde_json::from_slice(&bytes)?;
-                Ok(logs)
-            }
-            None => Ok(vec![]),
-        }
+        let logs: rusqlite::Result<Vec<StoredLog>> = stmt
+            .query_map(params![number as i64], |row| {
+                let address_bytes: Vec<u8> = row.get(0)?;
+                let topics_json: Vec<u8> = row.get(1)?;
+                let data_bytes: Vec<u8> = row.get(2)?;
+                Ok((address_bytes, topics_json, data_bytes))
+            })?
+            .map(|r| {
+                let (address_bytes, topics_json, data_bytes) = r?;
+                parse_stored_log(&address_bytes, &topics_json, &data_bytes)
+            })
+            .collect();
+
+        Ok(logs?)
     }
 
     fn store_block(
@@ -409,110 +478,67 @@ impl<S: Storage + 'static> ChainIndex for PersistentChainIndex<S> {
         let block_number = block.number;
         let block_hash = block.hash;
 
-        // Collect all logs from receipts
-        let all_logs: Vec<StoredLog> = receipts.iter().flat_map(|r| r.logs.clone()).collect();
+        let conn = self.connection.lock().unwrap();
+        let tx = conn.unchecked_transaction()?;
 
-        // Build batch operations
-        let mut ops = Vec::new();
+        // Delete existing data for this block number (handles re-indexing the same block)
+        tx.execute(
+            "DELETE FROM logs WHERE block_number = ?",
+            params![block_number as i64],
+        )?;
+        tx.execute(
+            "DELETE FROM receipts WHERE block_number = ?",
+            params![block_number as i64],
+        )?;
+        tx.execute(
+            "DELETE FROM transactions WHERE block_number = ?",
+            params![block_number as i64],
+        )?;
 
-        // Store block header
-        ops.push(evolve_storage::Operation::Set {
-            key: keys::block_header_key(block_number),
-            value: serde_json::to_vec(&block)?,
-        });
+        // Insert block
+        tx.execute(
+            "INSERT OR REPLACE INTO blocks
+             (number, hash, parent_hash, state_root, transactions_root, receipts_root,
+              timestamp, gas_used, gas_limit, transaction_count, miner, extra_data)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            params![
+                block.number as i64,
+                block.hash.as_slice(),
+                block.parent_hash.as_slice(),
+                block.state_root.as_slice(),
+                block.transactions_root.as_slice(),
+                block.receipts_root.as_slice(),
+                block.timestamp as i64,
+                block.gas_used as i64,
+                block.gas_limit as i64,
+                block.transaction_count as i64,
+                block.miner.as_slice(),
+                block.extra_data.as_ref(),
+            ],
+        )?;
 
-        // Store block number by hash
-        ops.push(evolve_storage::Operation::Set {
-            key: keys::block_number_key(&block_hash),
-            value: block_number.to_be_bytes().to_vec(),
-        });
-
-        // Store transaction hashes for this block in chunked format to avoid
-        // oversize values for high-tx blocks.
-        let tx_hashes: Vec<B256> = transactions.iter().map(|tx| tx.hash).collect();
-        let tx_hash_chunks: Vec<Vec<B256>> = tx_hashes
-            .chunks(TX_HASH_CHUNK_SIZE)
-            .map(|c| c.to_vec())
-            .collect();
-        ops.push(evolve_storage::Operation::Set {
-            key: keys::block_txs_chunk_count_key(block_number),
-            value: (tx_hash_chunks.len() as u32).to_be_bytes().to_vec(),
-        });
-        for (idx, chunk) in tx_hash_chunks.iter().enumerate() {
-            ops.push(evolve_storage::Operation::Set {
-                key: keys::block_txs_chunk_key(block_number, idx as u32),
-                value: serde_json::to_vec(chunk)?,
-            });
+        // Insert transactions using array index as the authoritative transaction_index
+        for (idx, transaction) in transactions.iter().enumerate() {
+            insert_transaction(&tx, transaction, idx as i64)?;
         }
 
-        // Store each transaction
-        for (idx, tx) in transactions.iter().enumerate() {
-            ops.push(evolve_storage::Operation::Set {
-                key: keys::tx_data_key(&tx.hash),
-                value: serde_json::to_vec(tx)?,
-            });
-
-            ops.push(evolve_storage::Operation::Set {
-                key: keys::tx_location_key(&tx.hash),
-                value: serde_json::to_vec(&TxLocation {
-                    block_number,
-                    transaction_index: idx as u32,
-                })?,
-            });
-        }
-
-        // Store each receipt
+        // Insert receipts and logs
         for receipt in &receipts {
-            ops.push(evolve_storage::Operation::Set {
-                key: keys::tx_receipt_key(&receipt.transaction_hash),
-                value: serde_json::to_vec(receipt)?,
-            });
-        }
-
-        // Store logs by block in chunked format to avoid oversize values.
-        if !all_logs.is_empty() {
-            let log_chunks: Vec<Vec<StoredLog>> = all_logs
-                .chunks(LOG_CHUNK_SIZE)
-                .map(|c| c.to_vec())
-                .collect();
-            ops.push(evolve_storage::Operation::Set {
-                key: keys::logs_by_block_chunk_count_key(block_number),
-                value: (log_chunks.len() as u32).to_be_bytes().to_vec(),
-            });
-            for (idx, chunk) in log_chunks.iter().enumerate() {
-                ops.push(evolve_storage::Operation::Set {
-                    key: keys::logs_by_block_chunk_key(block_number, idx as u32),
-                    value: serde_json::to_vec(chunk)?,
-                });
+            insert_receipt(&tx, receipt)?;
+            for log in &receipt.logs {
+                insert_log(&tx, block_number, receipt.transaction_hash, log)?;
             }
-        } else {
-            ops.push(evolve_storage::Operation::Set {
-                key: keys::logs_by_block_chunk_count_key(block_number),
-                value: 0u32.to_be_bytes().to_vec(),
-            });
         }
 
-        // Update latest block number
-        ops.push(evolve_storage::Operation::Set {
-            key: keys::META_LATEST.to_vec(),
-            value: block_number.to_be_bytes().to_vec(),
-        });
+        // Update latest block number metadata
+        tx.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('latest_block', ?)",
+            params![block_number as i64],
+        )?;
 
-        // Batch write and commit using block_on for the async operations
-        // This is acceptable because writes are infrequent and not latency-sensitive
-        futures::executor::block_on(async {
-            self.storage
-                .batch(ops)
-                .await
-                .map_err(|e| ChainIndexError::Storage(format!("batch write failed: {:?}", e)))?;
-            self.storage
-                .commit()
-                .await
-                .map_err(|e| ChainIndexError::Storage(format!("commit failed: {:?}", e)))?;
-            Ok::<_, ChainIndexError>(())
-        })?;
+        tx.commit()?;
 
-        // Update cache
+        // Update cache after successful commit
         self.cache
             .insert_block_with_data(block, transactions, receipts);
 
@@ -522,61 +548,131 @@ impl<S: Storage + 'static> ChainIndex for PersistentChainIndex<S> {
     }
 }
 
+fn insert_transaction(
+    tx: &rusqlite::Transaction<'_>,
+    transaction: &StoredTransaction,
+    array_index: i64,
+) -> ChainIndexResult<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO transactions
+         (hash, block_number, block_hash, transaction_index, from_addr, to_addr,
+          value, gas, gas_price, input, nonce, v, r, s, tx_type, chain_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params![
+            transaction.hash.as_slice(),
+            transaction.block_number as i64,
+            transaction.block_hash.as_slice(),
+            array_index,
+            transaction.from.as_slice(),
+            transaction.to.as_ref().map(|a| a.as_slice()),
+            &u256_to_be_bytes(transaction.value) as &[u8],
+            transaction.gas as i64,
+            &u256_to_be_bytes(transaction.gas_price) as &[u8],
+            transaction.input.as_ref(),
+            transaction.nonce as i64,
+            transaction.v as i64,
+            &u256_to_be_bytes(transaction.r) as &[u8],
+            &u256_to_be_bytes(transaction.s) as &[u8],
+            transaction.tx_type as i64,
+            transaction.chain_id.map(|c| c as i64),
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_receipt(tx: &rusqlite::Transaction<'_>, receipt: &StoredReceipt) -> ChainIndexResult<()> {
+    tx.execute(
+        "INSERT OR REPLACE INTO receipts
+         (transaction_hash, transaction_index, block_hash, block_number, from_addr, to_addr,
+          cumulative_gas_used, gas_used, contract_address, status, tx_type)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        params![
+            receipt.transaction_hash.as_slice(),
+            receipt.transaction_index as i64,
+            receipt.block_hash.as_slice(),
+            receipt.block_number as i64,
+            receipt.from.as_slice(),
+            receipt.to.as_ref().map(|a| a.as_slice()),
+            receipt.cumulative_gas_used as i64,
+            receipt.gas_used as i64,
+            receipt.contract_address.as_ref().map(|a| a.as_slice()),
+            receipt.status as i64,
+            receipt.tx_type as i64,
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_log(
+    tx: &rusqlite::Transaction<'_>,
+    block_number: u64,
+    tx_hash: B256,
+    log: &StoredLog,
+) -> ChainIndexResult<()> {
+    let topics_json = serde_json::to_vec(&log.topics)
+        .map_err(|e| ChainIndexError::Serialization(e.to_string()))?;
+
+    tx.execute(
+        "INSERT INTO logs (block_number, transaction_hash, address, topics, data)
+         VALUES (?, ?, ?, ?, ?)",
+        params![
+            block_number as i64,
+            tx_hash.as_slice(),
+            log.address.as_slice(),
+            topics_json.as_slice(),
+            log.data.as_ref(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn load_logs_for_tx(conn: &Connection, tx_hash: B256) -> ChainIndexResult<Vec<StoredLog>> {
+    let mut stmt = conn
+        .prepare("SELECT address, topics, data FROM logs WHERE transaction_hash = ? ORDER BY id")?;
+
+    let logs: rusqlite::Result<Vec<StoredLog>> = stmt
+        .query_map(params![tx_hash.as_slice()], |row| {
+            let address_bytes: Vec<u8> = row.get(0)?;
+            let topics_json: Vec<u8> = row.get(1)?;
+            let data_bytes: Vec<u8> = row.get(2)?;
+            Ok((address_bytes, topics_json, data_bytes))
+        })?
+        .map(|r| {
+            let (address_bytes, topics_json, data_bytes) = r?;
+            parse_stored_log(&address_bytes, &topics_json, &data_bytes)
+        })
+        .collect();
+
+    Ok(logs?)
+}
+
+fn parse_stored_log(
+    address_bytes: &[u8],
+    topics_json: &[u8],
+    data_bytes: &[u8],
+) -> rusqlite::Result<StoredLog> {
+    use alloy_primitives::{Address, Bytes};
+
+    let topics: Vec<B256> = serde_json::from_slice(topics_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(1, rusqlite::types::Type::Blob, Box::new(e))
+    })?;
+
+    Ok(StoredLog {
+        address: Address::from_slice(address_bytes),
+        topics,
+        data: Bytes::from(data_bytes.to_vec()),
+    })
+}
+
+fn u256_to_be_bytes(value: alloy_primitives::U256) -> [u8; 32] {
+    value.to_be_bytes()
+}
+
 #[cfg(test)]
 #[allow(clippy::disallowed_types)]
 mod tests {
     use super::*;
     use alloy_primitives::{Address, Bytes, U256};
-    use async_trait::async_trait;
-    use evolve_core::ErrorCode;
-    use evolve_storage::{CommitHash, Operation};
-    use std::collections::HashMap;
-    use std::sync::RwLock;
-
-    /// A mock storage implementation for testing.
-    pub struct MockStorage {
-        data: RwLock<HashMap<Vec<u8>, Vec<u8>>>,
-        commit_count: RwLock<u64>,
-    }
-
-    impl MockStorage {
-        pub fn new() -> Self {
-            Self {
-                data: RwLock::new(HashMap::new()),
-                commit_count: RwLock::new(0),
-            }
-        }
-    }
-
-    impl evolve_core::ReadonlyKV for MockStorage {
-        fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
-            Ok(self.data.read().unwrap().get(key).cloned())
-        }
-    }
-
-    #[async_trait(?Send)]
-    impl evolve_storage::Storage for MockStorage {
-        async fn commit(&self) -> Result<CommitHash, ErrorCode> {
-            let mut count = self.commit_count.write().unwrap();
-            *count += 1;
-            Ok(CommitHash::new([0u8; 32]))
-        }
-
-        async fn batch(&self, operations: Vec<Operation>) -> Result<(), ErrorCode> {
-            let mut data = self.data.write().unwrap();
-            for op in operations {
-                match op {
-                    Operation::Set { key, value } => {
-                        data.insert(key, value);
-                    }
-                    Operation::Remove { key } => {
-                        data.remove(&key);
-                    }
-                }
-            }
-            Ok(())
-        }
-    }
 
     /// Helper to create a test StoredBlock.
     pub fn make_test_stored_block(number: u64) -> StoredBlock {
@@ -652,16 +748,11 @@ mod tests {
     }
 
     // ==================== Complex behavior tests ====================
-    // Note: Basic store/get operations are covered by model-based tests in model_tests module.
-    // These tests focus on complex behaviors not easily covered by model tests.
 
     /// Tests that transaction location uses array index, not the field value.
-    /// This is important because TxLocation.transaction_index should reflect
-    /// the actual position in the block, not what was passed in StoredTransaction.
     #[test]
     fn test_transaction_location_uses_array_index() {
-        let storage = Arc::new(MockStorage::new());
-        let index = PersistentChainIndex::new(storage);
+        let index = PersistentChainIndex::in_memory().unwrap();
 
         let block = make_test_stored_block(100);
         // Create tx with transaction_index=5, but it will be at array position 0
@@ -679,8 +770,7 @@ mod tests {
     /// Tests that transaction ordering is preserved when storing multiple txs.
     #[test]
     fn test_transaction_ordering_preserved() {
-        let storage = Arc::new(MockStorage::new());
-        let index = PersistentChainIndex::new(storage);
+        let index = PersistentChainIndex::in_memory().unwrap();
 
         let block = make_test_stored_block(100);
         let hashes: Vec<_> = (0..5).map(|i| B256::repeat_byte(0x50 + i)).collect();
@@ -705,12 +795,10 @@ mod tests {
     /// Tests log aggregation from multiple receipts.
     #[test]
     fn test_logs_aggregated_from_receipts() {
-        let storage = Arc::new(MockStorage::new());
-        let index = PersistentChainIndex::new(storage);
+        let index = PersistentChainIndex::in_memory().unwrap();
 
         let block = make_test_stored_block(100);
 
-        // Two transactions, each with logs
         let tx1_hash = B256::repeat_byte(0x60);
         let tx2_hash = B256::repeat_byte(0x61);
 
@@ -750,8 +838,7 @@ mod tests {
     /// Tests cache population after store_block.
     #[test]
     fn test_cache_populated_on_store() {
-        let storage = Arc::new(MockStorage::new());
-        let index = PersistentChainIndex::new(storage);
+        let index = PersistentChainIndex::in_memory().unwrap();
 
         let block = make_test_stored_block(100);
         let block_hash = block.hash;
@@ -772,179 +859,24 @@ mod tests {
     /// Tests persistence across index instances (simulating restart).
     #[test]
     fn test_persistence_across_restart() {
-        let storage = Arc::new(MockStorage::new());
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("chain-index.sqlite");
 
         // First instance stores data
-        let index1 = PersistentChainIndex::new(Arc::clone(&storage));
-        for i in 0..5 {
-            let block = make_test_stored_block(i);
-            index1.store_block(block, vec![], vec![]).unwrap();
+        {
+            let index1 = PersistentChainIndex::new(&db_path).unwrap();
+            for i in 0..5 {
+                let block = make_test_stored_block(i);
+                index1.store_block(block, vec![], vec![]).unwrap();
+            }
         }
 
         // Second instance (simulating restart) should recover state
-        let index2 = PersistentChainIndex::new(storage);
+        let index2 = PersistentChainIndex::new(&db_path).unwrap();
         index2.initialize().unwrap();
 
         assert_eq!(index2.latest_block_number().unwrap(), Some(4));
         assert!(index2.get_block(3).unwrap().is_some());
-    }
-
-    /// Tests chunked tx hash roundtrip with more than TX_HASH_CHUNK_SIZE txs.
-    #[test]
-    fn test_chunked_txs_roundtrip() {
-        let storage = Arc::new(MockStorage::new());
-        let index = PersistentChainIndex::new(storage);
-
-        let mut block = make_test_stored_block(1);
-        let tx_count = super::TX_HASH_CHUNK_SIZE + 10; // 42 txs -- spans 2 chunks
-        block.transaction_count = tx_count as u32;
-
-        let txs: Vec<StoredTransaction> = (0..tx_count)
-            .map(|i| {
-                let hash = B256::from_slice(&{
-                    let mut bytes = [0u8; 32];
-                    bytes[0..8].copy_from_slice(&(i as u64).to_be_bytes());
-                    bytes
-                });
-                make_test_stored_transaction(hash, 1, block.hash, i as u32)
-            })
-            .collect();
-        let receipts: Vec<StoredReceipt> = txs
-            .iter()
-            .enumerate()
-            .map(|(i, tx)| make_test_stored_receipt(tx.hash, 1, block.hash, i as u32, true))
-            .collect();
-
-        let expected_hashes: Vec<B256> = txs.iter().map(|tx| tx.hash).collect();
-        index.store_block(block, txs, receipts).unwrap();
-
-        let retrieved = index.get_block_transactions(1).unwrap();
-        assert_eq!(retrieved.len(), tx_count);
-        assert_eq!(retrieved, expected_hashes);
-    }
-
-    /// Tests chunk boundary conditions: exactly one full chunk, one-over, and zero txs.
-    #[test]
-    fn test_chunked_txs_boundary() {
-        let storage = Arc::new(MockStorage::new());
-        let index = PersistentChainIndex::new(storage);
-
-        // Exactly TX_HASH_CHUNK_SIZE (one full chunk)
-        let block = make_test_stored_block(1);
-        let count = super::TX_HASH_CHUNK_SIZE;
-        let txs: Vec<StoredTransaction> = (0..count)
-            .map(|i| {
-                let hash = B256::repeat_byte(i as u8);
-                make_test_stored_transaction(hash, 1, block.hash, i as u32)
-            })
-            .collect();
-        let receipts: Vec<StoredReceipt> = txs
-            .iter()
-            .enumerate()
-            .map(|(i, tx)| make_test_stored_receipt(tx.hash, 1, block.hash, i as u32, true))
-            .collect();
-        index.store_block(block.clone(), txs, receipts).unwrap();
-        assert_eq!(index.get_block_transactions(1).unwrap().len(), count);
-
-        // TX_HASH_CHUNK_SIZE + 1 (boundary)
-        let block2 = make_test_stored_block(2);
-        let count2 = super::TX_HASH_CHUNK_SIZE + 1;
-        let txs2: Vec<StoredTransaction> = (0..count2)
-            .map(|i| {
-                let mut bytes = [0u8; 32];
-                bytes[0] = 0xBB;
-                bytes[1..9].copy_from_slice(&(i as u64).to_be_bytes());
-                let hash = B256::from_slice(&bytes);
-                make_test_stored_transaction(hash, 2, block2.hash, i as u32)
-            })
-            .collect();
-        let receipts2: Vec<StoredReceipt> = txs2
-            .iter()
-            .enumerate()
-            .map(|(i, tx)| make_test_stored_receipt(tx.hash, 2, block2.hash, i as u32, true))
-            .collect();
-        index.store_block(block2, txs2, receipts2).unwrap();
-        assert_eq!(index.get_block_transactions(2).unwrap().len(), count2);
-
-        // 0 txs
-        let block3 = make_test_stored_block(3);
-        index.store_block(block3, vec![], vec![]).unwrap();
-        assert_eq!(index.get_block_transactions(3).unwrap().len(), 0);
-    }
-
-    /// Tests chunked log roundtrip with more than LOG_CHUNK_SIZE logs.
-    #[test]
-    fn test_chunked_logs_roundtrip() {
-        let storage = Arc::new(MockStorage::new());
-        let index = PersistentChainIndex::new(storage);
-
-        let block = make_test_stored_block(1);
-        let tx_hash = B256::repeat_byte(0xAA);
-        let tx = make_test_stored_transaction(tx_hash, 1, block.hash, 0);
-
-        let log_count = super::LOG_CHUNK_SIZE + 5; // 21 logs -- spans 2 chunks
-        let mut receipt = make_test_stored_receipt(tx_hash, 1, block.hash, 0, true);
-        receipt.logs = (0..log_count)
-            .map(|i| StoredLog {
-                address: Address::repeat_byte(i as u8),
-                topics: vec![B256::repeat_byte(i as u8)],
-                data: Bytes::from(vec![i as u8]),
-            })
-            .collect();
-
-        index.store_block(block, vec![tx], vec![receipt]).unwrap();
-
-        let logs = index.get_logs_by_block(1).unwrap();
-        assert_eq!(logs.len(), log_count);
-        // Verify ordering preserved
-        for (i, log) in logs.iter().enumerate() {
-            assert_eq!(log.address, Address::repeat_byte(i as u8));
-        }
-    }
-
-    /// Tests that a missing chunk key returns an error instead of silent data loss.
-    #[test]
-    fn test_missing_chunk_returns_error() {
-        let storage = Arc::new(MockStorage::new());
-        let index = PersistentChainIndex::new(Arc::clone(&storage));
-
-        // Store a block with enough txs to create 2 chunks
-        let block = make_test_stored_block(1);
-        let count = super::TX_HASH_CHUNK_SIZE + 1;
-        let txs: Vec<StoredTransaction> = (0..count)
-            .map(|i| {
-                let mut bytes = [0u8; 32];
-                bytes[0..8].copy_from_slice(&(i as u64).to_be_bytes());
-                let hash = B256::from_slice(&bytes);
-                make_test_stored_transaction(hash, 1, block.hash, i as u32)
-            })
-            .collect();
-        let receipts: Vec<StoredReceipt> = txs
-            .iter()
-            .enumerate()
-            .map(|(i, tx)| make_test_stored_receipt(tx.hash, 1, block.hash, i as u32, true))
-            .collect();
-        index.store_block(block, txs, receipts).unwrap();
-
-        // Verify it works first
-        assert_eq!(index.get_block_transactions(1).unwrap().len(), count);
-
-        // Delete the second chunk key from storage directly
-        let chunk_key = super::keys::block_txs_chunk_key(1, 1);
-        {
-            let mut data = storage.data.write().unwrap();
-            data.remove(&chunk_key);
-        }
-
-        // Now reading should return an error, not silently skip
-        let result = index.get_block_transactions(1);
-        assert!(result.is_err());
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("missing tx chunk"),
-            "Expected 'missing tx chunk' error, got: {}",
-            err_msg
-        );
     }
 }
 
@@ -953,7 +885,7 @@ mod tests {
 #[allow(clippy::disallowed_types)]
 mod model_tests {
     use super::tests::{
-        make_test_stored_block, make_test_stored_receipt, make_test_stored_transaction, MockStorage,
+        make_test_stored_block, make_test_stored_receipt, make_test_stored_transaction,
     };
     use super::*;
     use alloy_primitives::Address;
@@ -961,8 +893,6 @@ mod model_tests {
     use std::collections::HashMap;
 
     /// A simple reference model for ChainIndex behavior.
-    /// This is a straightforward HashMap-based implementation that serves
-    /// as the "oracle" to verify the real implementation against.
     #[derive(Debug, Default, Clone)]
     #[allow(dead_code)]
     struct ChainIndexModel {
@@ -990,11 +920,9 @@ mod model_tests {
             let block_number = block.number;
             let block_hash = block.hash;
 
-            // Store block
             self.blocks_by_number.insert(block_number, block.clone());
             self.blocks_by_hash.insert(block_hash, block);
 
-            // Store transactions and their locations
             for (idx, tx) in transactions.iter().enumerate() {
                 self.transactions.insert(tx.hash, tx.clone());
                 self.tx_locations.insert(
@@ -1006,7 +934,6 @@ mod model_tests {
                 );
             }
 
-            // Store receipts and collect logs
             let mut all_logs = Vec::new();
             for receipt in receipts {
                 all_logs.extend(receipt.logs.clone());
@@ -1016,7 +943,6 @@ mod model_tests {
                 self.logs_by_block.insert(block_number, all_logs);
             }
 
-            // Update latest block
             self.latest_block = Some(
                 self.latest_block
                     .map(|l| l.max(block_number))
@@ -1060,32 +986,13 @@ mod model_tests {
     /// Operations that can be performed on a ChainIndex.
     #[derive(Debug, Clone)]
     enum Operation {
-        StoreBlock {
-            block_number: u64,
-            tx_count: usize,
-        },
-        GetBlock {
-            number: u64,
-        },
-        GetBlockByHash {
-            /// Index into previously stored blocks (modulo stored count)
-            block_idx: usize,
-        },
-        GetTransaction {
-            /// Index into previously stored transactions (modulo stored count)
-            tx_idx: usize,
-        },
-        GetReceipt {
-            /// Index into previously stored transactions (modulo stored count)
-            tx_idx: usize,
-        },
-        GetTransactionLocation {
-            /// Index into previously stored transactions (modulo stored count)
-            tx_idx: usize,
-        },
-        GetLogsByBlock {
-            number: u64,
-        },
+        StoreBlock { block_number: u64, tx_count: usize },
+        GetBlock { number: u64 },
+        GetBlockByHash { block_idx: usize },
+        GetTransaction { tx_idx: usize },
+        GetReceipt { tx_idx: usize },
+        GetTransactionLocation { tx_idx: usize },
+        GetLogsByBlock { number: u64 },
         GetLatestBlockNumber,
     }
 
@@ -1097,37 +1004,26 @@ mod model_tests {
         stored_tx_hashes: Vec<B256>,
     }
 
-    /// Strategy to generate a single operation.
     fn arb_operation(max_block: u64, _max_txs: usize) -> impl Strategy<Value = Operation> {
         prop_oneof![
-            // Store block with 0-3 transactions
             (0..max_block, 0..=3usize).prop_map(|(block_number, tx_count)| Operation::StoreBlock {
                 block_number,
                 tx_count
             }),
-            // Get block by number
             (0..max_block).prop_map(|number| Operation::GetBlock { number }),
-            // Get block by hash (index into stored blocks)
             (0..10usize).prop_map(|block_idx| Operation::GetBlockByHash { block_idx }),
-            // Get transaction
             (0..10usize).prop_map(|tx_idx| Operation::GetTransaction { tx_idx }),
-            // Get receipt
             (0..10usize).prop_map(|tx_idx| Operation::GetReceipt { tx_idx }),
-            // Get transaction location
             (0..10usize).prop_map(|tx_idx| Operation::GetTransactionLocation { tx_idx }),
-            // Get logs by block
             (0..max_block).prop_map(|number| Operation::GetLogsByBlock { number }),
-            // Get latest block number
             Just(Operation::GetLatestBlockNumber),
         ]
     }
 
-    /// Strategy to generate a sequence of operations.
     fn arb_operations(count: usize) -> impl Strategy<Value = Vec<Operation>> {
         proptest::collection::vec(arb_operation(20, 5), 1..=count)
     }
 
-    /// Generate test data for a block with transactions.
     fn generate_block_data(
         block_number: u64,
         tx_count: usize,
@@ -1151,7 +1047,6 @@ mod model_tests {
             let mut receipt =
                 make_test_stored_receipt(tx_hash, block_number, block.hash, i as u32, true);
 
-            // Add a log to every other transaction
             if i % 2 == 0 {
                 receipt.logs.push(crate::types::StoredLog {
                     address: Address::repeat_byte((tx_id % 256) as u8),
@@ -1171,8 +1066,7 @@ mod model_tests {
         /// Model-based test: verify that PersistentChainIndex behaves identically to the reference model.
         #[test]
         fn prop_chain_index_matches_model(operations in arb_operations(30)) {
-            let storage = Arc::new(MockStorage::new());
-            let index = PersistentChainIndex::new(storage);
+            let index = PersistentChainIndex::in_memory().unwrap();
             let mut model = ChainIndexModel::new();
             let mut state = OperationState::default();
             let mut tx_counter = 0u64;
@@ -1180,7 +1074,6 @@ mod model_tests {
             for op in operations {
                 match op {
                     Operation::StoreBlock { block_number, tx_count } => {
-                        // Skip if block already stored
                         if state.stored_block_numbers.contains(&block_number) {
                             continue;
                         }
@@ -1188,14 +1081,12 @@ mod model_tests {
                         let (block, txs, receipts) =
                             generate_block_data(block_number, tx_count, &mut tx_counter);
 
-                        // Track stored data
                         state.stored_block_numbers.push(block_number);
                         state.stored_block_hashes.push(block.hash);
                         for tx in &txs {
                             state.stored_tx_hashes.push(tx.hash);
                         }
 
-                        // Apply to both
                         model.store_block(block.clone(), txs.clone(), receipts.clone());
                         index.store_block(block, txs, receipts).unwrap();
                     }
@@ -1314,27 +1205,21 @@ mod model_tests {
         }
 
         /// Test that storing the same block number twice doesn't corrupt state.
-        /// The second store overwrites the first.
         #[test]
         fn prop_duplicate_block_storage(block_number in 0u64..100, tx_count1 in 0usize..3, tx_count2 in 0usize..3) {
-            let storage = Arc::new(MockStorage::new());
-            let index = PersistentChainIndex::new(storage);
+            let index = PersistentChainIndex::in_memory().unwrap();
             let mut tx_counter = 0u64;
 
-            // Store first version
             let (block1, txs1, receipts1) = generate_block_data(block_number, tx_count1, &mut tx_counter);
             index.store_block(block1, txs1, receipts1).unwrap();
 
-            // Store second version (different hash due to different timestamp in test helper)
             let (block2, txs2, receipts2) = generate_block_data(block_number, tx_count2, &mut tx_counter);
             let block2_hash = block2.hash;
             index.store_block(block2, txs2.clone(), receipts2).unwrap();
 
-            // The block should reflect the second store
             let retrieved = index.get_block(block_number).unwrap().unwrap();
             prop_assert_eq!(retrieved.hash, block2_hash);
 
-            // Transaction count should match second store
             let tx_hashes = index.get_block_transactions(block_number).unwrap();
             prop_assert_eq!(tx_hashes.len(), txs2.len());
         }
@@ -1345,12 +1230,10 @@ mod model_tests {
             block_number in 1000u64..2000,
             tx_hash_bytes in proptest::collection::vec(any::<u8>(), 32)
         ) {
-            let storage = Arc::new(MockStorage::new());
-            let index = PersistentChainIndex::new(storage);
+            let index = PersistentChainIndex::in_memory().unwrap();
 
             let tx_hash = B256::from_slice(&tx_hash_bytes);
 
-            // All queries for non-existent data should return None/empty
             prop_assert!(index.get_block(block_number).unwrap().is_none());
             prop_assert!(index.get_block_by_hash(tx_hash).unwrap().is_none());
             prop_assert!(index.get_transaction(tx_hash).unwrap().is_none());
@@ -1362,13 +1245,11 @@ mod model_tests {
         /// Test that block number lookups are consistent with block storage.
         #[test]
         fn prop_block_number_lookup_consistent(blocks in proptest::collection::vec(0u64..50, 1..10)) {
-            let storage = Arc::new(MockStorage::new());
-            let index = PersistentChainIndex::new(storage);
+            let index = PersistentChainIndex::in_memory().unwrap();
             let mut tx_counter = 0u64;
 
             let mut stored_blocks = Vec::new();
             for &block_number in &blocks {
-                // Skip duplicates
                 if stored_blocks.iter().any(|(n, _)| *n == block_number) {
                     continue;
                 }
@@ -1379,17 +1260,13 @@ mod model_tests {
                 stored_blocks.push((block_number, hash));
             }
 
-            // Verify all lookups are consistent
             for (number, hash) in &stored_blocks {
-                // get_block_number(hash) should return the number
                 let looked_up_number = index.get_block_number(*hash).unwrap();
                 prop_assert_eq!(looked_up_number, Some(*number));
 
-                // get_block(number).hash should equal the stored hash
                 let block = index.get_block(*number).unwrap().unwrap();
                 prop_assert_eq!(block.hash, *hash);
 
-                // get_block_by_hash(hash).number should equal the stored number
                 let block_by_hash = index.get_block_by_hash(*hash).unwrap().unwrap();
                 prop_assert_eq!(block_by_hash.number, *number);
             }

@@ -16,7 +16,6 @@ archive = []
 evolve_core.workspace = true
 evolve_stf_traits.workspace = true
 evolve_stf.workspace = true
-evolve_storage.workspace = true
 evolve_rpc_types.workspace = true
 evolve_eth_jsonrpc.workspace = true
 evolve_mempool.workspace = true
@@ -34,9 +33,11 @@ parking_lot = "0.12"
 lru = "0.12"
 sha2.workspace = true
 futures = "0.3"
+rusqlite.workspace = true
 
 [dev-dependencies]
 proptest = "1.4"
+tempfile = "3"
 
 [lints]
 workspace = true
