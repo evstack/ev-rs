@@ -74,6 +74,7 @@ evolve_p2p = { path = "crates/p2p" }
 # outside deps
 linkme = { version = "0.3", default-features = false }
 commonware-cryptography = "2026.2.0"
+commonware-parallel = "2026.2.0"
 commonware-runtime = "2026.2.0"
 commonware-storage = "2026.2.0"
 commonware-utils = "2026.2.0"
