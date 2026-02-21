@@ -167,30 +167,20 @@ pub struct GenesisOutput<G> {
 
 type RuntimeContext = TokioContext;
 
-/// Check if block archival is enabled via environment variable.
-fn block_archive_enabled() -> bool {
-    std::env::var("EVOLVE_BLOCK_ARCHIVE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
-
-/// Build the block archive callback if enabled.
+/// Build the block archive callback.
 ///
 /// Creates a `BlockStorage` backed by the commonware archive and returns
 /// an `OnBlockArchive` callback that writes each produced block into it.
-async fn build_block_archive(context: TokioContext) -> Option<OnBlockArchive> {
-    if !block_archive_enabled() {
-        return None;
-    }
-
+///
+/// # Panics
+///
+/// Panics if block storage initialization fails. Block archival is a required
+/// subsystem — all produced blocks must be persisted.
+async fn build_block_archive(context: TokioContext) -> OnBlockArchive {
     let config = BlockStorageConfig::default();
-    let store = match BlockStorage::new(context, config).await {
-        Ok(s) => s,
-        Err(e) => {
-            tracing::error!("Failed to initialize block archive: {:?}", e);
-            return None;
-        }
-    };
+    let store = BlockStorage::new(context, config)
+        .await
+        .expect("failed to initialize block archive storage");
 
     let (tx, mut rx) = tokio::sync::mpsc::channel::<(u64, ArchiveBlockHash, bytes::Bytes)>(64);
 
@@ -206,7 +196,7 @@ async fn build_block_archive(context: TokioContext) -> Option<OnBlockArchive> {
 
     tracing::info!("Block archive storage enabled");
 
-    let cb: OnBlockArchive = Arc::new(move |block_number, block_hash, block_bytes| {
+    Arc::new(move |block_number, block_hash, block_bytes| {
         let hash_bytes = ArchiveBlockHash::new(block_hash.0);
         if let Err(e) = tx.try_send((block_number, hash_bytes, block_bytes)) {
             tracing::warn!(
@@ -215,9 +205,7 @@ async fn build_block_archive(context: TokioContext) -> Option<OnBlockArchive> {
                 e
             );
         }
-    });
-
-    Some(cb)
+    })
 }
 
 /// Run the dev node with default settings (RPC enabled).
@@ -381,7 +369,7 @@ pub fn run_dev_node_with_rpc<
                 ..Default::default()
             };
 
-            // Build block archive callback if enabled
+            // Build block archive callback (always on)
             let archive_cb = build_block_archive(context_for_archive).await;
 
             // Set up RPC infrastructure if enabled
@@ -430,7 +418,7 @@ pub fn run_dev_node_with_rpc<
                 .expect("failed to start RPC server");
 
                 // Create DevConsensus with RPC support
-                let mut consensus = DevConsensus::with_rpc(
+                let consensus = DevConsensus::with_rpc(
                     stf,
                     storage,
                     codes,
@@ -438,10 +426,8 @@ pub fn run_dev_node_with_rpc<
                     chain_index,
                     subscriptions,
                 )
-                .with_indexing_enabled(rpc_config.enable_block_indexing);
-                if let Some(cb) = archive_cb {
-                    consensus = consensus.with_block_archive(cb);
-                }
+                .with_indexing_enabled(rpc_config.enable_block_indexing)
+                .with_block_archive(archive_cb);
                 let dev: Arc<DevConsensus<Stf, S, Codes, Tx, PersistentChainIndex>> =
                     Arc::new(consensus);
 
@@ -485,10 +471,8 @@ pub fn run_dev_node_with_rpc<
                 Some(handle)
             } else {
                 // No RPC - use simple DevConsensus
-                let mut consensus = DevConsensus::new(stf, storage, codes, dev_config);
-                if let Some(cb) = archive_cb {
-                    consensus = consensus.with_block_archive(cb);
-                }
+                let consensus = DevConsensus::new(stf, storage, codes, dev_config)
+                    .with_block_archive(archive_cb);
                 let dev: Arc<DevConsensus<Stf, S, Codes, Tx, evolve_server::NoopChainIndex>> =
                     Arc::new(consensus);
 
@@ -820,7 +804,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
 
             let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
 
-            // Build block archive callback if enabled
+            // Build block archive callback (always on)
             let archive_cb = build_block_archive(context_for_archive).await;
 
             let rpc_handle = if rpc_config.enabled {
@@ -863,7 +847,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                 .await
                 .expect("failed to start RPC server");
 
-                let mut consensus = DevConsensus::with_rpc_and_mempool(
+                let consensus = DevConsensus::with_rpc_and_mempool(
                     stf,
                     storage,
                     codes,
@@ -872,10 +856,8 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                     subscriptions,
                     mempool.clone(),
                 )
-                .with_indexing_enabled(rpc_config.enable_block_indexing);
-                if let Some(cb) = archive_cb {
-                    consensus = consensus.with_block_archive(cb);
-                }
+                .with_indexing_enabled(rpc_config.enable_block_indexing)
+                .with_block_archive(archive_cb);
                 let dev: Arc<DevConsensus<Stf, S, Codes, TxContext, PersistentChainIndex>> =
                     Arc::new(consensus);
 
@@ -915,10 +897,8 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
 
                 Some(handle)
             } else {
-                let mut consensus = DevConsensus::with_mempool(stf, storage, codes, dev_config, mempool);
-                if let Some(cb) = archive_cb {
-                    consensus = consensus.with_block_archive(cb);
-                }
+                let consensus = DevConsensus::with_mempool(stf, storage, codes, dev_config, mempool)
+                    .with_block_archive(archive_cb);
                 let dev: Arc<DevConsensus<Stf, S, Codes, TxContext, evolve_server::NoopChainIndex>> =
                     Arc::new(consensus);
 
