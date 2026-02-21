@@ -30,9 +30,6 @@
 //! sync() → fsync pending writes
 //! ```
 
-// Instant is used for performance metrics only, not consensus logic.
-#![allow(clippy::disallowed_types)]
-
 use crate::types::{BlockHash, BlockStorageConfig};
 use commonware_codec::RangeCfg;
 use commonware_runtime::{buffer::PoolRef, Clock, Metrics, Storage as RStorage};
@@ -43,7 +40,7 @@ use commonware_storage::{
     },
     translator::EightCap,
 };
-use std::{num::NonZeroUsize, time::Instant};
+use std::num::NonZeroUsize;
 use thiserror::Error;
 
 /// Error types for block storage operations.
@@ -55,8 +52,6 @@ pub enum BlockStorageError {
     #[error("invalid configuration: {0}")]
     InvalidConfig(String),
 
-    #[error("block not found at number {0}")]
-    NotFound(u64),
 }
 
 /// Archive-backed block storage.
@@ -71,6 +66,13 @@ pub enum BlockStorageError {
 ///
 /// `BlockStorage` requires `&mut self` for writes and `&self` for reads. It
 /// should be wrapped in a lock (`tokio::sync::Mutex`) when shared across tasks.
+/// Page size for the key journal buffer pool (bytes).
+const KEY_JOURNAL_PAGE_SIZE: u16 = 4096;
+
+/// Number of cached pages in the key journal buffer pool.
+/// Total cache: KEY_JOURNAL_PAGE_SIZE * KEY_JOURNAL_CACHE_PAGES = 256KB by default.
+const KEY_JOURNAL_CACHE_PAGES: usize = 64;
+
 pub struct BlockStorage<C>
 where
     C: RStorage + Clock + Metrics + Clone + Send + Sync + 'static,
@@ -87,13 +89,10 @@ where
     /// If block data was previously stored, the in-memory index is rebuilt from
     /// the key journal on startup (no value reads are performed during init).
     pub async fn new(context: C, config: BlockStorageConfig) -> Result<Self, BlockStorageError> {
-        // Validate blocks_per_section (the NonZeroU64 below will catch zero, but we validate
-        // early here for a better error message).
-        if config.blocks_per_section == 0 {
-            return Err(BlockStorageError::InvalidConfig(
-                "blocks_per_section must be non-zero".to_string(),
-            ));
-        }
+        let blocks_per_section = std::num::NonZeroU64::new(config.blocks_per_section)
+            .ok_or_else(|| {
+                BlockStorageError::InvalidConfig("blocks_per_section must be non-zero".to_string())
+            })?;
 
         let key_write_buffer = NonZeroUsize::new(config.key_write_buffer).ok_or_else(|| {
             BlockStorageError::InvalidConfig("key_write_buffer must be non-zero".to_string())
@@ -108,15 +107,9 @@ where
         })?;
 
         // Buffer pool for the key journal.
-        // Page size: 4096 bytes (standard); cache: 64 pages (256KB).
-        let page_size = std::num::NonZeroU16::new(4096).unwrap();
-        let cache_pages = std::num::NonZeroUsize::new(64).unwrap();
+        let page_size = std::num::NonZeroU16::new(KEY_JOURNAL_PAGE_SIZE).unwrap();
+        let cache_pages = std::num::NonZeroUsize::new(KEY_JOURNAL_CACHE_PAGES).unwrap();
         let key_buffer_pool = PoolRef::new(page_size, cache_pages);
-
-        let blocks_per_section_u64 = std::num::NonZeroU64::new(config.blocks_per_section)
-            .ok_or_else(|| {
-                BlockStorageError::InvalidConfig("blocks_per_section must be non-zero".to_string())
-            })?;
 
         let cfg = ArchiveConfig {
             translator: EightCap,
@@ -129,7 +122,7 @@ where
             // `bytes::Bytes` uses `RangeCfg<usize>` as its codec config.
             // An unbounded range accepts blocks of any size.
             codec_config: RangeCfg::from(..),
-            items_per_section: blocks_per_section_u64,
+            items_per_section: blocks_per_section,
             key_write_buffer,
             value_write_buffer,
             replay_buffer,
@@ -146,13 +139,14 @@ where
     /// If `block_number` already exists, this is a no-op (idempotent).
     ///
     /// Returns an error if the block number is older than the current prune horizon.
+    #[allow(clippy::disallowed_types)] // Instant is for metrics only, not consensus.
     pub async fn put(
         &mut self,
         block_number: u64,
         block_hash: BlockHash,
         block_bytes: bytes::Bytes,
     ) -> Result<(), BlockStorageError> {
-        let start = Instant::now();
+        let start = std::time::Instant::now();
         self.archive
             .put(block_number, block_hash, block_bytes)
             .await?;
@@ -231,15 +225,22 @@ where
     ///
     /// Equivalent to `put` followed by `sync`. Use when write durability is
     /// required for each block (e.g., during block finalization).
+    #[allow(clippy::disallowed_types)] // Instant is for metrics only, not consensus.
     pub async fn put_sync(
         &mut self,
         block_number: u64,
         block_hash: BlockHash,
         block_bytes: bytes::Bytes,
     ) -> Result<(), BlockStorageError> {
+        let start = std::time::Instant::now();
         self.archive
             .put_sync(block_number, block_hash, block_bytes)
             .await?;
+        tracing::debug!(
+            block_number,
+            elapsed_us = start.elapsed().as_micros(),
+            "block stored (durable)"
+        );
         Ok(())
     }
 }
@@ -543,6 +544,23 @@ mod tests {
                 hash_before.as_bytes(),
                 hash_after.as_bytes(),
                 "block storage writes must not change the QMDB commit hash"
+            );
+
+            // Stronger proof: write new state AFTER block storage writes.
+            // The hash should change only due to the state write, proving block
+            // storage didn't corrupt the QMDB namespace.
+            qmdb.apply_batch(vec![crate::types::Operation::Set {
+                key: b"account_2".to_vec(),
+                value: b"balance_200".to_vec(),
+            }])
+            .await
+            .unwrap();
+            let hash_with_new_state = qmdb.commit_state().await.unwrap();
+
+            assert_ne!(
+                hash_after.as_bytes(),
+                hash_with_new_state.as_bytes(),
+                "new state write must change the QMDB commit hash (proves QMDB is still functional after block storage writes)"
             );
         });
     }
