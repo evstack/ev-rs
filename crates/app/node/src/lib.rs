@@ -257,6 +257,7 @@ pub fn run_dev_node_with_rpc<
         path: data_dir.to_path_buf(),
         ..Default::default()
     };
+    let chain_index_db_path = data_dir.join("chain-index.sqlite");
 
     let runtime_config = TokioConfig::default()
         .with_storage_directory(data_dir)
@@ -277,6 +278,7 @@ pub fn run_dev_node_with_rpc<
         let run_genesis = Arc::clone(&run_genesis);
         let build_storage = Arc::clone(&build_storage);
         let rpc_config = rpc_config.clone();
+        let chain_index_db_path = chain_index_db_path.clone();
 
         async move {
             // Clone context early since build_storage takes ownership
@@ -323,10 +325,11 @@ pub fn run_dev_node_with_rpc<
 
             // Set up RPC infrastructure if enabled
             let rpc_handle = if rpc_config.enabled {
-                // Create chain index for RPC queries
-                // Clone storage since both DevConsensus and ChainIndex need access
-                let storage_for_index = storage.clone();
-                let chain_index = Arc::new(PersistentChainIndex::new(Arc::new(storage_for_index)));
+                // Create chain index backed by SQLite
+                let chain_index = Arc::new(
+                    PersistentChainIndex::new(&chain_index_db_path)
+                        .expect("failed to open chain index database"),
+                );
 
                 // Initialize from existing data
                 if let Err(e) = chain_index.initialize() {
@@ -366,7 +369,7 @@ pub fn run_dev_node_with_rpc<
                 .expect("failed to start RPC server");
 
                 // Create DevConsensus with RPC support
-                let dev: Arc<DevConsensus<Stf, S, Codes, Tx, PersistentChainIndex<S>>> = Arc::new(
+                let dev: Arc<DevConsensus<Stf, S, Codes, Tx, PersistentChainIndex>> = Arc::new(
                     DevConsensus::with_rpc(
                         stf,
                         storage,
@@ -683,6 +686,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
         path: data_dir.to_path_buf(),
         ..Default::default()
     };
+    let chain_index_db_path = data_dir.join("chain-index.sqlite");
 
     let runtime_config = TokioConfig::default()
         .with_storage_directory(data_dir)
@@ -703,6 +707,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
         let run_genesis = Arc::clone(&run_genesis);
         let build_storage = Arc::clone(&build_storage);
         let rpc_config = rpc_config.clone();
+        let chain_index_db_path = chain_index_db_path.clone();
 
         async move {
             let context_for_shutdown = context.clone();
@@ -747,8 +752,10 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
             let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
 
             let rpc_handle = if rpc_config.enabled {
-                let storage_for_index = storage.clone();
-                let chain_index = Arc::new(PersistentChainIndex::new(Arc::new(storage_for_index)));
+                let chain_index = Arc::new(
+                    PersistentChainIndex::new(&chain_index_db_path)
+                        .expect("failed to open chain index database"),
+                );
 
                 if let Err(e) = chain_index.initialize() {
                     tracing::warn!("Failed to initialize chain index: {:?}", e);
@@ -784,7 +791,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                 .await
                 .expect("failed to start RPC server");
 
-                let dev: Arc<DevConsensus<Stf, S, Codes, TxContext, PersistentChainIndex<S>>> =
+                let dev: Arc<DevConsensus<Stf, S, Codes, TxContext, PersistentChainIndex>> =
                     Arc::new(
                         DevConsensus::with_rpc_and_mempool(
                             stf,
