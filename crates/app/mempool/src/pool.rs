@@ -622,7 +622,7 @@ mod tests {
         pool.add(tx2).unwrap();
 
         let sender_txs = pool.get_sender_txs(&sender);
-        assert_eq!(sender_txs.len(), 2);
+        assert_eq!(sender_txs, vec![[1u8; 32], [2u8; 32]]);
     }
 
     #[test]
@@ -641,9 +641,7 @@ mod tests {
         pool.add(tx3).unwrap();
 
         let sender_txs = pool.get_sender_txs(&sender);
-        assert_eq!(sender_txs.len(), 2);
-        assert!(sender_txs.contains(&[2u8; 32]));
-        assert!(sender_txs.contains(&[3u8; 32]));
+        assert_eq!(sender_txs, vec![[2u8; 32], [3u8; 32]]);
     }
 
     #[test]
@@ -866,5 +864,25 @@ mod tests {
 
         // tx1 should still be in pool (it was skipped, not removed)
         assert!(pool.contains(&[1u8; 32]));
+    }
+
+    #[test]
+    fn test_select_with_gas_budget_skipped_txs_can_be_selected_later() {
+        let mut pool: Mempool<TestGasTx> = Mempool::new();
+
+        let tx1 = TestGasTx::new(1, 100, 0, &[0xAAu8; 20]).with_gas_limit(50_000);
+        let tx2 = TestGasTx::new(2, 80, 0, &[0xBBu8; 20]).with_gas_limit(10_000);
+        pool.add(tx1).unwrap();
+        pool.add(tx2).unwrap();
+
+        let (first_selected, first_gas) = pool.select_with_gas_budget(15_000, 0);
+        assert_eq!(first_selected.len(), 1);
+        assert_eq!(first_selected[0].tx_id(), [2u8; 32]);
+        assert_eq!(first_gas, 10_000);
+
+        let (second_selected, second_gas) = pool.select_with_gas_budget(60_000, 0);
+        assert_eq!(second_selected.len(), 1);
+        assert_eq!(second_selected[0].tx_id(), [1u8; 32]);
+        assert_eq!(second_gas, 50_000);
     }
 }

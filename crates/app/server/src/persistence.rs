@@ -65,6 +65,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evolve_storage::MockStorage;
 
     #[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize)]
     struct TestGenesis {
@@ -83,5 +84,39 @@ mod tests {
 
         assert_eq!(decoded.height, 42);
         assert_eq!(decoded.genesis_result.account_id, 123);
+    }
+
+    #[tokio::test]
+    async fn test_save_and_load_chain_state_roundtrip() {
+        let storage = MockStorage::new();
+        let state = ChainState {
+            height: 77,
+            genesis_result: TestGenesis { account_id: 999 },
+        };
+
+        save_chain_state(&storage, &state)
+            .await
+            .expect("save_chain_state should succeed");
+
+        let loaded: Option<ChainState<TestGenesis>> = load_chain_state(&storage);
+        let loaded = loaded.expect("chain state should be present");
+        assert_eq!(loaded.height, 77);
+        assert_eq!(loaded.genesis_result.account_id, 999);
+    }
+
+    #[tokio::test]
+    async fn test_load_chain_state_returns_none_for_corrupted_bytes() {
+        let storage = MockStorage::new();
+        storage
+            .batch(vec![Operation::Set {
+                key: CHAIN_STATE_KEY.to_vec(),
+                value: vec![0x01, 0x02, 0x03],
+            }])
+            .await
+            .expect("mock batch should succeed");
+        storage.commit().await.expect("mock commit should succeed");
+
+        let loaded: Option<ChainState<TestGenesis>> = load_chain_state(&storage);
+        assert!(loaded.is_none());
     }
 }
