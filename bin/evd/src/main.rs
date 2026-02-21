@@ -216,11 +216,21 @@ fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
 
             // Create shared mempool
             let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
-            // Create chain index (shared between RPC and block callback)
-            let chain_index = Arc::new(PersistentChainIndex::new(Arc::new(storage.clone())));
-            if let Err(e) = chain_index.initialize() {
-                tracing::warn!("Failed to initialize chain index: {:?}", e);
-            }
+            // Create chain index backed by SQLite (only when needed)
+            let chain_index = if config.rpc.enabled || config.rpc.enable_block_indexing {
+                let chain_index_db_path =
+                    std::path::PathBuf::from(&config.storage.path).join("chain-index.sqlite");
+                let index = Arc::new(
+                    PersistentChainIndex::new(&chain_index_db_path)
+                        .expect("failed to open chain index database"),
+                );
+                if let Err(e) = index.initialize() {
+                    tracing::warn!("Failed to initialize chain index: {:?}", e);
+                }
+                Some(index)
+            } else {
+                None
+            };
 
             // Set up JSON-RPC server if enabled
             let rpc_handle = if config.rpc.enabled {
@@ -235,7 +245,7 @@ fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
                 };
 
                 let state_provider = ChainStateProvider::with_mempool(
-                    Arc::clone(&chain_index),
+                    Arc::clone(chain_index.as_ref().expect("chain index required for RPC")),
                     state_provider_config,
                     codes_for_rpc,
                     mempool.clone(),
@@ -267,7 +277,7 @@ fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
 
             // Build the OnBlockExecuted callback: commits state to storage + indexes blocks
             let storage_for_callback = storage.clone();
-            let chain_index_for_callback = Arc::clone(&chain_index);
+            let chain_index_for_callback = chain_index.clone();
             let parent_hash_for_callback = Arc::clone(&parent_hash);
             let current_height_for_callback = Arc::clone(&current_height);
             let callback_chain_id = config.chain.chain_id;
@@ -315,20 +325,20 @@ fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
                 let (stored_block, stored_txs, stored_receipts) =
                     build_index_data(&block, &info.block_result, &metadata);
 
-                if callback_indexing_enabled {
-                    if let Err(e) = chain_index_for_callback.store_block(
-                        stored_block,
-                        stored_txs,
-                        stored_receipts,
-                    ) {
-                        tracing::warn!("Failed to index block {}: {:?}", info.height, e);
-                    } else {
-                        tracing::debug!(
-                            "Indexed block {} (hash={}, state_root={})",
-                            info.height,
-                            block_hash,
-                            state_root
-                        );
+                if let Some(ref chain_index) = chain_index_for_callback {
+                    if callback_indexing_enabled {
+                        if let Err(e) =
+                            chain_index.store_block(stored_block, stored_txs, stored_receipts)
+                        {
+                            tracing::warn!("Failed to index block {}: {:?}", info.height, e);
+                        } else {
+                            tracing::debug!(
+                                "Indexed block {} (hash={}, state_root={})",
+                                info.height,
+                                block_hash,
+                                state_root
+                            );
+                        }
                     }
                 }
 

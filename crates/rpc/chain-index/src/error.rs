@@ -44,6 +44,10 @@ pub enum ChainIndexError {
     /// Index is empty (no blocks stored).
     #[error("chain index is empty")]
     EmptyIndex,
+
+    /// SQLite database error.
+    #[error("sqlite error: {0}")]
+    Sqlite(String),
 }
 
 impl From<serde_json::Error> for ChainIndexError {
@@ -55,6 +59,12 @@ impl From<serde_json::Error> for ChainIndexError {
 impl From<evolve_core::ErrorCode> for ChainIndexError {
     fn from(err: evolve_core::ErrorCode) -> Self {
         ChainIndexError::Storage(format!("error code: {:?}", err))
+    }
+}
+
+impl From<rusqlite::Error> for ChainIndexError {
+    fn from(err: rusqlite::Error) -> Self {
+        ChainIndexError::Sqlite(err.to_string())
     }
 }
 
