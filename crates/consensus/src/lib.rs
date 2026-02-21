@@ -1,8 +1,3 @@
-// Automaton uses SystemTime for block timestamps in propose().
-// This is acceptable in a consensus proposer context (non-deterministic timestamp
-// is validated by verifiers and consensus).
-#![allow(clippy::disallowed_types)]
-
 pub mod automaton;
 pub mod block;
 pub mod config;

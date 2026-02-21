@@ -67,12 +67,16 @@ type QmdbMutable<C> =
 type QmdbDurable<C> =
     Db<C, StorageKey, StorageValueChunk, Sha256, EightCap, 64, Unmerkleized, Durable>;
 
-/// Internal state enum to track QMDB state machine transitions
+/// Internal state enum to track QMDB state machine transitions.
+///
+/// Both large variants are boxed to keep `sizeof(QmdbState<C>)` small.
+/// This prevents large stack allocations at every construction site and
+/// keeps async future state machines that hold this enum small.
 enum QmdbState<C: RStorage + Clock + Metrics + Clone + Send + Sync + 'static> {
-    /// Clean state - ready for proofs, durable
-    Clean(QmdbClean<C>),
-    /// Mutable state - can perform updates/deletes
-    Mutable(QmdbMutable<C>),
+    /// Clean state - ready for proofs, durable (boxed to reduce stack pressure)
+    Clean(Box<QmdbClean<C>>),
+    /// Mutable state - can perform updates/deletes (boxed to reduce stack pressure)
+    Mutable(Box<QmdbMutable<C>>),
     /// Transitional state for ownership management
     Transitioning,
 }
@@ -210,14 +214,17 @@ where
             page_cache: CacheRef::new(page_size, capacity),
         };
 
-        // Initialize QMDB - starts in Clean state (Merkleized, Durable)
-        let db: QmdbClean<C> = Db::init(context.clone(), qmdb_config)
+        // Initialize QMDB - starts in Clean state (Merkleized, Durable).
+        // Box::pin prevents the Db::init future's state machine from being
+        // stored inline in with_metrics' state machine, keeping the combined
+        // state machine (which lives on the test/caller thread's stack) small.
+        let db: QmdbClean<C> = Box::pin(Db::init(context.clone(), qmdb_config))
             .await
             .map_err(|e| StorageError::Qmdb(e.to_string()))?;
 
         Ok(Self {
             context: Arc::new(context),
-            state: Arc::new(RwLock::new(QmdbState::Clean(db))),
+            state: Arc::new(RwLock::new(QmdbState::Clean(Box::new(db)))),
             cache: Arc::new(ShardedDbCache::with_defaults()),
             metrics,
         })
@@ -255,9 +262,10 @@ where
         // Take ownership to perform state transitions
         let current_state = std::mem::replace(&mut *state_guard, QmdbState::Transitioning);
 
-        let clean_db = match current_state {
+        // Keep clean_db boxed to avoid putting QmdbClean<C> on the stack.
+        let clean_db: Box<QmdbClean<C>> = match current_state {
             QmdbState::Clean(db) => {
-                // Already clean, just return current root
+                // Already clean, return the existing Box directly.
                 db
             }
             QmdbState::Mutable(db) => {
@@ -273,7 +281,7 @@ where
                     .await
                     .map_err(|e| StorageError::Qmdb(e.to_string()))?;
 
-                clean
+                Box::new(clean)
             }
             QmdbState::Transitioning => {
                 return Err(StorageError::InvalidState(
@@ -282,7 +290,7 @@ where
             }
         };
 
-        // Get the root hash
+        // Get the root hash (Deref coerces Box<QmdbClean<C>> → &QmdbClean<C>).
         let root = clean_db.root();
         let hash = match root.as_ref().try_into() {
             Ok(bytes) => crate::types::CommitHash::new(bytes),
@@ -292,7 +300,7 @@ where
             }
         };
 
-        // Store clean state back
+        // Store clean state back (already boxed, no extra allocation).
         *state_guard = QmdbState::Clean(clean_db);
 
         // Record commit latency
@@ -358,10 +366,11 @@ where
         // Take ownership to perform state transition if needed
         let current_state = std::mem::replace(&mut *state_guard, QmdbState::Transitioning);
 
-        let mut mutable_db: QmdbMutable<C> = match current_state {
+        let mut mutable_db: Box<QmdbMutable<C>> = match current_state {
             QmdbState::Clean(db) => {
-                // Clean → into_mutable() → Mutable (sync method)
-                db.into_mutable()
+                // Clean → into_mutable() → Mutable (sync method).
+                // Rust auto-moves out of Box<T> for consuming methods.
+                Box::new(db.into_mutable())
             }
             QmdbState::Mutable(db) => db,
             QmdbState::Transitioning => {

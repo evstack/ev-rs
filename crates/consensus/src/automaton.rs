@@ -128,6 +128,9 @@ where
         digest
     }
 
+    // SystemTime::now() is used here for block timestamps only. This is acceptable
+    // in a consensus proposer context — the timestamp is validated by verifiers.
+    #[allow(clippy::disallowed_types)]
     async fn propose(&mut self, _context: Self::Context) -> oneshot::Receiver<Self::Digest> {
         let (sender, receiver) = oneshot::channel();
 
