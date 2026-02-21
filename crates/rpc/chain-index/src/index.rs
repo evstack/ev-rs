@@ -116,8 +116,8 @@ impl PersistentChainIndex {
         let writer = Connection::open(&uri)?;
         configure_connection(&writer)?;
 
-        let manager = SqliteConnectionManager::file(&uri)
-            .with_init(|conn| configure_connection(conn));
+        let manager =
+            SqliteConnectionManager::file(&uri).with_init(|conn| configure_connection(conn));
         let read_pool = Pool::builder()
             .max_size(2)
             .build(manager)

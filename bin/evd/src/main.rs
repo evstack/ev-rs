@@ -217,21 +217,20 @@ fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
             // Create shared mempool
             let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
             // Create chain index backed by SQLite (only when needed)
-            let chain_index =
-                if config.rpc.enabled || config.rpc.enable_block_indexing {
-                    let chain_index_db_path =
-                        std::path::PathBuf::from(&config.storage.path).join("chain-index.sqlite");
-                    let index = Arc::new(
-                        PersistentChainIndex::new(&chain_index_db_path)
-                            .expect("failed to open chain index database"),
-                    );
-                    if let Err(e) = index.initialize() {
-                        tracing::warn!("Failed to initialize chain index: {:?}", e);
-                    }
-                    Some(index)
-                } else {
-                    None
-                };
+            let chain_index = if config.rpc.enabled || config.rpc.enable_block_indexing {
+                let chain_index_db_path =
+                    std::path::PathBuf::from(&config.storage.path).join("chain-index.sqlite");
+                let index = Arc::new(
+                    PersistentChainIndex::new(&chain_index_db_path)
+                        .expect("failed to open chain index database"),
+                );
+                if let Err(e) = index.initialize() {
+                    tracing::warn!("Failed to initialize chain index: {:?}", e);
+                }
+                Some(index)
+            } else {
+                None
+            };
 
             // Set up JSON-RPC server if enabled
             let rpc_handle = if config.rpc.enabled {
@@ -328,11 +327,9 @@ fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
 
                 if let Some(ref chain_index) = chain_index_for_callback {
                     if callback_indexing_enabled {
-                        if let Err(e) = chain_index.store_block(
-                            stored_block,
-                            stored_txs,
-                            stored_receipts,
-                        ) {
+                        if let Err(e) =
+                            chain_index.store_block(stored_block, stored_txs, stored_receipts)
+                        {
                             tracing::warn!("Failed to index block {}: {:?}", info.height, e);
                         } else {
                             tracing::debug!(
