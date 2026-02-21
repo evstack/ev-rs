@@ -474,3 +474,209 @@ impl<S: StateProvider> ExecutionService for ExecutionServiceImpl<S> {
         }))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_primitives::{Address, Bytes, B256, U256};
+    use evolve_core::schema::AccountSchema;
+    use evolve_rpc_types::{
+        BlockTag as RpcBlockTag, CallRequest, LogFilter, RpcBlock, RpcLog, RpcReceipt,
+        RpcTransaction, SyncStatus,
+    };
+    use std::sync::Arc;
+
+    #[derive(Clone)]
+    struct MockProvider {
+        block_number: u64,
+        fail_block_number: bool,
+    }
+
+    impl MockProvider {
+        fn new(block_number: u64) -> Self {
+            Self {
+                block_number,
+                fail_block_number: false,
+            }
+        }
+
+        fn with_block_number_error(mut self) -> Self {
+            self.fail_block_number = true;
+            self
+        }
+    }
+
+    #[async_trait]
+    impl StateProvider for MockProvider {
+        async fn block_number(&self) -> Result<u64, RpcError> {
+            if self.fail_block_number {
+                Err(RpcError::InternalError("block_number failed".to_string()))
+            } else {
+                Ok(self.block_number)
+            }
+        }
+
+        async fn get_block_by_number(
+            &self,
+            _number: u64,
+            _full_transactions: bool,
+        ) -> Result<Option<RpcBlock>, RpcError> {
+            Ok(None)
+        }
+
+        async fn get_block_by_hash(
+            &self,
+            _hash: B256,
+            _full_transactions: bool,
+        ) -> Result<Option<RpcBlock>, RpcError> {
+            Ok(None)
+        }
+
+        async fn get_transaction_by_hash(
+            &self,
+            _hash: B256,
+        ) -> Result<Option<RpcTransaction>, RpcError> {
+            Ok(None)
+        }
+
+        async fn get_transaction_receipt(&self, _hash: B256) -> Result<Option<RpcReceipt>, RpcError> {
+            Ok(None)
+        }
+
+        async fn get_balance(&self, _address: Address, _block: Option<u64>) -> Result<U256, RpcError> {
+            Ok(U256::ZERO)
+        }
+
+        async fn get_transaction_count(
+            &self,
+            _address: Address,
+            _block: Option<u64>,
+        ) -> Result<u64, RpcError> {
+            Ok(0)
+        }
+
+        async fn call(&self, _request: &CallRequest, _block: Option<u64>) -> Result<Bytes, RpcError> {
+            Ok(Bytes::new())
+        }
+
+        async fn estimate_gas(
+            &self,
+            _request: &CallRequest,
+            _block: Option<u64>,
+        ) -> Result<u64, RpcError> {
+            Ok(21_000)
+        }
+
+        async fn get_logs(&self, _filter: &LogFilter) -> Result<Vec<RpcLog>, RpcError> {
+            Ok(Vec::new())
+        }
+
+        async fn send_raw_transaction(&self, _data: &[u8]) -> Result<B256, RpcError> {
+            Ok(B256::ZERO)
+        }
+
+        async fn get_code(&self, _address: Address, _block: Option<u64>) -> Result<Bytes, RpcError> {
+            Ok(Bytes::new())
+        }
+
+        async fn get_storage_at(
+            &self,
+            _address: Address,
+            _position: U256,
+            _block: Option<u64>,
+        ) -> Result<B256, RpcError> {
+            Ok(B256::ZERO)
+        }
+
+        async fn list_module_identifiers(&self) -> Result<Vec<String>, RpcError> {
+            Ok(Vec::new())
+        }
+
+        async fn get_module_schema(&self, _id: &str) -> Result<Option<AccountSchema>, RpcError> {
+            Ok(None)
+        }
+
+        async fn get_all_schemas(&self) -> Result<Vec<AccountSchema>, RpcError> {
+            Ok(Vec::new())
+        }
+
+        async fn protocol_version(&self) -> Result<String, RpcError> {
+            Ok("0x1".to_string())
+        }
+
+        async fn gas_price(&self) -> Result<U256, RpcError> {
+            Ok(U256::ZERO)
+        }
+
+        async fn syncing_status(&self) -> Result<SyncStatus, RpcError> {
+            Ok(SyncStatus::NotSyncing(false))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_block_variants() {
+        let service = ExecutionServiceImpl::new(1, Arc::new(MockProvider::new(55)));
+
+        assert_eq!(service.resolve_block(None).await.unwrap(), None);
+
+        let number = proto::BlockId {
+            id: Some(proto::block_id::Id::Number(7)),
+        };
+        assert_eq!(service.resolve_block(Some(&number)).await.unwrap(), Some(7));
+
+        let earliest = proto::BlockId {
+            id: Some(proto::block_id::Id::Tag(proto::BlockTag::Earliest as i32)),
+        };
+        assert_eq!(service.resolve_block(Some(&earliest)).await.unwrap(), Some(0));
+
+        for tag in [
+            RpcBlockTag::Latest,
+            RpcBlockTag::Pending,
+            RpcBlockTag::Safe,
+            RpcBlockTag::Finalized,
+        ] {
+            let block = proto::BlockId {
+                id: Some(proto::block_id::Id::Tag(match tag {
+                    RpcBlockTag::Latest => proto::BlockTag::Latest as i32,
+                    RpcBlockTag::Pending => proto::BlockTag::Pending as i32,
+                    RpcBlockTag::Safe => proto::BlockTag::Safe as i32,
+                    RpcBlockTag::Finalized => proto::BlockTag::Finalized as i32,
+                    RpcBlockTag::Earliest => unreachable!(),
+                })),
+            };
+            assert_eq!(service.resolve_block(Some(&block)).await.unwrap(), Some(55));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_block_bubbles_state_error() {
+        let service = ExecutionServiceImpl::new(1, Arc::new(MockProvider::new(10).with_block_number_error()));
+        let latest = proto::BlockId {
+            id: Some(proto::block_id::Id::Tag(proto::BlockTag::Latest as i32)),
+        };
+
+        let err = service
+            .resolve_block(Some(&latest))
+            .await
+            .expect_err("resolve_block should return provider error");
+        assert!(matches!(err, RpcError::InternalError(_)));
+    }
+
+    #[tokio::test]
+    async fn test_get_block_by_hash_rejects_invalid_hash_length() {
+        use crate::proto::evolve::v1::execution_service_server::ExecutionService;
+
+        let service = ExecutionServiceImpl::new(1, Arc::new(MockProvider::new(1)));
+        let req = proto::GetBlockByHashRequest {
+            hash: Some(proto::H256 { data: vec![0xAA; 3] }),
+            full_transactions: false,
+        };
+
+        let err = service
+            .get_block_by_hash(Request::new(req))
+            .await
+            .expect_err("invalid hash length should fail");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("Invalid block hash"));
+    }
+}

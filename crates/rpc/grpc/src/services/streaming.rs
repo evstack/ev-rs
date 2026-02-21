@@ -155,3 +155,86 @@ impl StreamingService for StreamingServiceImpl {
         Ok(Response::new(Box::pin(stream)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_primitives::{Address, Bytes, B256, U64};
+    use evolve_eth_jsonrpc::SubscriptionManager;
+    use tokio_stream::StreamExt;
+
+    #[tokio::test]
+    async fn test_subscribe_logs_applies_address_and_topic_filters() {
+        use crate::proto::evolve::v1::streaming_service_server::StreamingService;
+
+        let subscriptions = std::sync::Arc::new(SubscriptionManager::new());
+        let service = StreamingServiceImpl::new(subscriptions.clone());
+
+        let req = proto::SubscribeLogsRequest {
+            addresses: vec![proto::Address {
+                data: vec![0x11; 20],
+            }],
+            topics: vec![proto::TopicFilter {
+                topics: vec![proto::H256 {
+                    data: vec![0x22; 32],
+                }],
+            }],
+        };
+
+        let response = service
+            .subscribe_logs(Request::new(req))
+            .await
+            .expect("subscribe_logs should succeed");
+        let mut stream = response.into_inner();
+
+        // Filtered out by address.
+        subscriptions.publish_log(evolve_rpc_types::RpcLog {
+            address: Address::repeat_byte(0x33),
+            topics: vec![B256::repeat_byte(0x22)],
+            data: Bytes::new(),
+            block_number: Some(U64::from(1)),
+            transaction_hash: None,
+            transaction_index: None,
+            block_hash: None,
+            log_index: None,
+            removed: false,
+        });
+
+        // Filtered out by topic.
+        subscriptions.publish_log(evolve_rpc_types::RpcLog {
+            address: Address::repeat_byte(0x11),
+            topics: vec![B256::repeat_byte(0x44)],
+            data: Bytes::new(),
+            block_number: Some(U64::from(2)),
+            transaction_hash: None,
+            transaction_index: None,
+            block_hash: None,
+            log_index: None,
+            removed: false,
+        });
+
+        // Matching event should be delivered.
+        subscriptions.publish_log(evolve_rpc_types::RpcLog {
+            address: Address::repeat_byte(0x11),
+            topics: vec![B256::repeat_byte(0x22)],
+            data: Bytes::from_static(&[0xAB]),
+            block_number: Some(U64::from(3)),
+            transaction_hash: Some(B256::repeat_byte(0x55)),
+            transaction_index: Some(U64::from(1)),
+            block_hash: Some(B256::repeat_byte(0x66)),
+            log_index: Some(U64::from(0)),
+            removed: false,
+        });
+
+        let item = tokio::time::timeout(std::time::Duration::from_secs(1), stream.next())
+            .await
+            .expect("stream should yield")
+            .expect("stream should not terminate")
+            .expect("stream item should be ok");
+
+        assert_eq!(item.address.unwrap().data, vec![0x11; 20]);
+        assert_eq!(item.topics.len(), 1);
+        assert_eq!(item.topics[0].data, vec![0x22; 32]);
+        assert_eq!(item.data, vec![0xAB]);
+    }
+}
