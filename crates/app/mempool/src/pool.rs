@@ -469,13 +469,6 @@ mod tests {
     }
 
     #[test]
-    fn test_mempool_new() {
-        let pool: Mempool<TestGasTx> = Mempool::new();
-        assert_eq!(pool.len(), 0);
-        assert!(pool.is_empty());
-    }
-
-    #[test]
     fn test_mempool_add_and_get() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 

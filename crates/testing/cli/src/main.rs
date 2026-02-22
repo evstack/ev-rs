@@ -207,5 +207,4 @@ mod tests {
             _ => panic!("expected replay command"),
         }
     }
-
 }

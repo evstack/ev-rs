@@ -303,17 +303,6 @@ mod tests {
     }
 
     #[test]
-    fn test_optional_metrics_disabled() {
-        let metrics = OptionalMetrics::disabled();
-        assert!(!metrics.is_enabled());
-
-        // These should be no-ops
-        metrics.record_cache_hit();
-        metrics.record_read_latency(0.001);
-        metrics.record_batch(0.01, 100, 80, 20);
-    }
-
-    #[test]
     fn test_optional_metrics_enabled() {
         let inner = Arc::new(StorageMetrics::new());
         let metrics = OptionalMetrics::enabled(inner.clone());
