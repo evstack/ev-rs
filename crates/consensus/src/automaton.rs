@@ -27,7 +27,7 @@ use tokio::sync::RwLock as TokioRwLock;
 /// - On `propose()`: builds a block from mempool txs, stores it locally,
 ///   returns only the digest to consensus.
 /// - On `verify()`: looks up the block by digest (populated via Relay),
-///   validates parent chain, timestamp monotonicity, etc.
+///   validates parent chain and height.
 pub struct EvolveAutomaton<Stf, S, Codes, Tx: MempoolTx, Ctx> {
     stf: Stf,
     storage: S,
@@ -97,6 +97,22 @@ impl<Stf, S, Codes, Tx: MempoolTx, Ctx> EvolveAutomaton<Stf, S, Codes, Tx, Ctx> 
     pub fn pending_blocks(&self) -> &Arc<RwLock<BTreeMap<[u8; 32], ConsensusBlock<Tx>>>> {
         &self.pending_blocks
     }
+
+    /// Get a reference to the shared last block hash.
+    ///
+    /// The finalization path (reporter) must update this after a block is
+    /// certified so that subsequent `propose()` calls use the correct parent.
+    pub fn last_hash(&self) -> &Arc<TokioRwLock<B256>> {
+        &self.last_hash
+    }
+
+    /// Get a reference to the shared height counter.
+    ///
+    /// The finalization path (reporter) may use this to reconcile height
+    /// after block finalization.
+    pub fn height_atomic(&self) -> &Arc<AtomicU64> {
+        &self.height
+    }
 }
 
 impl<Stf, S, Codes, Tx, Ctx> Automaton for EvolveAutomaton<Stf, S, Codes, Tx, Ctx>
@@ -134,7 +150,7 @@ where
     async fn propose(&mut self, _context: Self::Context) -> oneshot::Receiver<Self::Digest> {
         let (sender, receiver) = oneshot::channel();
 
-        let height = self.height.fetch_add(1, Ordering::SeqCst);
+        let height = self.height.clone();
         let last_hash = *self.last_hash.read().await;
         let gas_limit = self.config.gas_limit;
         let mempool = self.mempool.clone();
@@ -159,8 +175,12 @@ where
                 .unwrap_or_default()
                 .as_secs();
 
+            // Increment height only after successful block construction to avoid
+            // gaps when the spawned task fails or is cancelled.
+            let block_height = height.fetch_add(1, Ordering::SeqCst);
+
             let block = BlockBuilder::<Tx>::new()
-                .number(height)
+                .number(block_height)
                 .timestamp(timestamp)
                 .parent_hash(last_hash)
                 .gas_limit(gas_limit)

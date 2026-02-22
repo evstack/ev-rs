@@ -77,6 +77,12 @@ impl EpochPeerProvider {
     /// If a peer set for `epoch` already exists it is replaced. Subscribers
     /// receive the new set and the updated union of all tracked peers. Dead
     /// subscriber channels are pruned automatically.
+    ///
+    /// # Note
+    ///
+    /// Old epochs are not pruned — `peer_sets` grows with each call. For
+    /// production use, call [`retain_epochs`](Self::retain_epochs) periodically
+    /// to bound memory usage.
     pub async fn update_epoch(&self, epoch: u64, peers: Set<ed25519::PublicKey>) {
         let mut state = self.inner.write().await;
         state.peer_sets.insert(epoch, peers.clone());
@@ -89,6 +95,22 @@ impl EpochPeerProvider {
         state.all_peers = Set::from_iter_dedup(all_peers);
 
         state.notify(epoch, peers);
+    }
+
+    /// Remove all epoch entries older than `min_epoch`.
+    ///
+    /// Recomputes `all_peers` from the remaining sets and notifies subscribers
+    /// with the current epoch's peer set (if it exists).
+    pub async fn retain_epochs(&self, min_epoch: u64) {
+        let mut state = self.inner.write().await;
+        state.peer_sets.retain(|&e, _| e >= min_epoch);
+
+        let all_peers: Vec<ed25519::PublicKey> = state
+            .peer_sets
+            .values()
+            .flat_map(|s| s.iter().cloned())
+            .collect();
+        state.all_peers = Set::from_iter_dedup(all_peers);
     }
 }
 

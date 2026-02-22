@@ -84,6 +84,14 @@ impl<S: Scheme, L: Clone> SimplexSetup<S, L> {
         R: Relay<Digest = D>,
         F: Reporter<Activity = Activity<S, D>>,
     {
+        // Convert activity_timeout from Duration to ViewDelta (seconds).
+        let activity_timeout_secs = self.config.activity_timeout.as_secs();
+        let activity_timeout =
+            commonware_consensus::types::ViewDelta::new(activity_timeout_secs.max(1));
+
+        let partition = String::from_utf8(self.config.namespace.clone())
+            .unwrap_or_else(|_| "evolve".to_string());
+
         let cfg = simplex::Config {
             scheme: self.scheme,
             elector: self.elector,
@@ -92,7 +100,7 @@ impl<S: Scheme, L: Clone> SimplexSetup<S, L> {
             relay,
             reporter,
             strategy: Sequential,
-            partition: "evolve".to_string(),
+            partition,
             mailbox_size: 1024,
             epoch: commonware_consensus::types::Epoch::new(0),
             replay_buffer: NonZeroUsize::new(65536).unwrap(),
@@ -104,7 +112,7 @@ impl<S: Scheme, L: Clone> SimplexSetup<S, L> {
             leader_timeout: self.config.leader_timeout,
             notarization_timeout: self.config.notarization_timeout,
             nullify_retry: Duration::from_secs(1),
-            activity_timeout: commonware_consensus::types::ViewDelta::new(10),
+            activity_timeout,
             skip_timeout: commonware_consensus::types::ViewDelta::new(5),
             fetch_timeout: Duration::from_secs(5),
             fetch_concurrent: 3,

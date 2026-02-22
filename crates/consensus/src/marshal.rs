@@ -48,28 +48,29 @@ pub use commonware_storage::archive::immutable;
 /// Configuration for initializing the marshal subsystem.
 ///
 /// Provides sensible defaults for storage partitioning, buffer sizes,
-/// and epoch boundaries.
+/// and epoch boundaries. Uses `NonZero` types to make invalid states
+/// unrepresentable.
 pub struct MarshalConfig {
     /// Prefix for storage partition names (e.g., "evolve-validator-0").
     pub partition_prefix: String,
-    /// Number of blocks per epoch for the fixed epocher.
-    pub epoch_length: u64,
+    /// Number of blocks per epoch for the fixed epocher. Must be non-zero.
+    pub epoch_length: NonZeroU64,
     /// Size of the marshal's internal mailbox.
     pub mailbox_size: usize,
     /// How many views to retain before pruning.
     pub view_retention: u64,
-    /// Maximum concurrent repair requests.
-    pub max_repair: usize,
+    /// Maximum concurrent repair requests. Must be non-zero.
+    pub max_repair: NonZeroUsize,
 }
 
 impl Default for MarshalConfig {
     fn default() -> Self {
         Self {
             partition_prefix: "evolve".to_string(),
-            epoch_length: 100,
+            epoch_length: NonZeroU64::new(100).unwrap(),
             mailbox_size: 1024,
             view_retention: 10,
-            max_repair: 10,
+            max_repair: NonZeroUsize::new(10).unwrap(),
         }
     }
 }
@@ -94,7 +95,7 @@ where
 {
     MarshalActorConfig {
         provider: ConstantProvider::<S, Epoch>::new(scheme),
-        epocher: FixedEpocher::new(NonZeroU64::new(config.epoch_length).unwrap()),
+        epocher: FixedEpocher::new(config.epoch_length),
         partition_prefix: config.partition_prefix.clone(),
         mailbox_size: config.mailbox_size,
         view_retention_timeout: ViewDelta::new(config.view_retention),
@@ -107,7 +108,7 @@ where
         key_write_buffer: NonZeroUsize::new(1024).unwrap(),
         value_write_buffer: NonZeroUsize::new(1024).unwrap(),
         block_codec_config,
-        max_repair: NonZeroUsize::new(config.max_repair).unwrap(),
+        max_repair: config.max_repair,
         strategy: Sequential,
     }
 }

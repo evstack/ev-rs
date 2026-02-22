@@ -42,13 +42,19 @@ impl<Tx: Clone> ConsensusBlock<Tx> {
 }
 
 /// Compute a deterministic SHA-256 digest from block header fields.
+///
+/// All consensus-relevant header fields are included to ensure distinct blocks
+/// always produce distinct digests.
 fn compute_block_digest<Tx>(block: &Block<Tx>) -> commonware_cryptography::sha256::Digest {
     let mut hasher = Sha256::new();
     hasher.update(&block.header.number.to_le_bytes());
     hasher.update(&block.header.timestamp.to_le_bytes());
     hasher.update(block.header.parent_hash.as_slice());
     hasher.update(&block.header.gas_limit.to_le_bytes());
+    hasher.update(&block.header.gas_used.to_le_bytes());
     hasher.update(block.header.beneficiary.as_slice());
+    hasher.update(block.header.transactions_root.as_slice());
+    hasher.update(block.header.state_root.as_slice());
     hasher.finalize()
 }
 
