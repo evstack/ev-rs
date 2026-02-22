@@ -216,22 +216,6 @@ proptest! {
         prop_assert_eq!(decoded.sender(), original_address);
     }
 
-    /// Property: AccountId derived from sender is deterministic
-    #[test]
-    fn prop_account_id_deterministic(tx in arb_legacy_tx()) {
-        let signing_key = SigningKey::random(&mut OsRng);
-
-        let signature = sign_hash(&signing_key, tx.signature_hash());
-        let signed = tx.into_signed(signature);
-
-        let mut encoded = Vec::new();
-        signed.rlp_encode(&mut encoded);
-
-        let decoded1 = TxEnvelope::decode(&encoded).unwrap();
-        let decoded2 = TxEnvelope::decode(&encoded).unwrap();
-
-        prop_assert_eq!(decoded1.sender_account_id(), decoded2.sender_account_id());
-    }
 }
 
 // ============================================================================

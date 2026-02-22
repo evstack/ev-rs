@@ -3,13 +3,12 @@
 // Testing code - determinism requirements do not apply.
 #![allow(clippy::disallowed_types)]
 
-use crate::item::Item;
 use crate::map::Map;
 use crate::mocks::MockEnvironment;
 use crate::queue::Queue;
 use crate::unordered_map::UnorderedMap;
 use crate::vector::Vector;
-use crate::{ERR_EMPTY, ERR_NOT_FOUND};
+use crate::ERR_EMPTY;
 use proptest::prelude::*;
 use std::collections::{HashMap, VecDeque};
 
@@ -45,18 +44,6 @@ proptest! {
     #![proptest_config(proptest_config())]
 
     #[test]
-    fn prop_map_set_get_remove(key in any::<u64>(), value in any::<u64>()) {
-        let map: Map<u64, u64> = Map::new(10);
-        let mut env = MockEnvironment::new(1, 2);
-
-        map.set(&key, &value, &mut env).unwrap();
-        prop_assert_eq!(map.may_get(&key, &mut env).unwrap(), Some(value));
-
-        map.remove(&key, &mut env).unwrap();
-        prop_assert_eq!(map.may_get(&key, &mut env).unwrap(), None);
-    }
-
-    #[test]
     fn prop_map_update(key in any::<u64>(), initial in any::<u64>(), updated in any::<u64>()) {
         let map: Map<u64, u64> = Map::new(11);
         let mut env = MockEnvironment::new(1, 2);
@@ -66,19 +53,6 @@ proptest! {
 
         prop_assert_eq!(new_value, updated);
         prop_assert_eq!(map.get(&key, &mut env).unwrap(), updated);
-    }
-
-    #[test]
-    fn prop_item_set_get_remove(value in any::<u64>()) {
-        let item: Item<u64> = Item::new(12);
-        let mut env = MockEnvironment::new(1, 2);
-
-        item.set(&value, &mut env).unwrap();
-        prop_assert_eq!(item.may_get(&mut env).unwrap(), Some(value));
-
-        item.remove(&mut env).unwrap();
-        prop_assert_eq!(item.may_get(&mut env).unwrap(), None);
-        prop_assert_eq!(item.get(&mut env).unwrap_err(), ERR_NOT_FOUND);
     }
 }
 

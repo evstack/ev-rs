@@ -645,3 +645,463 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
         Ok(result)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    use crate::types::{StoredBlock, StoredLog, StoredReceipt, StoredTransaction, TxLocation};
+    use evolve_mempool::new_shared_mempool;
+    use evolve_rpc_types::block::BlockTransactions;
+
+    #[derive(Default)]
+    struct MockChainIndex {
+        latest: Option<u64>,
+        blocks_by_number: BTreeMap<u64, StoredBlock>,
+        blocks_by_hash: BTreeMap<B256, StoredBlock>,
+        block_number_by_hash: BTreeMap<B256, u64>,
+        block_transactions: BTreeMap<u64, Vec<B256>>,
+        transactions: BTreeMap<B256, StoredTransaction>,
+        receipts: BTreeMap<B256, StoredReceipt>,
+        fail_latest_block_number: Mutex<Option<ChainIndexError>>,
+        fail_get_block: Mutex<Option<ChainIndexError>>,
+        fail_get_block_by_hash: Mutex<Option<ChainIndexError>>,
+        fail_get_block_transactions: Mutex<Option<ChainIndexError>>,
+        fail_get_transaction: Mutex<Option<ChainIndexError>>,
+        fail_get_receipt: Mutex<Option<ChainIndexError>>,
+    }
+
+    impl MockChainIndex {
+        fn take_failure(slot: &Mutex<Option<ChainIndexError>>) -> Option<ChainIndexError> {
+            slot.lock()
+                .expect("failure lock should not be poisoned")
+                .take()
+        }
+    }
+
+    impl ChainIndex for MockChainIndex {
+        fn latest_block_number(&self) -> Result<Option<u64>, ChainIndexError> {
+            if let Some(err) = Self::take_failure(&self.fail_latest_block_number) {
+                return Err(err);
+            }
+            Ok(self.latest)
+        }
+
+        fn get_block(&self, number: u64) -> Result<Option<StoredBlock>, ChainIndexError> {
+            if let Some(err) = Self::take_failure(&self.fail_get_block) {
+                return Err(err);
+            }
+            Ok(self.blocks_by_number.get(&number).cloned())
+        }
+
+        fn get_block_by_hash(&self, hash: B256) -> Result<Option<StoredBlock>, ChainIndexError> {
+            if let Some(err) = Self::take_failure(&self.fail_get_block_by_hash) {
+                return Err(err);
+            }
+            Ok(self.blocks_by_hash.get(&hash).cloned())
+        }
+
+        fn get_block_number(&self, hash: B256) -> Result<Option<u64>, ChainIndexError> {
+            Ok(self.block_number_by_hash.get(&hash).copied())
+        }
+
+        fn get_block_transactions(&self, number: u64) -> Result<Vec<B256>, ChainIndexError> {
+            if let Some(err) = Self::take_failure(&self.fail_get_block_transactions) {
+                return Err(err);
+            }
+            Ok(self
+                .block_transactions
+                .get(&number)
+                .cloned()
+                .unwrap_or_default())
+        }
+
+        fn get_transaction(
+            &self,
+            hash: B256,
+        ) -> Result<Option<StoredTransaction>, ChainIndexError> {
+            if let Some(err) = Self::take_failure(&self.fail_get_transaction) {
+                return Err(err);
+            }
+            Ok(self.transactions.get(&hash).cloned())
+        }
+
+        fn get_transaction_location(
+            &self,
+            _hash: B256,
+        ) -> Result<Option<TxLocation>, ChainIndexError> {
+            Ok(None)
+        }
+
+        fn get_receipt(&self, hash: B256) -> Result<Option<StoredReceipt>, ChainIndexError> {
+            if let Some(err) = Self::take_failure(&self.fail_get_receipt) {
+                return Err(err);
+            }
+            Ok(self.receipts.get(&hash).cloned())
+        }
+
+        fn get_logs_by_block(&self, _number: u64) -> Result<Vec<StoredLog>, ChainIndexError> {
+            Ok(vec![])
+        }
+
+        fn store_block(
+            &self,
+            _block: StoredBlock,
+            _transactions: Vec<StoredTransaction>,
+            _receipts: Vec<StoredReceipt>,
+        ) -> Result<(), ChainIndexError> {
+            Ok(())
+        }
+    }
+
+    fn provider_config() -> ChainStateProviderConfig {
+        ChainStateProviderConfig {
+            chain_id: 1,
+            protocol_version: "test".to_string(),
+            gas_price: U256::from(1u64),
+            sync_status: SyncStatus::NotSyncing(false),
+        }
+    }
+
+    fn default_provider(
+        index: Arc<MockChainIndex>,
+    ) -> ChainStateProvider<MockChainIndex, NoopAccountCodes> {
+        ChainStateProvider::new(index, provider_config())
+    }
+
+    fn block(number: u64, hash: B256) -> StoredBlock {
+        StoredBlock {
+            number,
+            hash,
+            parent_hash: B256::repeat_byte(0x10),
+            state_root: B256::repeat_byte(0x11),
+            transactions_root: B256::repeat_byte(0x12),
+            receipts_root: B256::repeat_byte(0x13),
+            timestamp: 1_700_000_000,
+            gas_used: 42_000,
+            gas_limit: 30_000_000,
+            transaction_count: 2,
+            miner: Address::repeat_byte(0x22),
+            extra_data: Bytes::new(),
+        }
+    }
+
+    fn transaction(
+        hash: B256,
+        block_number: u64,
+        block_hash: B256,
+        transaction_index: u32,
+    ) -> StoredTransaction {
+        StoredTransaction {
+            hash,
+            block_number,
+            block_hash,
+            transaction_index,
+            from: Address::repeat_byte(0x31),
+            to: Some(Address::repeat_byte(0x32)),
+            value: U256::from(100u64),
+            gas: 21_000,
+            gas_price: U256::from(1u64),
+            input: Bytes::new(),
+            nonce: 7,
+            v: 27,
+            r: U256::from(1u64),
+            s: U256::from(2u64),
+            tx_type: 0,
+            chain_id: Some(1),
+        }
+    }
+
+    fn receipt(
+        transaction_hash: B256,
+        block_number: u64,
+        block_hash: B256,
+        transaction_index: u32,
+    ) -> StoredReceipt {
+        StoredReceipt {
+            transaction_hash,
+            transaction_index,
+            block_hash,
+            block_number,
+            from: Address::repeat_byte(0x41),
+            to: Some(Address::repeat_byte(0x42)),
+            cumulative_gas_used: 21_000,
+            gas_used: 21_000,
+            contract_address: None,
+            logs: vec![],
+            status: 1,
+            tx_type: 0,
+        }
+    }
+
+    fn decode_hex(input: &str) -> Vec<u8> {
+        fn nibble(b: u8) -> u8 {
+            match b {
+                b'0'..=b'9' => b - b'0',
+                b'a'..=b'f' => b - b'a' + 10,
+                b'A'..=b'F' => b - b'A' + 10,
+                _ => panic!("invalid hex byte: {b}"),
+            }
+        }
+
+        assert_eq!(input.len() % 2, 0, "hex input must have even length");
+        let mut out = Vec::with_capacity(input.len() / 2);
+        for pair in input.as_bytes().chunks_exact(2) {
+            out.push((nibble(pair[0]) << 4) | nibble(pair[1]));
+        }
+        out
+    }
+
+    const LEGACY_TX_RLP: &str = concat!(
+        "f86c098504a817c800825208943535353535353535353535353535353535353535880de0",
+        "b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590",
+        "620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83"
+    );
+
+    #[tokio::test]
+    async fn send_raw_transaction_without_mempool_is_not_implemented() {
+        let provider = default_provider(Arc::new(MockChainIndex::default()));
+
+        let error = provider
+            .send_raw_transaction(&[0x01, 0x02, 0x03])
+            .await
+            .expect_err("provider without mempool should reject submission");
+
+        assert!(matches!(
+            error,
+            RpcError::NotImplemented(message)
+            if message.contains("no mempool configured")
+        ));
+    }
+
+    #[tokio::test]
+    async fn send_raw_transaction_valid_payload_enters_mempool() {
+        let mempool = new_shared_mempool::<TxContext>();
+        let provider = ChainStateProvider::with_mempool(
+            Arc::new(MockChainIndex::default()),
+            provider_config(),
+            Arc::new(NoopAccountCodes),
+            mempool.clone(),
+        );
+
+        let raw = decode_hex(LEGACY_TX_RLP);
+        let hash = provider
+            .send_raw_transaction(&raw)
+            .await
+            .expect("valid signed transaction should be accepted");
+
+        assert_eq!(
+            hash,
+            "0x33469b22e9f636356c4160a87eb19df52b7412e8eac32a4a55ffe88ea8350788"
+                .parse::<B256>()
+                .expect("hash literal should parse")
+        );
+        assert_eq!(mempool.read().await.len(), 1);
+        assert!(mempool.read().await.contains(&hash.0));
+    }
+
+    #[tokio::test]
+    async fn send_raw_transaction_invalid_payload_maps_to_invalid_transaction() {
+        let mempool = new_shared_mempool::<TxContext>();
+        let provider = ChainStateProvider::with_mempool(
+            Arc::new(MockChainIndex::default()),
+            provider_config(),
+            Arc::new(NoopAccountCodes),
+            mempool,
+        );
+
+        let error = provider
+            .send_raw_transaction(&[0xFF, 0xFF, 0xFF])
+            .await
+            .expect_err("invalid bytes should fail ingress verification");
+
+        assert!(matches!(
+            error,
+            RpcError::InvalidTransaction(message) if !message.is_empty()
+        ));
+    }
+
+    #[tokio::test]
+    async fn send_raw_transaction_duplicate_maps_to_invalid_transaction() {
+        let mempool = new_shared_mempool::<TxContext>();
+        let provider = ChainStateProvider::with_mempool(
+            Arc::new(MockChainIndex::default()),
+            provider_config(),
+            Arc::new(NoopAccountCodes),
+            mempool,
+        );
+        let raw = decode_hex(LEGACY_TX_RLP);
+
+        provider
+            .send_raw_transaction(&raw)
+            .await
+            .expect("first insertion should succeed");
+        let error = provider
+            .send_raw_transaction(&raw)
+            .await
+            .expect_err("duplicate insertion should fail");
+
+        assert!(matches!(
+            error,
+            RpcError::InvalidTransaction(message) if message.contains("already in mempool")
+        ));
+    }
+
+    #[tokio::test]
+    async fn get_block_queries_preserve_hashes_and_skip_missing_full_transactions() {
+        let block_hash = B256::repeat_byte(0x55);
+        let tx_hash_present = B256::repeat_byte(0x61);
+        let tx_hash_missing = B256::repeat_byte(0x62);
+        let mut index = MockChainIndex {
+            latest: Some(7),
+            ..Default::default()
+        };
+        index.blocks_by_number.insert(7, block(7, block_hash));
+        index
+            .blocks_by_hash
+            .insert(block_hash, block(7, block_hash));
+        index
+            .block_transactions
+            .insert(7, vec![tx_hash_present, tx_hash_missing]);
+        index.transactions.insert(
+            tx_hash_present,
+            transaction(tx_hash_present, 7, block_hash, 0),
+        );
+        let provider = default_provider(Arc::new(index));
+
+        let by_number_hashes = provider
+            .get_block_by_number(7, false)
+            .await
+            .expect("hash-only block query should succeed")
+            .expect("block should exist");
+        let by_number_full = provider
+            .get_block_by_number(7, true)
+            .await
+            .expect("full block query should succeed")
+            .expect("block should exist");
+        let by_hash_full = provider
+            .get_block_by_hash(block_hash, true)
+            .await
+            .expect("block-by-hash query should succeed")
+            .expect("block should exist");
+
+        match by_number_hashes.transactions {
+            Some(BlockTransactions::Hashes(hashes)) => {
+                assert_eq!(hashes, vec![tx_hash_present, tx_hash_missing]);
+            }
+            _ => panic!("expected hash transactions"),
+        }
+
+        match by_number_full.transactions {
+            Some(BlockTransactions::Full(txs)) => {
+                assert_eq!(txs.len(), 1);
+                assert_eq!(txs[0].hash, tx_hash_present);
+            }
+            _ => panic!("expected full transactions"),
+        }
+
+        match by_hash_full.transactions {
+            Some(BlockTransactions::Full(txs)) => {
+                assert_eq!(txs.len(), 1);
+                assert_eq!(txs[0].hash, tx_hash_present);
+            }
+            _ => panic!("expected full transactions"),
+        }
+    }
+
+    #[tokio::test]
+    async fn transaction_and_receipt_queries_reflect_index_presence() {
+        let block_hash = B256::repeat_byte(0x71);
+        let tx_hash = B256::repeat_byte(0x72);
+        let missing_hash = B256::repeat_byte(0x73);
+        let mut index = MockChainIndex::default();
+        index
+            .transactions
+            .insert(tx_hash, transaction(tx_hash, 3, block_hash, 1));
+        index
+            .receipts
+            .insert(tx_hash, receipt(tx_hash, 3, block_hash, 1));
+        let provider = default_provider(Arc::new(index));
+
+        let found_tx = provider
+            .get_transaction_by_hash(tx_hash)
+            .await
+            .expect("transaction query should succeed");
+        let missing_tx = provider
+            .get_transaction_by_hash(missing_hash)
+            .await
+            .expect("missing transaction query should succeed");
+        let found_receipt = provider
+            .get_transaction_receipt(tx_hash)
+            .await
+            .expect("receipt query should succeed");
+        let missing_receipt = provider
+            .get_transaction_receipt(missing_hash)
+            .await
+            .expect("missing receipt query should succeed");
+
+        assert_eq!(found_tx.expect("transaction should exist").hash, tx_hash);
+        assert!(missing_tx.is_none());
+        assert_eq!(
+            found_receipt
+                .expect("receipt should exist")
+                .transaction_hash,
+            tx_hash
+        );
+        assert!(missing_receipt.is_none());
+    }
+
+    #[tokio::test]
+    async fn chain_index_failures_map_to_expected_rpc_errors() {
+        let provider_latest = default_provider(Arc::new(MockChainIndex {
+            fail_latest_block_number: Mutex::new(Some(ChainIndexError::EmptyIndex)),
+            ..Default::default()
+        }));
+        let latest_error = provider_latest
+            .block_number()
+            .await
+            .expect_err("latest block query should fail");
+        assert!(matches!(latest_error, RpcError::BlockNotFound));
+
+        let provider_tx = default_provider(Arc::new(MockChainIndex {
+            fail_get_transaction: Mutex::new(Some(ChainIndexError::TransactionNotFound(
+                "0xdeadbeef".to_string(),
+            ))),
+            ..Default::default()
+        }));
+        let tx_error = provider_tx
+            .get_transaction_by_hash(B256::repeat_byte(0xA1))
+            .await
+            .expect_err("transaction lookup should fail");
+        assert!(matches!(tx_error, RpcError::TransactionNotFound));
+
+        let provider_receipt = default_provider(Arc::new(MockChainIndex {
+            fail_get_receipt: Mutex::new(Some(ChainIndexError::ReceiptNotFound(
+                "0xbeef".to_string(),
+            ))),
+            ..Default::default()
+        }));
+        let receipt_error = provider_receipt
+            .get_transaction_receipt(B256::repeat_byte(0xA2))
+            .await
+            .expect_err("receipt lookup should fail");
+        assert!(matches!(receipt_error, RpcError::ReceiptNotFound));
+
+        let provider_internal = default_provider(Arc::new(MockChainIndex {
+            fail_get_block_by_hash: Mutex::new(Some(ChainIndexError::Sqlite(
+                "db down".to_string(),
+            ))),
+            ..Default::default()
+        }));
+        let internal_error = provider_internal
+            .get_block_by_hash(B256::repeat_byte(0xA3), false)
+            .await
+            .expect_err("block-by-hash lookup should fail");
+        assert!(matches!(
+            internal_error,
+            RpcError::InternalError(message) if message.contains("sqlite error: db down")
+        ));
+    }
+}

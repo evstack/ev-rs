@@ -161,3 +161,50 @@ fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parse_replay_with_all_flags() {
+        let cli = Cli::parse_from([
+            "evolve-sim",
+            "replay",
+            "--trace",
+            "trace.bin",
+            "--block",
+            "42",
+            "--break-on-error",
+            "--break-on-block",
+            "99",
+            "--break-on-key",
+            "abc",
+            "--interactive",
+            "--summary",
+        ]);
+
+        match cli.command {
+            Commands::Replay {
+                trace,
+                block,
+                break_on_error,
+                break_on_block,
+                break_on_key,
+                interactive,
+                summary,
+            } => {
+                assert_eq!(trace, PathBuf::from("trace.bin"));
+                assert_eq!(block, Some(42));
+                assert!(break_on_error);
+                assert_eq!(break_on_block, Some(99));
+                assert_eq!(break_on_key.as_deref(), Some("abc"));
+                assert!(interactive);
+                assert!(summary);
+            }
+            _ => panic!("expected replay command"),
+        }
+    }
+}

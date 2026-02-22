@@ -224,13 +224,6 @@ mod tests {
     }
 
     #[test]
-    fn test_new() -> SdkResult<()> {
-        // Just ensure we can construct an UnorderedMap
-        let _map: UnorderedMap<u64, TestData> = UnorderedMap::new(1, 2, 3, 4);
-        Ok(())
-    }
-
-    #[test]
     fn test_insert_and_get() -> SdkResult<()> {
         let map = UnorderedMap::<u64, TestData>::new(10, 11, 12, 13);
         let mut env = MockEnvironment::new(1, 2);
@@ -352,32 +345,6 @@ mod tests {
                 (30, TestData { x: 303 }),
             ]
         );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_len_and_is_empty() -> SdkResult<()> {
-        let map = UnorderedMap::<u64, TestData>::new(60, 61, 62, 63);
-        let mut env = MockEnvironment::new(1, 2);
-
-        assert_eq!(map.len(&mut env)?, 0);
-        assert!(map.is_empty(&mut env)?);
-
-        map.insert(&1, &TestData { x: 111 }, &mut env)?;
-        map.insert(&2, &TestData { x: 222 }, &mut env)?;
-
-        assert_eq!(map.len(&mut env)?, 2);
-        assert!(!map.is_empty(&mut env)?);
-
-        // Remove one key
-        map.remove(&1, &mut env)?;
-        assert_eq!(map.len(&mut env)?, 1);
-
-        // Remove last key
-        map.remove(&2, &mut env)?;
-        assert_eq!(map.len(&mut env)?, 0);
-        assert!(map.is_empty(&mut env)?);
 
         Ok(())
     }

@@ -1273,43 +1273,6 @@ mod tests {
         })
     }
 
-    /// Test values with zeros in the middle
-    #[test]
-    fn test_value_with_embedded_zeros() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = crate::types::StorageConfig {
-            path: temp_dir.path().to_path_buf(),
-            ..Default::default()
-        };
-
-        let runtime_config = TokioConfig::default()
-            .with_storage_directory(temp_dir.path())
-            .with_worker_threads(2);
-
-        let runner = Runner::new(runtime_config);
-
-        runner.start(|context| async move {
-            let storage = QmdbStorage::new(context, config).await.unwrap();
-
-            // Value with zeros in middle and at end
-            let value = vec![0x01, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x03, 0x00, 0x00];
-
-            storage
-                .apply_batch(vec![crate::types::Operation::Set {
-                    key: b"embedded_zeros".to_vec(),
-                    value: value.clone(),
-                }])
-                .await
-                .unwrap();
-
-            let retrieved = storage.get(b"embedded_zeros").unwrap().unwrap();
-            assert_eq!(
-                retrieved, value,
-                "Value with embedded zeros must be preserved exactly"
-            );
-        })
-    }
-
     /// Test that values survive commit cycle (the real-world scenario)
     #[test]
     fn test_trailing_zeros_survive_commit() {

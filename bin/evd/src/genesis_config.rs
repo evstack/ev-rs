@@ -76,3 +76,139 @@ impl AccountConfig {
             .map_err(|e| format!("invalid eth address '{}': {}", self.eth_address, e))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn temp_genesis_file(contents: &str) -> PathBuf {
+        let mut path = std::env::temp_dir();
+        let id = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        path.push(format!("evd-genesis-{}-{id}.json", std::process::id()));
+        std::fs::write(&path, contents).unwrap();
+        path
+    }
+
+    #[test]
+    fn load_fails_for_missing_file() {
+        let path = "/definitely/not/present/evd-genesis.json";
+        let err = EvdGenesisConfig::load(path)
+            .err()
+            .expect("missing file must fail");
+        assert!(err.contains("failed to read genesis file"));
+    }
+
+    #[test]
+    fn load_fails_for_empty_accounts() {
+        let path = temp_genesis_file(
+            r#"{
+                "token": {
+                    "name": "Evolve",
+                    "symbol": "EV",
+                    "decimals": 6,
+                    "icon_url": "https://example.com/icon.png",
+                    "description": "token"
+                },
+                "minter_id": 100,
+                "accounts": []
+            }"#,
+        );
+
+        let err = EvdGenesisConfig::load(path.to_str().unwrap())
+            .err()
+            .expect("empty accounts fail");
+        assert!(err.contains("at least one account"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_fails_for_invalid_account_address() {
+        let path = temp_genesis_file(
+            r#"{
+                "token": {
+                    "name": "Evolve",
+                    "symbol": "EV",
+                    "decimals": 6,
+                    "icon_url": "https://example.com/icon.png",
+                    "description": "token"
+                },
+                "minter_id": 100,
+                "accounts": [
+                    { "eth_address": "not-an-address", "balance": 1 }
+                ]
+            }"#,
+        );
+
+        let err = EvdGenesisConfig::load(path.to_str().unwrap())
+            .err()
+            .expect("invalid address must fail");
+        assert!(err.contains("account[0]"));
+        assert!(err.contains("invalid eth address"));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_succeeds_for_valid_config() {
+        let path = temp_genesis_file(
+            r#"{
+                "token": {
+                    "name": "Evolve",
+                    "symbol": "EV",
+                    "decimals": 6,
+                    "icon_url": "https://example.com/icon.png",
+                    "description": "token"
+                },
+                "minter_id": 100,
+                "accounts": [
+                    {
+                        "eth_address": "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+                        "balance": 1000
+                    }
+                ]
+            }"#,
+        );
+
+        let cfg = EvdGenesisConfig::load(path.to_str().unwrap()).expect("valid config should load");
+        assert_eq!(cfg.minter_id, 100);
+        assert_eq!(cfg.accounts.len(), 1);
+        assert_eq!(cfg.accounts[0].balance, 1000);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn parse_address_rejects_invalid_and_accepts_valid() {
+        let bad = AccountConfig {
+            eth_address: "bad-address".to_string(),
+            balance: 1,
+        };
+        assert!(bad.parse_address().is_err());
+
+        let good = AccountConfig {
+            eth_address: "0x0000000000000000000000000000000000000001".to_string(),
+            balance: 1,
+        };
+        assert!(good.parse_address().is_ok());
+    }
+
+    #[test]
+    fn token_to_metadata_maps_all_fields() {
+        let token = TokenConfig {
+            name: "Evolve".to_string(),
+            symbol: "EV".to_string(),
+            decimals: 6,
+            icon_url: "https://example.com/token.png".to_string(),
+            description: "Sample token".to_string(),
+        };
+        let metadata = token.to_metadata();
+
+        assert_eq!(metadata.name, "Evolve");
+        assert_eq!(metadata.symbol, "EV");
+        assert_eq!(metadata.decimals, 6);
+        assert_eq!(metadata.icon_url, "https://example.com/token.png");
+        assert_eq!(metadata.description, "Sample token");
+    }
+}

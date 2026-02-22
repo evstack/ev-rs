@@ -468,8 +468,38 @@ impl SimulatorBuilder {
 
 #[cfg(test)]
 mod tests {
+    // TODO(test-hardening): Add property tests that compare simulator outcomes
+    // against a minimal reference model across randomized action traces.
+    // TODO(test-hardening): Add adversarial state-change ordering tests that also
+    // assert app-hash equivalence (not only key-level storage equivalence).
     use super::*;
     use evolve_core::ReadonlyKV;
+
+    fn run_deterministic_workload(sim: &mut Simulator) {
+        for _ in 0..16 {
+            let key_idx: u8 = sim.rng().gen_range(0..4);
+            let key = vec![b'k', key_idx];
+
+            let change = if sim.rng().gen_bool(0.7) {
+                let value: [u8; 8] = sim.rng().gen();
+                StateChange::Set {
+                    key,
+                    value: value.to_vec(),
+                }
+            } else {
+                StateChange::Remove { key }
+            };
+
+            sim.apply_state_changes(vec![change]).unwrap();
+            sim.advance_block();
+        }
+    }
+
+    fn read_hot_keys(sim: &Simulator) -> Vec<Option<Vec<u8>>> {
+        (0..4u8)
+            .map(|i| sim.readonly_kv().get(&[b'k', i]).unwrap())
+            .collect()
+    }
 
     #[test]
     fn test_simulator_determinism() {
@@ -487,61 +517,138 @@ mod tests {
     }
 
     #[test]
-    fn test_simulator_time_progression() {
-        let mut sim = Simulator::new(42, SimConfig::default());
-
-        assert_eq!(sim.time().block_height(), 0);
-
-        sim.advance_block();
-        assert_eq!(sim.time().block_height(), 1);
-
-        sim.set_block_height(10);
-        assert_eq!(sim.time().block_height(), 10);
-    }
-
-    #[test]
-    fn test_simulator_storage() {
-        let mut sim = Simulator::new(42, SimConfig::default());
-
-        let changes = vec![StateChange::Set {
-            key: b"key".to_vec(),
-            value: b"value".to_vec(),
-        }];
-
-        sim.apply_state_changes(changes).unwrap();
-
-        let value = sim.readonly_kv().get(b"key").unwrap();
-        assert_eq!(value, Some(b"value".to_vec()));
-    }
-
-    #[test]
-    fn test_simulator_snapshot_restore_time_only() {
-        let mut sim = Simulator::new(42, SimConfig::default());
-
-        sim.advance_block();
-        sim.apply_state_changes(vec![StateChange::Set {
-            key: b"k1".to_vec(),
-            value: b"v1".to_vec(),
-        }])
-        .unwrap();
+    fn test_simulator_snapshot_restore_restores_time_and_app_hash() {
+        let mut sim = Simulator::new(7, SimConfig::default());
 
         let snapshot = sim.snapshot();
+        let snapshot_tick = snapshot.time.tick;
+        let snapshot_block = snapshot.time.block;
+        let snapshot_hash = snapshot.app_hash;
 
         sim.advance_block();
         sim.apply_state_changes(vec![StateChange::Set {
-            key: b"k2".to_vec(),
-            value: b"v2".to_vec(),
+            key: b"key_a".to_vec(),
+            value: b"value_a".to_vec(),
         }])
         .unwrap();
+        assert_ne!(sim.app_hash(), snapshot_hash);
 
         sim.restore(snapshot);
 
-        assert_eq!(sim.time().block_height(), 1);
+        assert_eq!(sim.time().current_tick(), snapshot_tick);
+        assert_eq!(sim.time().block_height(), snapshot_block);
+        assert_eq!(sim.app_hash(), snapshot_hash);
+    }
+
+    #[test]
+    fn test_simulator_restore_keeps_rng_progress_deterministic() {
+        let seed = 999u64;
+        let mut sim = Simulator::new(seed, SimConfig::default());
+        let mut control = Simulator::new(seed, SimConfig::default());
+
+        let _ = sim.rng().gen::<u64>();
+        let _ = control.rng().gen::<u64>();
+
+        let snapshot = sim.snapshot();
+
+        let after_snapshot = sim.rng().gen::<u64>();
+        let control_after_snapshot = control.rng().gen::<u64>();
+        assert_eq!(after_snapshot, control_after_snapshot);
+
+        let _ = sim.rng().gen::<u64>();
+        let _ = control.rng().gen::<u64>();
+
+        sim.restore(snapshot);
+
+        let after_restore = sim.rng().gen::<u64>();
+        let control_next = control.rng().gen::<u64>();
+
+        assert_ne!(after_restore, after_snapshot);
+        assert_eq!(after_restore, control_next);
+    }
+
+    #[test]
+    fn test_simulator_repeated_runs_with_same_seed_produce_same_outcome() {
+        let seed = 314_159u64;
+        let mut sim1 = Simulator::new(seed, SimConfig::default());
+        let mut sim2 = Simulator::new(seed, SimConfig::default());
+
+        run_deterministic_workload(&mut sim1);
+        run_deterministic_workload(&mut sim2);
+
+        assert_eq!(sim1.time().block_height(), sim2.time().block_height());
+        assert_eq!(sim1.app_hash(), sim2.app_hash());
+        assert_eq!(read_hot_keys(&sim1), read_hot_keys(&sim2));
+
+        let next1: u64 = sim1.rng().gen();
+        let next2: u64 = sim2.rng().gen();
+        assert_eq!(next1, next2);
+    }
+
+    #[test]
+    fn test_simulator_reset_replays_same_seed_deterministically() {
+        let seed = 8_271u64;
+        let mut sim = Simulator::new(seed, SimConfig::default());
+
+        run_deterministic_workload(&mut sim);
+        let first_hash = sim.app_hash();
+        let first_keys = read_hot_keys(&sim);
+        let first_next_rng: u64 = sim.rng().gen();
+
+        sim.reset();
+        run_deterministic_workload(&mut sim);
+        let second_hash = sim.app_hash();
+        let second_keys = read_hot_keys(&sim);
+        let second_next_rng: u64 = sim.rng().gen();
+
+        assert_eq!(first_hash, second_hash);
+        assert_eq!(first_keys, second_keys);
+        assert_eq!(first_next_rng, second_next_rng);
+    }
+
+    #[test]
+    fn test_equivalent_inputs_reach_same_storage_state() {
+        let mut sim1 = Simulator::new(111, SimConfig::replay());
+        let mut sim2 = Simulator::new(111, SimConfig::replay());
+
+        sim1.apply_state_changes(vec![
+            StateChange::Set {
+                key: b"a".to_vec(),
+                value: b"1".to_vec(),
+            },
+            StateChange::Set {
+                key: b"b".to_vec(),
+                value: b"2".to_vec(),
+            },
+            StateChange::Remove { key: b"c".to_vec() },
+        ])
+        .unwrap();
+
+        sim2.apply_state_changes(vec![
+            StateChange::Remove { key: b"c".to_vec() },
+            StateChange::Set {
+                key: b"b".to_vec(),
+                value: b"2".to_vec(),
+            },
+            StateChange::Set {
+                key: b"a".to_vec(),
+                value: b"1".to_vec(),
+            },
+        ])
+        .unwrap();
+
+        assert_eq!(sim1.readonly_kv().get(b"a").unwrap(), Some(b"1".to_vec()));
+        assert_eq!(sim2.readonly_kv().get(b"a").unwrap(), Some(b"1".to_vec()));
+        assert_eq!(sim1.readonly_kv().get(b"b").unwrap(), Some(b"2".to_vec()));
+        assert_eq!(sim2.readonly_kv().get(b"b").unwrap(), Some(b"2".to_vec()));
+        assert_eq!(sim1.readonly_kv().get(b"c").unwrap(), None);
+        assert_eq!(sim2.readonly_kv().get(b"c").unwrap(), None);
     }
 
     #[test]
     fn test_simulator_builder() {
         let (sim, seed) = SimulatorBuilder::new()
+            .seed(77)
             .max_blocks(100)
             .stop_on_error()
             .with_state(b"initial_key".to_vec(), b"initial_value".to_vec())
@@ -553,41 +660,31 @@ mod tests {
             sim.readonly_kv().get(b"initial_key").unwrap(),
             Some(b"initial_value".to_vec())
         );
-        assert!(seed > 0);
+        assert_eq!(seed, 77);
     }
 
     #[test]
-    fn test_run_blocks() {
+    fn test_run_blocks_reaches_exact_target_height() {
         let mut sim = Simulator::new(42, SimConfig::default());
 
         sim.run_blocks(10).unwrap();
 
-        assert!(sim.time().block_height() >= 10);
+        assert_eq!(sim.time().block_height(), 10);
     }
 
     #[test]
-    fn test_run_until() {
-        let mut sim = Simulator::new(42, SimConfig::default());
+    fn test_run_until_stops_at_max_blocks_bound() {
+        let mut sim = Simulator::new(
+            42,
+            SimConfig {
+                max_blocks: 5,
+                ..SimConfig::default()
+            },
+        );
 
-        sim.run_until(|s| s.time().block_height() >= 5).unwrap();
+        sim.run_until(|_| false).unwrap();
 
-        assert!(sim.time().block_height() >= 5);
-    }
-
-    #[test]
-    fn test_abort_simulation() {
-        let mut sim = Simulator::new(42, SimConfig::default());
-
-        // Abort after 3 blocks
-        let result = sim.run_until(|s| {
-            if s.time().block_height() >= 3 {
-                return true;
-            }
-            false
-        });
-
-        assert!(result.is_ok());
-        assert!(sim.time().block_height() >= 3);
+        assert_eq!(sim.time().block_height(), 5);
     }
 
     #[test]

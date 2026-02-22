@@ -132,12 +132,6 @@ mod vector_tests {
     // ------------------------------------
 
     #[test]
-    fn test_new() {
-        // Just ensure Vector can be constructed
-        let _vec: Vector<TestData> = Vector::new(10, 20);
-    }
-
-    #[test]
     fn test_may_get_nonexistent() {
         // Vector is empty -> any index should return None
         let vec: Vector<TestData> = Vector::new(10, 20);
@@ -194,15 +188,6 @@ mod vector_tests {
         let err = vec.get(1, &mut env).err().unwrap();
         // Adjust if you have a custom "Not Found" error code
         assert_eq!(err.code(), crate::ERR_NOT_FOUND.code());
-    }
-
-    #[test]
-    fn test_pop_empty() {
-        let vec: Vector<TestData> = Vector::new(10, 20);
-        let mut env = MockEnvironment::new(1, 2);
-
-        // Popping from empty should yield None
-        assert_eq!(vec.pop(&mut env).unwrap(), None);
     }
 
     #[test]

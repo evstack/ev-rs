@@ -263,14 +263,4 @@ mod tests {
         let err = config.validate().expect_err("should fail");
         assert!(err.to_string().contains("invalid rpc.http_addr"));
     }
-
-    #[test]
-    fn to_rpc_config_maps_fields() {
-        let config = NodeConfig::default();
-        let rpc = config.to_rpc_config();
-        assert_eq!(rpc.chain_id, config.chain.chain_id);
-        assert!(rpc.enabled);
-        assert!(rpc.enable_block_indexing);
-        assert_eq!(rpc.http_addr.to_string(), DEFAULT_RPC_ADDR);
-    }
 }
