@@ -6,6 +6,7 @@ use commonware_consensus::types::Height;
 use commonware_consensus::Heightable;
 use commonware_cryptography::{Committable, Digestible, Hasher, Sha256};
 use evolve_server::{Block, BlockHeader};
+use evolve_stf_traits::Transaction;
 
 /// A consensus-aware wrapper around Evolve's Block.
 ///
@@ -21,7 +22,14 @@ pub struct ConsensusBlock<Tx> {
     pub parent_digest: commonware_cryptography::sha256::Digest,
 }
 
-impl<Tx: Clone> ConsensusBlock<Tx> {
+impl<Tx> ConsensusBlock<Tx> {
+    /// Return the inner block hash as a B256.
+    pub fn block_hash(&self) -> B256 {
+        B256::from_slice(&self.digest.0)
+    }
+}
+
+impl<Tx: Clone + Transaction> ConsensusBlock<Tx> {
     /// Create a new ConsensusBlock from an evolve Block.
     ///
     /// Computes and caches the block digest and parent digest.
@@ -34,18 +42,15 @@ impl<Tx: Clone> ConsensusBlock<Tx> {
             parent_digest,
         }
     }
-
-    /// Return the inner block hash as a B256.
-    pub fn block_hash(&self) -> B256 {
-        B256::from_slice(&self.digest.0)
-    }
 }
 
 /// Compute a deterministic SHA-256 digest from block header fields.
 ///
 /// All consensus-relevant header fields are included to ensure distinct blocks
 /// always produce distinct digests.
-fn compute_block_digest<Tx>(block: &Block<Tx>) -> commonware_cryptography::sha256::Digest {
+fn compute_block_digest<Tx: Transaction>(
+    block: &Block<Tx>,
+) -> commonware_cryptography::sha256::Digest {
     let mut hasher = Sha256::new();
     hasher.update(&block.header.number.to_le_bytes());
     hasher.update(&block.header.timestamp.to_le_bytes());
@@ -55,6 +60,10 @@ fn compute_block_digest<Tx>(block: &Block<Tx>) -> commonware_cryptography::sha25
     hasher.update(block.header.beneficiary.as_slice());
     hasher.update(block.header.transactions_root.as_slice());
     hasher.update(block.header.state_root.as_slice());
+    hasher.update(&(block.transactions.len() as u64).to_le_bytes());
+    for tx in &block.transactions {
+        hasher.update(&tx.compute_identifier());
+    }
     hasher.finalize()
 }
 
@@ -96,6 +105,8 @@ struct WireBlock {
     gas_limit: u64,
     gas_used: u64,
     beneficiary: [u8; 20],
+    transactions_root: [u8; 32],
+    state_root: [u8; 32],
     transactions_encoded: Vec<Vec<u8>>,
 }
 
@@ -109,7 +120,9 @@ impl<Tx: Clone + Send + Sync + 'static + BorshSerialize> Write for ConsensusBloc
     }
 }
 
-impl<Tx: Clone + Send + Sync + 'static + BorshDeserialize> Read for ConsensusBlock<Tx> {
+impl<Tx: Clone + Send + Sync + 'static + BorshDeserialize + Transaction> Read
+    for ConsensusBlock<Tx>
+{
     type Cfg = ();
 
     fn read_cfg(buf: &mut impl Buf, _cfg: &Self::Cfg) -> Result<Self, CodecError> {
@@ -138,6 +151,8 @@ impl<Tx: Clone + Send + Sync + 'static + BorshDeserialize> Read for ConsensusBlo
             gas_limit: wire.gas_limit,
             gas_used: wire.gas_used,
             beneficiary: alloy_primitives::Address::from_slice(&wire.beneficiary),
+            transactions_root: B256::from_slice(&wire.transactions_root),
+            state_root: B256::from_slice(&wire.state_root),
             ..Default::default()
         };
 
@@ -163,6 +178,8 @@ fn to_wire<Tx: BorshSerialize>(inner: &Block<Tx>) -> WireBlock {
         gas_limit: inner.header.gas_limit,
         gas_used: inner.header.gas_used,
         beneficiary: inner.header.beneficiary.0 .0,
+        transactions_root: inner.header.transactions_root.0,
+        state_root: inner.header.state_root.0,
         transactions_encoded: inner
             .transactions
             .iter()
@@ -171,7 +188,7 @@ fn to_wire<Tx: BorshSerialize>(inner: &Block<Tx>) -> WireBlock {
     }
 }
 
-impl<Tx: Clone + Send + Sync + 'static + BorshSerialize + BorshDeserialize>
+impl<Tx: Clone + Send + Sync + 'static + BorshSerialize + BorshDeserialize + Transaction>
     commonware_consensus::Block for ConsensusBlock<Tx>
 {
     fn parent(&self) -> Self::Commitment {
@@ -183,10 +200,41 @@ impl<Tx: Clone + Send + Sync + 'static + BorshSerialize + BorshDeserialize>
 mod tests {
     use super::*;
     use commonware_codec::{DecodeExt, Encode};
+    use evolve_core::{AccountId, FungibleAsset, InvokeRequest};
+    use evolve_stf_traits::Transaction;
 
     #[derive(Debug, Clone, BorshSerialize, BorshDeserialize, PartialEq)]
     struct TestTx {
         data: Vec<u8>,
+    }
+
+    impl Transaction for TestTx {
+        fn sender(&self) -> AccountId {
+            AccountId::new(1)
+        }
+
+        fn recipient(&self) -> AccountId {
+            AccountId::new(2)
+        }
+
+        fn request(&self) -> &InvokeRequest {
+            panic!("request() is not used in consensus block tests")
+        }
+
+        fn gas_limit(&self) -> u64 {
+            21_000
+        }
+
+        fn funds(&self) -> &[FungibleAsset] {
+            &[]
+        }
+
+        fn compute_identifier(&self) -> [u8; 32] {
+            let mut id = [0u8; 32];
+            let len = self.data.len().min(32);
+            id[..len].copy_from_slice(&self.data[..len]);
+            id
+        }
     }
 
     #[test]
@@ -270,5 +318,55 @@ mod tests {
         let cb2 = ConsensusBlock::new(block2);
 
         assert_ne!(cb1.digest, cb2.digest);
+    }
+
+    #[test]
+    fn test_different_transactions_change_digest() {
+        let header = BlockHeader::new(7, 1_000, B256::repeat_byte(0xAB));
+        let block1 = Block::new(
+            header.clone(),
+            vec![TestTx {
+                data: vec![1, 2, 3],
+            }],
+        );
+        let block2 = Block::new(
+            header,
+            vec![TestTx {
+                data: vec![9, 8, 7],
+            }],
+        );
+
+        let cb1 = ConsensusBlock::new(block1);
+        let cb2 = ConsensusBlock::new(block2);
+
+        assert_ne!(cb1.digest, cb2.digest);
+    }
+
+    #[test]
+    fn test_roundtrip_preserves_roots() {
+        let mut header = BlockHeader::new(12, 5_000, B256::repeat_byte(0xCD));
+        header.transactions_root = B256::repeat_byte(0x11);
+        header.state_root = B256::repeat_byte(0x22);
+
+        let block = Block::new(
+            header,
+            vec![TestTx {
+                data: vec![4, 5, 6],
+            }],
+        );
+        let consensus_block = ConsensusBlock::new(block);
+
+        let encoded = consensus_block.encode();
+        let decoded = ConsensusBlock::<TestTx>::decode(encoded).unwrap();
+
+        assert_eq!(
+            decoded.inner.header.transactions_root,
+            consensus_block.inner.header.transactions_root
+        );
+        assert_eq!(
+            decoded.inner.header.state_root,
+            consensus_block.inner.header.state_root
+        );
+        assert_eq!(decoded.digest, consensus_block.digest);
     }
 }

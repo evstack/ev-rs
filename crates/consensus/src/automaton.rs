@@ -3,6 +3,7 @@ use crate::config::ConsensusConfig;
 use alloy_primitives::B256;
 use commonware_consensus::types::Epoch;
 use commonware_consensus::{Automaton, CertifiableAutomaton};
+use commonware_cryptography::{Hasher, Sha256};
 use commonware_utils::channel::oneshot;
 use evolve_core::ReadonlyKV;
 use evolve_mempool::{Mempool, MempoolTx, SharedMempool};
@@ -135,6 +136,10 @@ where
             .gas_limit(self.config.gas_limit)
             .build();
 
+        let mut genesis_block = genesis_block;
+        genesis_block.header.transactions_root =
+            compute_transactions_root(&genesis_block.transactions);
+
         let cb = ConsensusBlock::new(genesis_block);
         let digest = cb.digest;
 
@@ -186,6 +191,9 @@ where
                 .gas_limit(gas_limit)
                 .transactions(transactions)
                 .build();
+
+            let mut block = block;
+            block.header.transactions_root = compute_transactions_root(&block.transactions);
 
             let cb = ConsensusBlock::new(block);
             let digest = cb.digest;
@@ -250,6 +258,15 @@ where
 
         receiver
     }
+}
+
+fn compute_transactions_root<Tx: Transaction>(transactions: &[Tx]) -> B256 {
+    let mut hasher = Sha256::new();
+    hasher.update(&(transactions.len() as u64).to_le_bytes());
+    for tx in transactions {
+        hasher.update(&tx.compute_identifier());
+    }
+    B256::from_slice(&hasher.finalize().0)
 }
 
 impl<Stf, S, Codes, Tx, Ctx> CertifiableAutomaton for EvolveAutomaton<Stf, S, Codes, Tx, Ctx>

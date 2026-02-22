@@ -1,5 +1,9 @@
 use alloy_primitives::B256;
+use commonware_consensus::simplex::types::Activity;
 use commonware_consensus::Reporter;
+use commonware_cryptography::certificate::Scheme;
+use commonware_cryptography::sha256::Digest as Sha256Digest;
+use evolve_stf_traits::Transaction;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
@@ -77,26 +81,55 @@ impl<A, Tx: Send + 'static> Default for EvolveReporter<A, Tx> {
     }
 }
 
-impl<A: Clone + Send + 'static, Tx: Send + Sync + 'static> Reporter for EvolveReporter<A, Tx> {
-    type Activity = A;
+impl<S, Tx> Reporter for EvolveReporter<Activity<S, Sha256Digest>, Tx>
+where
+    S: Scheme + Clone + Send + 'static,
+    Tx: Clone + Transaction + Send + Sync + 'static,
+{
+    type Activity = Activity<S, Sha256Digest>;
 
-    async fn report(&mut self, _activity: Self::Activity) {
-        // TODO: Extract finalization events from activity, look up the finalized
-        // block by digest in pending_blocks, and update chain state:
-        //   1. Set last_hash to the finalized block's hash
-        //   2. Remove the block from pending_blocks
-        //   3. Execute through STF and commit state changes
-        //
-        // This requires matching on Activity<S, D>::Finalization which depends on
-        // concrete scheme types. Will be implemented when the full finalization
-        // pipeline is wired.
-        if let Some(ref state) = self.chain_state {
-            tracing::debug!(
-                height = state.height.load(Ordering::SeqCst),
-                "reporter: received consensus activity (chain state wired)"
-            );
-        } else {
+    async fn report(&mut self, activity: Self::Activity) {
+        let Some(state) = self.chain_state.as_ref() else {
             tracing::debug!("reporter: received consensus activity");
-        }
+            return;
+        };
+
+        let finalized_digest = match activity {
+            Activity::Finalization(finalization) => finalization.proposal.payload.0,
+            _ => {
+                tracing::debug!(
+                    height = state.height.load(Ordering::SeqCst),
+                    "reporter: received non-finalization activity"
+                );
+                return;
+            }
+        };
+
+        let finalized_block = {
+            let mut pending = state.pending_blocks.write().unwrap();
+            pending.remove(&finalized_digest)
+        };
+
+        let Some(block) = finalized_block else {
+            tracing::warn!(
+                digest = ?finalized_digest,
+                "reporter: finalization digest not found in pending blocks"
+            );
+            return;
+        };
+
+        let finalized_hash = block.block_hash();
+        *state.last_hash.write().await = finalized_hash;
+        state.height.store(
+            block.inner.header.number.saturating_add(1),
+            Ordering::SeqCst,
+        );
+
+        tracing::debug!(
+            digest = ?finalized_digest,
+            block_number = block.inner.header.number,
+            block_hash = ?finalized_hash,
+            "reporter: advanced chain state from finalized activity"
+        );
     }
 }
