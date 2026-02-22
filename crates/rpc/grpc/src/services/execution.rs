@@ -700,4 +700,92 @@ mod tests {
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
         assert!(err.message().contains("Invalid block hash"));
     }
+
+    #[tokio::test]
+    async fn test_get_block_by_number_with_unspecified_tag_uses_latest_resolution() {
+        use crate::proto::evolve::v1::execution_service_server::ExecutionService;
+
+        let service =
+            ExecutionServiceImpl::new(1, Arc::new(MockProvider::new(42).with_block_number_error()));
+        let req = proto::GetBlockByNumberRequest {
+            block: Some(proto::BlockId {
+                id: Some(proto::block_id::Id::Tag(
+                    proto::BlockTag::Unspecified as i32,
+                )),
+            }),
+            full_transactions: false,
+        };
+
+        let err = service
+            .get_block_by_number(Request::new(req))
+            .await
+            .expect_err("unspecified tag should resolve via latest and hit block_number");
+        assert_eq!(err.code(), tonic::Code::Internal);
+    }
+
+    #[tokio::test]
+    async fn test_get_block_by_number_with_empty_block_id_does_not_resolve_latest() {
+        use crate::proto::evolve::v1::execution_service_server::ExecutionService;
+
+        let service =
+            ExecutionServiceImpl::new(1, Arc::new(MockProvider::new(42).with_block_number_error()));
+        let req = proto::GetBlockByNumberRequest {
+            block: Some(proto::BlockId { id: None }),
+            full_transactions: false,
+        };
+
+        let response = service
+            .get_block_by_number(Request::new(req))
+            .await
+            .expect("empty block id should map to None and skip block_number");
+        assert!(response.into_inner().block.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_transaction_by_hash_rejects_missing_hash() {
+        use crate::proto::evolve::v1::execution_service_server::ExecutionService;
+
+        let service = ExecutionServiceImpl::new(1, Arc::new(MockProvider::new(1)));
+        let req = proto::GetTransactionByHashRequest { hash: None };
+
+        let err = service
+            .get_transaction_by_hash(Request::new(req))
+            .await
+            .expect_err("missing transaction hash should fail");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("Invalid transaction hash"));
+    }
+
+    #[tokio::test]
+    async fn test_call_rejects_missing_call_request() {
+        use crate::proto::evolve::v1::execution_service_server::ExecutionService;
+
+        let service = ExecutionServiceImpl::new(1, Arc::new(MockProvider::new(1)));
+        let req = proto::ExecuteCallRequest {
+            request: None,
+            block: None,
+        };
+
+        let err = service
+            .call(Request::new(req))
+            .await
+            .expect_err("missing call request should fail");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("Missing call request"));
+    }
+
+    #[tokio::test]
+    async fn test_send_raw_transaction_rejects_empty_payload() {
+        use crate::proto::evolve::v1::execution_service_server::ExecutionService;
+
+        let service = ExecutionServiceImpl::new(1, Arc::new(MockProvider::new(1)));
+        let req = proto::SendRawTransactionRequest { data: Vec::new() };
+
+        let err = service
+            .send_raw_transaction(Request::new(req))
+            .await
+            .expect_err("empty transaction bytes should fail");
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+        assert!(err.message().contains("Empty transaction data"));
+    }
 }

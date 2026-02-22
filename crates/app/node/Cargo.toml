@@ -36,3 +36,7 @@ workspace = true
 
 [dev-dependencies]
 tempfile = "3.8"
+alloy-consensus = { workspace = true }
+evolve_stf = { workspace = true }
+k256 = { version = "0.13", features = ["ecdsa"] }
+rand = "0.8"

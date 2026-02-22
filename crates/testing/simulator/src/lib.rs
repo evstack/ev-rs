@@ -540,6 +540,57 @@ mod tests {
     }
 
     #[test]
+    fn test_simulator_snapshot_restore_restores_time_and_app_hash() {
+        let mut sim = Simulator::new(7, SimConfig::default());
+
+        let snapshot = sim.snapshot();
+        let snapshot_tick = snapshot.time.tick;
+        let snapshot_block = snapshot.time.block;
+        let snapshot_hash = snapshot.app_hash;
+
+        sim.advance_block();
+        sim.apply_state_changes(vec![StateChange::Set {
+            key: b"key_a".to_vec(),
+            value: b"value_a".to_vec(),
+        }])
+        .unwrap();
+        assert_ne!(sim.app_hash(), snapshot_hash);
+
+        sim.restore(snapshot);
+
+        assert_eq!(sim.time().current_tick(), snapshot_tick);
+        assert_eq!(sim.time().block_height(), snapshot_block);
+        assert_eq!(sim.app_hash(), snapshot_hash);
+    }
+
+    #[test]
+    fn test_simulator_restore_keeps_rng_progress_deterministic() {
+        let seed = 999u64;
+        let mut sim = Simulator::new(seed, SimConfig::default());
+        let mut control = Simulator::new(seed, SimConfig::default());
+
+        let _ = sim.rng().gen::<u64>();
+        let _ = control.rng().gen::<u64>();
+
+        let snapshot = sim.snapshot();
+
+        let after_snapshot = sim.rng().gen::<u64>();
+        let control_after_snapshot = control.rng().gen::<u64>();
+        assert_eq!(after_snapshot, control_after_snapshot);
+
+        let _ = sim.rng().gen::<u64>();
+        let _ = control.rng().gen::<u64>();
+
+        sim.restore(snapshot);
+
+        let after_restore = sim.rng().gen::<u64>();
+        let control_next = control.rng().gen::<u64>();
+
+        assert_ne!(after_restore, after_snapshot);
+        assert_eq!(after_restore, control_next);
+    }
+
+    #[test]
     fn test_simulator_builder() {
         let (sim, seed) = SimulatorBuilder::new()
             .max_blocks(100)

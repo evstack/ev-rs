@@ -329,4 +329,63 @@ mod tests {
         assert_eq!(time.block_height(), 5);
         assert!(time.current_tick() >= 50);
     }
+
+    #[test]
+    fn test_advance_block_from_mid_block_preserves_tick_progress() {
+        let config = TimeConfig {
+            ticks_per_block: 10,
+            tick_ms: 1,
+            initial_timestamp_ms: 0,
+        };
+        let mut time = SimulatedTime::new(config);
+
+        time.advance_ticks(15);
+        assert_eq!(time.current_tick(), 15);
+        assert_eq!(time.block_height(), 0);
+
+        time.advance_block();
+        assert_eq!(time.block_height(), 1);
+        assert_eq!(time.current_tick(), 15);
+
+        time.advance_block();
+        assert_eq!(time.block_height(), 2);
+        assert_eq!(time.current_tick(), 20);
+    }
+
+    #[test]
+    fn test_set_block_height_does_not_decrease_existing_tick() {
+        let config = TimeConfig {
+            ticks_per_block: 10,
+            tick_ms: 1,
+            initial_timestamp_ms: 0,
+        };
+        let mut time = SimulatedTime::new(config);
+
+        time.advance_ticks(250);
+        time.set_block_height(30);
+        assert_eq!(time.current_tick(), 300);
+        assert_eq!(time.block_height(), 30);
+
+        time.set_block_height(1);
+        assert_eq!(time.block_height(), 1);
+        assert_eq!(time.current_tick(), 300);
+    }
+
+    #[test]
+    fn test_saturating_time_math_at_u64_limits() {
+        let config = TimeConfig {
+            ticks_per_block: u64::MAX,
+            tick_ms: u64::MAX,
+            initial_timestamp_ms: u64::MAX - 10,
+        };
+        let mut time = SimulatedTime::new(config);
+
+        time.advance_ticks(2);
+        assert_eq!(time.now_ms(), u64::MAX);
+        assert_eq!(time.block_time_ms(), u64::MAX);
+
+        let crossed = time.advance_ticks(u64::MAX);
+        assert_eq!(time.current_tick(), u64::MAX);
+        assert_eq!(crossed, 1);
+    }
 }

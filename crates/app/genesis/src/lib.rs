@@ -580,6 +580,35 @@ mod tests {
     }
 
     #[test]
+    fn test_apply_genesis_failure_without_id_propagates_none_id() {
+        let stf = setup_stf();
+        let mut codes = CodeStore::new();
+        codes.add_code(FailingAccount);
+
+        let bad_account = AccountId::new(100);
+        let storage = setup_storage_with_account(bad_account, "failing_account");
+        let consensus_params = ConsensusParams::default();
+
+        let txs = vec![GenesisTx::new(
+            SYSTEM_ACCOUNT_ID,
+            bad_account,
+            InvokeRequest::new(&TestInitMsg { value: 1 }).unwrap(),
+        )];
+
+        let result = apply_genesis(&stf, &storage, &codes, &consensus_params, txs);
+        assert!(result.is_err());
+
+        assert!(matches!(
+            result,
+            Err(GenesisError::TransactionFailed {
+                index: 0,
+                id: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn test_apply_genesis_empty_transactions() {
         let stf = setup_stf();
         let codes = CodeStore::new();

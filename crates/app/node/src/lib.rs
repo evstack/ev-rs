@@ -1111,3 +1111,276 @@ fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_consensus::{SignableTransaction, TxLegacy};
+    use alloy_primitives::{Address, Bytes, PrimitiveSignature, U256, U64};
+    use evolve_chain_index::NoopAccountCodes;
+    use evolve_eth_jsonrpc::StateProvider;
+    use evolve_mempool::MempoolTx;
+    use evolve_rpc_types::block::BlockTransactions;
+    use evolve_rpc_types::SyncStatus;
+    use evolve_server::{Block, DevConsensus, StfExecutor};
+    use evolve_stf::execution_state::ExecutionState;
+    use evolve_stf::results::{BlockResult, TxResult};
+    use evolve_stf_traits::{AccountsCodeStorage, Block as _};
+    use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
+    use rand::rngs::OsRng;
+    use tokio::time::{sleep, timeout, Duration};
+
+    #[derive(Default, Clone, Copy)]
+    struct MockStf;
+
+    #[derive(Default)]
+    struct MockCodes;
+
+    impl AccountsCodeStorage for MockCodes {
+        fn with_code<F, R>(&self, _identifier: &str, f: F) -> Result<R, evolve_core::ErrorCode>
+        where
+            F: FnOnce(Option<&dyn evolve_core::AccountCode>) -> R,
+        {
+            Ok(f(None))
+        }
+
+        fn list_identifiers(&self) -> Vec<String> {
+            Vec::new()
+        }
+    }
+
+    impl StfExecutor<TxContext, MockStorage, MockCodes> for MockStf {
+        fn execute_block<'a>(
+            &self,
+            storage: &'a MockStorage,
+            _codes: &'a MockCodes,
+            block: &Block<TxContext>,
+        ) -> (BlockResult, ExecutionState<'a, MockStorage>) {
+            let tx_results: Vec<TxResult> = block
+                .txs()
+                .iter()
+                .map(|tx| TxResult {
+                    events: vec![],
+                    gas_used: MempoolTx::gas_limit(tx),
+                    response: evolve_core::InvokeResponse::new(&()),
+                })
+                .collect();
+
+            let gas_used = tx_results.iter().map(|r| r.gas_used).sum();
+            (
+                BlockResult {
+                    begin_block_events: vec![],
+                    tx_results,
+                    end_block_events: vec![],
+                    gas_used,
+                    txs_skipped: 0,
+                },
+                ExecutionState::new(storage),
+            )
+        }
+    }
+
+    fn sign_hash(signing_key: &SigningKey, hash: alloy_primitives::B256) -> PrimitiveSignature {
+        let (sig, recovery_id) = signing_key.sign_prehash(hash.as_ref()).unwrap();
+        let r = U256::from_be_slice(&sig.r().to_bytes());
+        let s = U256::from_be_slice(&sig.s().to_bytes());
+        let v = recovery_id.is_y_odd();
+        PrimitiveSignature::new(r, s, v)
+    }
+
+    fn make_signed_legacy_tx(chain_id: u64) -> Vec<u8> {
+        let signing_key = SigningKey::random(&mut OsRng);
+        let tx = TxLegacy {
+            chain_id: Some(chain_id),
+            nonce: 0,
+            gas_price: 1,
+            gas_limit: 21_000,
+            to: alloy_primitives::TxKind::Call(Address::repeat_byte(0x11)),
+            value: U256::from(1u64),
+            input: Bytes::new(),
+        };
+
+        let signature = sign_hash(&signing_key, tx.signature_hash());
+        let signed = tx.into_signed(signature);
+
+        let mut encoded = Vec::new();
+        signed.rlp_encode(&mut encoded);
+        encoded
+    }
+
+    fn test_provider_config() -> ChainStateProviderConfig {
+        ChainStateProviderConfig {
+            chain_id: 1,
+            protocol_version: "evolve-test".to_string(),
+            gas_price: U256::from(1u64),
+            sync_status: SyncStatus::NotSyncing(false),
+        }
+    }
+
+    #[tokio::test]
+    async fn mempool_to_block_to_provider_query_roundtrip() {
+        let chain_index = Arc::new(PersistentChainIndex::in_memory().expect("in-memory index"));
+        let mempool = new_shared_mempool::<TxContext>();
+        let provider = ChainStateProvider::with_mempool(
+            Arc::clone(&chain_index),
+            test_provider_config(),
+            Arc::new(NoopAccountCodes),
+            mempool.clone(),
+        );
+        let subscriptions = Arc::new(SubscriptionManager::new());
+
+        let dev = DevConsensus::with_rpc_and_mempool(
+            MockStf,
+            MockStorage::new(),
+            MockCodes,
+            DevConfig::default(),
+            Arc::clone(&chain_index),
+            subscriptions,
+            mempool.clone(),
+        );
+
+        let raw_tx = make_signed_legacy_tx(1);
+        let tx_hash = provider
+            .send_raw_transaction(&raw_tx)
+            .await
+            .expect("raw tx should be accepted into mempool");
+
+        assert_eq!(mempool.read().await.len(), 1);
+
+        let produced = dev
+            .produce_block_from_mempool(100)
+            .await
+            .expect("block production should succeed");
+        assert_eq!(produced.tx_count, 1);
+
+        assert_eq!(mempool.read().await.len(), 0);
+
+        timeout(Duration::from_secs(2), async {
+            loop {
+                if provider
+                    .get_transaction_by_hash(tx_hash)
+                    .await
+                    .expect("provider query should not fail")
+                    .is_some()
+                {
+                    break;
+                }
+                sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("indexed transaction should become visible");
+
+        let tx = provider
+            .get_transaction_by_hash(tx_hash)
+            .await
+            .expect("query should succeed")
+            .expect("transaction should be indexed");
+        assert_eq!(tx.hash, tx_hash);
+        assert_eq!(tx.block_number, Some(U64::from(1u64)));
+
+        let receipt = provider
+            .get_transaction_receipt(tx_hash)
+            .await
+            .expect("receipt query should succeed")
+            .expect("receipt should be indexed");
+        assert_eq!(receipt.transaction_hash, tx_hash);
+        assert_eq!(receipt.block_number, U64::from(1u64));
+        assert_eq!(receipt.status, U64::from(1u64));
+
+        let block = provider
+            .get_block_by_number(1, false)
+            .await
+            .expect("block query should succeed")
+            .expect("block should be indexed");
+        match block.transactions {
+            Some(BlockTransactions::Hashes(hashes)) => assert_eq!(hashes, vec![tx_hash]),
+            _ => panic!("expected block transaction hashes"),
+        }
+    }
+
+    #[tokio::test]
+    async fn provider_rejects_wrong_chain_id_without_mempool_insert() {
+        let chain_index = Arc::new(PersistentChainIndex::in_memory().expect("in-memory index"));
+        let mempool = new_shared_mempool::<TxContext>();
+        let provider = ChainStateProvider::with_mempool(
+            Arc::clone(&chain_index),
+            test_provider_config(),
+            Arc::new(NoopAccountCodes),
+            mempool.clone(),
+        );
+
+        let wrong_chain_tx = make_signed_legacy_tx(2);
+        let err = provider
+            .send_raw_transaction(&wrong_chain_tx)
+            .await
+            .expect_err("wrong-chain tx must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("expected 1") && msg.contains("got Some(2)"),
+            "unexpected error message: {msg}"
+        );
+        assert_eq!(mempool.read().await.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn provider_returns_full_transactions_for_indexed_block() {
+        let chain_index = Arc::new(PersistentChainIndex::in_memory().expect("in-memory index"));
+        let mempool = new_shared_mempool::<TxContext>();
+        let provider = ChainStateProvider::with_mempool(
+            Arc::clone(&chain_index),
+            test_provider_config(),
+            Arc::new(NoopAccountCodes),
+            mempool.clone(),
+        );
+        let subscriptions = Arc::new(SubscriptionManager::new());
+
+        let dev = DevConsensus::with_rpc_and_mempool(
+            MockStf,
+            MockStorage::new(),
+            MockCodes,
+            DevConfig::default(),
+            Arc::clone(&chain_index),
+            subscriptions,
+            mempool.clone(),
+        );
+
+        let raw_tx = make_signed_legacy_tx(1);
+        let tx_hash = provider
+            .send_raw_transaction(&raw_tx)
+            .await
+            .expect("raw tx should be accepted into mempool");
+        dev.produce_block_from_mempool(100)
+            .await
+            .expect("block production should succeed");
+
+        timeout(Duration::from_secs(2), async {
+            loop {
+                let maybe = provider
+                    .get_block_by_number(1, true)
+                    .await
+                    .expect("query should succeed");
+                if maybe.is_some() {
+                    break;
+                }
+                sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("block should become visible");
+
+        let block = provider
+            .get_block_by_number(1, true)
+            .await
+            .expect("query should succeed")
+            .expect("block should be indexed");
+        match block.transactions {
+            Some(BlockTransactions::Full(txs)) => {
+                assert_eq!(txs.len(), 1);
+                assert_eq!(txs[0].hash, tx_hash);
+                assert_eq!(txs[0].block_number, Some(U64::from(1u64)));
+            }
+            _ => panic!("expected full transactions in block"),
+        }
+    }
+}
