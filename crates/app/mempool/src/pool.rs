@@ -394,6 +394,12 @@ pub fn shared_mempool_from<M>(mempool: M) -> SharedMempool<M> {
 
 #[cfg(test)]
 mod tests {
+    // TODO(test-hardening): Add property/state-machine tests over add/propose/finalize
+    // to prove invariants across long operation sequences and randomized schedules.
+    // TODO(test-hardening): Add higher-contention ingress tests (many concurrent
+    // writers/proposers) and assert no starvation for valid transactions.
+    use std::collections::HashSet;
+
     use super::*;
     use crate::traits::{FifoOrdering, GasPriceOrdering};
 
@@ -466,21 +472,6 @@ mod tests {
         fn gas_limit(&self) -> u64 {
             self.gas_limit
         }
-    }
-
-    #[test]
-    fn test_mempool_add_and_get() {
-        let mut pool: Mempool<TestGasTx> = Mempool::new();
-
-        let tx = TestGasTx::new(1, 100, 0, &[0xAAu8; 20]);
-
-        let id = pool.add(tx.clone()).unwrap();
-        assert_eq!(id, [1u8; 32]);
-        assert_eq!(pool.len(), 1);
-        assert!(!pool.is_empty());
-
-        let retrieved = pool.get(&id).unwrap();
-        assert_eq!(retrieved.id, tx.id);
     }
 
     #[test]
@@ -822,26 +813,6 @@ mod tests {
     }
 
     #[test]
-    fn test_select_with_gas_budget_skipped_txs_remain_in_pool() {
-        let mut pool: Mempool<TestGasTx> = Mempool::new();
-
-        // Add one large tx and one small tx
-        let tx1 = TestGasTx::new(1, 100, 0, &[0xAAu8; 20]).with_gas_limit(50_000);
-        let tx2 = TestGasTx::new(2, 80, 0, &[0xBBu8; 20]).with_gas_limit(10_000);
-
-        pool.add(tx1).unwrap();
-        pool.add(tx2).unwrap();
-
-        // First selection: max 15k gas - only tx2 fits
-        let (selected, _) = pool.select_with_gas_budget(15_000, 0);
-        assert_eq!(selected.len(), 1);
-        assert_eq!(selected[0].gas_price, 80);
-
-        // tx1 should still be in pool (it was skipped, not removed)
-        assert!(pool.contains(&[1u8; 32]));
-    }
-
-    #[test]
     fn test_select_with_gas_budget_skipped_txs_can_be_selected_later() {
         let mut pool: Mempool<TestGasTx> = Mempool::new();
 
@@ -859,5 +830,160 @@ mod tests {
         assert_eq!(second_selected.len(), 1);
         assert_eq!(second_selected[0].tx_id(), [1u8; 32]);
         assert_eq!(second_gas, 50_000);
+    }
+
+    #[tokio::test]
+    async fn concurrent_add_same_tx_allows_single_winner() {
+        let shared = new_shared_mempool::<TestGasTx>();
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let tx = TestGasTx::new(7, 123, 0, &[0xAAu8; 20]);
+        let expected_id = tx.tx_id();
+
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let shared = shared.clone();
+            let barrier = barrier.clone();
+            let tx = tx.clone();
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                let mut guard = shared.write().await;
+                guard.add(tx)
+            }));
+        }
+
+        barrier.wait().await;
+
+        let mut successes = 0usize;
+        let mut already_exists = 0usize;
+        for handle in handles {
+            match handle.await.expect("add task should complete") {
+                Ok(id) => {
+                    successes += 1;
+                    assert_eq!(id, expected_id);
+                }
+                Err(MempoolError::AlreadyExists) => already_exists += 1,
+                Err(other) => panic!("unexpected add error: {other}"),
+            }
+        }
+
+        assert_eq!(successes, 1);
+        assert_eq!(already_exists, 1);
+
+        let guard = shared.read().await;
+        assert_eq!(guard.len(), 1);
+        assert!(guard.contains(&expected_id));
+    }
+
+    #[tokio::test]
+    async fn concurrent_proposals_partition_work_without_overlap() {
+        let shared = new_shared_mempool::<TestGasTx>();
+        {
+            let mut guard = shared.write().await;
+            for i in 0..4 {
+                let tx =
+                    TestGasTx::new(i, (100 - i) as u128, i as u64, &[i; 20]).with_gas_limit(100);
+                guard.add(tx).expect("seed tx should be accepted");
+            }
+        }
+
+        let barrier = Arc::new(tokio::sync::Barrier::new(3));
+        let mut handles = Vec::new();
+        for _ in 0..2 {
+            let shared = shared.clone();
+            let barrier = barrier.clone();
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                let mut guard = shared.write().await;
+                let (selected, _) = guard.propose(0, 2);
+                selected.iter().map(|tx| tx.tx_id()).collect::<Vec<_>>()
+            }));
+        }
+
+        barrier.wait().await;
+
+        let mut seen = HashSet::new();
+        for handle in handles {
+            for hash in handle.await.expect("propose task should complete") {
+                assert!(seen.insert(hash), "same tx proposed twice");
+            }
+        }
+        assert_eq!(seen.len(), 4, "all seeded txs should be proposed once");
+
+        {
+            let mut guard = shared.write().await;
+            let executed: Vec<[u8; 32]> = seen.into_iter().collect();
+            guard.finalize(&executed);
+            assert!(guard.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn finalize_after_concurrent_add_preserves_new_and_unexecuted_txs() {
+        let shared = new_shared_mempool::<TestGasTx>();
+        {
+            let mut guard = shared.write().await;
+            guard
+                .add(TestGasTx::new(1, 100, 0, &[0xAAu8; 20]).with_gas_limit(100))
+                .expect("tx1 should be accepted");
+            guard
+                .add(TestGasTx::new(2, 90, 1, &[0xBBu8; 20]).with_gas_limit(100))
+                .expect("tx2 should be accepted");
+        }
+
+        let (selected_tx, selected_rx) = tokio::sync::oneshot::channel::<Vec<[u8; 32]>>();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let shared_for_finalize = shared.clone();
+        let finalize_task = tokio::spawn(async move {
+            let mut guard = shared_for_finalize.write().await;
+            let (selected, _) = guard.propose(0, 0);
+            let selected_ids: Vec<[u8; 32]> = selected.iter().map(|tx| tx.tx_id()).collect();
+            selected_tx
+                .send(selected_ids.clone())
+                .expect("selection should be delivered");
+            drop(guard);
+
+            resume_rx.await.expect("resume signal should be delivered");
+
+            let mut guard = shared_for_finalize.write().await;
+            guard.finalize(&[selected_ids[0]]);
+        });
+
+        let selected_ids = selected_rx
+            .await
+            .expect("should receive proposed tx ids before add");
+        assert_eq!(selected_ids.len(), 2);
+
+        {
+            let mut guard = shared.write().await;
+            guard
+                .add(TestGasTx::new(3, 95, 2, &[0xCCu8; 20]).with_gas_limit(100))
+                .expect("concurrent add should succeed");
+        }
+
+        resume_tx
+            .send(())
+            .expect("finalize task should still be waiting");
+        finalize_task.await.expect("finalize task should complete");
+
+        let mut guard = shared.write().await;
+        assert!(
+            !guard.contains(&selected_ids[0]),
+            "executed tx must be removed"
+        );
+        assert!(
+            guard.contains(&selected_ids[1]),
+            "unexecuted tx must return"
+        );
+        assert!(
+            guard.contains(&[3u8; 32]),
+            "newly added tx must be retained"
+        );
+
+        let (next_batch, _) = guard.propose(0, 0);
+        let next_ids: HashSet<[u8; 32]> = next_batch.iter().map(|tx| tx.tx_id()).collect();
+        assert_eq!(next_ids.len(), 2);
+        assert!(next_ids.contains(&selected_ids[1]));
+        assert!(next_ids.contains(&[3u8; 32]));
     }
 }
