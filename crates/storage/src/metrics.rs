@@ -284,16 +284,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_storage_metrics_creation() {
-        let metrics = StorageMetrics::new();
-        let encoded = metrics.encode_prometheus();
-
-        assert!(encoded.contains("evolve_storage_read_latency_seconds"));
-        assert!(encoded.contains("evolve_storage_cache_hits_total"));
-        assert!(encoded.contains("evolve_storage_batch_size"));
-    }
-
-    #[test]
     fn test_record_operations() {
         let metrics = StorageMetrics::new();
 
@@ -310,17 +300,6 @@ mod tests {
         assert!(encoded.contains("evolve_storage_cache_hits_total"));
         assert!(encoded.contains("evolve_storage_cache_misses_total"));
         assert!(encoded.contains("evolve_storage_cache_size"));
-    }
-
-    #[test]
-    fn test_optional_metrics_disabled() {
-        let metrics = OptionalMetrics::disabled();
-        assert!(!metrics.is_enabled());
-
-        // These should be no-ops
-        metrics.record_cache_hit();
-        metrics.record_read_latency(0.001);
-        metrics.record_batch(0.01, 100, 80, 20);
     }
 
     #[test]

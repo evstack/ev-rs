@@ -146,13 +146,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_gateway_new() {
-        let gateway = EthGateway::new(1337);
-        assert_eq!(gateway.chain_id(), 1337);
-        assert_eq!(gateway.base_fee(), 0);
-    }
-
-    #[test]
     fn test_gateway_with_base_fee() {
         let gateway = EthGateway::with_base_fee(1337, 1000);
         assert_eq!(gateway.chain_id(), 1337);

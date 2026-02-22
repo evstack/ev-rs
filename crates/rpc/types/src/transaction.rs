@@ -126,6 +126,7 @@ impl RpcTransaction {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     #[test]
     fn test_transaction_serialization() {
@@ -136,8 +137,14 @@ mod tests {
             1,
             U256::from(1000),
         );
-        let json = serde_json::to_string(&tx).unwrap();
-        assert!(json.contains("\"nonce\":\"0x1\""));
-        assert!(json.contains("\"type\":\"0x0\""));
+        let json_value: Value = serde_json::to_value(&tx).unwrap();
+        assert_eq!(json_value["nonce"], "0x1");
+        assert_eq!(json_value["type"], "0x0");
+        assert_eq!(json_value["value"], "0x3e8");
+        assert_eq!(json_value["gas"], "0x5208");
+        assert_eq!(
+            json_value["to"],
+            "0x0000000000000000000000000000000000000000"
+        );
     }
 }

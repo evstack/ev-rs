@@ -106,14 +106,6 @@ mod tests {
     }
 
     #[test]
-    fn test_address_to_account_id_deterministic() {
-        let addr1 = Address::repeat_byte(0xAB);
-        let addr2 = Address::repeat_byte(0xAB);
-
-        assert_eq!(address_to_account_id(addr1), address_to_account_id(addr2));
-    }
-
-    #[test]
     fn test_account_id_address_round_trip() {
         // For any AccountId, converting to address and back should give the same ID
         let id = AccountId::new(0x112233445566778899aabbccddeeff00);

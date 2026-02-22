@@ -509,4 +509,95 @@ mod tests {
             "Response should mention total_funds = 100"
         );
     }
+
+    #[test]
+    fn test_missing_handlers_return_unknown_function() {
+        #[derive(Clone, Debug)]
+        struct MissingReq;
+        impl Encodable for MissingReq {
+            fn encode(&self) -> SdkResult<Vec<u8>> {
+                Ok(Vec::new())
+            }
+        }
+        impl Decodable for MissingReq {
+            fn decode(_bytes: &[u8]) -> SdkResult<Self> {
+                Ok(Self)
+            }
+        }
+        impl InvokableMessage for MissingReq {
+            const FUNCTION_IDENTIFIER: u64 = 0xDEAD_BEEF;
+            const FUNCTION_IDENTIFIER_NAME: &'static str = "missing_req";
+        }
+
+        let whoami = AccountId::new(1);
+        let sender = AccountId::new(2);
+        let mut env = MockEnv::new(whoami, sender);
+        let req = make_invoke_request(&MissingReq).unwrap();
+
+        let query_result = env.do_query(AccountId::new(3), &req);
+        assert!(matches!(query_result, Err(e) if e == ERR_UNKNOWN_FUNCTION));
+
+        let exec_result = env.do_exec(AccountId::new(3), &req, Vec::new());
+        assert!(matches!(exec_result, Err(e) if e == ERR_UNKNOWN_FUNCTION));
+    }
+
+    #[test]
+    fn test_storage_set_is_namespaced_by_whoami() {
+        let owner_a = AccountId::new(10);
+        let owner_b = AccountId::new(11);
+        let sender = AccountId::new(20);
+        let mut env = MockEnv::new(owner_a, sender);
+
+        let set_request = StorageSetRequest {
+            key: b"shared_key".to_vec(),
+            value: Message::from_bytes(b"owner_a_value".to_vec()),
+        };
+        let set_invoke = make_invoke_request(&set_request).unwrap();
+        env.do_exec(STORAGE_ACCOUNT_ID, &set_invoke, Vec::new())
+            .unwrap();
+
+        let get_for_a = StorageGetRequest {
+            account_id: owner_a,
+            key: b"shared_key".to_vec(),
+        };
+        let get_for_b = StorageGetRequest {
+            account_id: owner_b,
+            key: b"shared_key".to_vec(),
+        };
+
+        let resp_a: StorageGetResponse = env
+            .do_query(
+                STORAGE_ACCOUNT_ID,
+                &make_invoke_request(&get_for_a).unwrap(),
+            )
+            .unwrap()
+            .get()
+            .unwrap();
+        let resp_b: StorageGetResponse = env
+            .do_query(
+                STORAGE_ACCOUNT_ID,
+                &make_invoke_request(&get_for_b).unwrap(),
+            )
+            .unwrap()
+            .get()
+            .unwrap();
+
+        assert_eq!(resp_a.value.unwrap().as_bytes().unwrap(), b"owner_a_value");
+        assert!(resp_b.value.is_none());
+    }
+
+    #[test]
+    fn test_unique_id_monotonic_counter_prefix() {
+        let whoami = AccountId::new(100);
+        let sender = AccountId::new(200);
+        let mut env = MockEnv::new(whoami, sender);
+
+        let id1 = env.unique_id().unwrap();
+        let id2 = env.unique_id().unwrap();
+
+        assert_eq!(&id1[0..8], &1_u64.to_be_bytes());
+        assert_eq!(&id2[0..8], &2_u64.to_be_bytes());
+        assert!(id1[8..].iter().all(|b| *b == 0));
+        assert!(id2[8..].iter().all(|b| *b == 0));
+    }
 }

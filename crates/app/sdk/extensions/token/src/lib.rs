@@ -176,7 +176,7 @@ mod tests {
 
     use crate::account::Token;
     // The generated account struct
-    use crate::account::ERR_NOT_ENOUGH_BALANCE;
+    use crate::account::{ERR_NOT_ENOUGH_BALANCE, ERR_UNDERFLOW};
 
     use evolve_testing::MockEnv;
 
@@ -244,6 +244,7 @@ mod tests {
         // Check the supply manager
         let supply_manager = token.supply_manager.get(&mut env).unwrap();
         assert_eq!(supply_manager, Some(AccountId::new(42)));
+        assert_eq!(token.total_supply(&mut env).unwrap(), 1000);
     }
 
     #[test]
@@ -254,7 +255,9 @@ mod tests {
         // We'll mint to holder 10 some extra tokens.
         let holder = AccountId::new(10);
         let before_balance = token.get_balance(holder, &mut env).unwrap().unwrap();
+        let before_supply = token.total_supply(&mut env).unwrap();
         assert_eq!(before_balance, 500);
+        assert_eq!(before_supply, 500);
 
         // Authorized call: the environment's sender == supply_manager(100).
         let result = token.mint(holder, 200, &mut env);
@@ -264,7 +267,12 @@ mod tests {
         );
 
         let after_balance = token.get_balance(holder, &mut env).unwrap().unwrap();
+        let after_supply = token.total_supply(&mut env).unwrap();
         assert_eq!(after_balance, 700, "Should have minted 200 more tokens");
+        assert_eq!(
+            after_supply, 700,
+            "Total supply should increase by mint amount"
+        );
     }
 
     #[test]
@@ -276,12 +284,26 @@ mod tests {
         let new_sender = AccountId::new(999);
         env = env.with_sender(new_sender);
 
+        let before_balance = token
+            .get_balance(AccountId::new(10), &mut env)
+            .unwrap()
+            .unwrap();
+        let before_supply = token.total_supply(&mut env).unwrap();
+
         // Attempt to mint
         let result = token.mint(AccountId::new(10), 200, &mut env);
         assert!(
             matches!(result, Err(e) if e == ERR_UNAUTHORIZED),
             "Mint should fail with ERR_UNAUTHORIZED"
         );
+
+        let after_balance = token
+            .get_balance(AccountId::new(10), &mut env)
+            .unwrap()
+            .unwrap();
+        let after_supply = token.total_supply(&mut env).unwrap();
+        assert_eq!(after_balance, before_balance);
+        assert_eq!(after_supply, before_supply);
     }
 
     #[test]
@@ -293,7 +315,9 @@ mod tests {
         let holder = AccountId::new(10);
 
         let before_balance = token.get_balance(holder, &mut env).unwrap().unwrap();
+        let before_supply = token.total_supply(&mut env).unwrap();
         assert_eq!(before_balance, 1000);
+        assert_eq!(before_supply, 1000);
 
         // environment's sender is supply_manager=42 -> authorized
         let result = token.burn(holder, 300, &mut env);
@@ -303,9 +327,14 @@ mod tests {
         );
 
         let after_balance = token.get_balance(holder, &mut env).unwrap().unwrap();
+        let after_supply = token.total_supply(&mut env).unwrap();
         assert_eq!(
             after_balance, 700,
             "Should have burned 300 tokens from holder"
+        );
+        assert_eq!(
+            after_supply, 700,
+            "Total supply should decrease by burn amount"
         );
     }
 
@@ -316,12 +345,26 @@ mod tests {
         // Change environment's sender to 999
         env = env.with_sender(AccountId::new(999));
 
+        let before_balance = token
+            .get_balance(AccountId::new(10), &mut env)
+            .unwrap()
+            .unwrap();
+        let before_supply = token.total_supply(&mut env).unwrap();
+
         // Attempt to burn
         let result = token.burn(AccountId::new(10), 100, &mut env);
         assert!(
             matches!(result, Err(e) if e == ERR_UNAUTHORIZED),
             "Burn should fail with ERR_UNAUTHORIZED"
         );
+
+        let after_balance = token
+            .get_balance(AccountId::new(10), &mut env)
+            .unwrap()
+            .unwrap();
+        let after_supply = token.total_supply(&mut env).unwrap();
+        assert_eq!(after_balance, before_balance);
+        assert_eq!(after_supply, before_supply);
     }
 
     #[test]
@@ -336,6 +379,7 @@ mod tests {
 
         // Transfer 300 tokens from 50 -> 60
         let recipient = AccountId::new(60);
+        let supply_before = token.total_supply(&mut env).unwrap();
         let result = token.transfer(recipient, 300, &mut env);
         assert!(
             result.is_ok(),
@@ -353,6 +397,11 @@ mod tests {
 
         let to_balance = token.get_balance(recipient, &mut env).unwrap().unwrap();
         assert_eq!(to_balance, 300, "Should have added 300 tokens to recipient");
+        assert_eq!(
+            token.total_supply(&mut env).unwrap(),
+            supply_before,
+            "Transfer must not change total supply"
+        );
     }
 
     #[test]
@@ -360,6 +409,14 @@ mod tests {
         let (token, mut env) = setup_token(1, 50, 100);
 
         env = env.with_sender(AccountId::new(50));
+        let before_from = token
+            .get_balance(AccountId::new(50), &mut env)
+            .unwrap()
+            .unwrap();
+        let before_to = token
+            .get_balance(AccountId::new(60), &mut env)
+            .unwrap_or(None);
+        let before_supply = token.total_supply(&mut env).unwrap();
 
         // Attempt to transfer 999, but user only has 100
         let result = token.transfer(AccountId::new(60), 999, &mut env);
@@ -367,6 +424,35 @@ mod tests {
             matches!(result, Err(e) if e == ERR_NOT_ENOUGH_BALANCE),
             "Should fail with ERR_NOT_ENOUGH_BALANCE"
         );
+
+        let after_from = token
+            .get_balance(AccountId::new(50), &mut env)
+            .unwrap()
+            .unwrap();
+        let after_to = token
+            .get_balance(AccountId::new(60), &mut env)
+            .unwrap_or(None);
+        let after_supply = token.total_supply(&mut env).unwrap();
+        assert_eq!(after_from, before_from);
+        assert_eq!(after_to, before_to);
+        assert_eq!(after_supply, before_supply);
+    }
+
+    #[test]
+    fn test_burn_underflow_preserves_state() {
+        let (token, mut env) = setup_token(42, 10, 50);
+
+        let holder = AccountId::new(10);
+        let before_balance = token.get_balance(holder, &mut env).unwrap().unwrap();
+        let before_supply = token.total_supply(&mut env).unwrap();
+
+        let result = token.burn(holder, 500, &mut env);
+        assert!(matches!(result, Err(e) if e == ERR_UNDERFLOW));
+
+        let after_balance = token.get_balance(holder, &mut env).unwrap().unwrap();
+        let after_supply = token.total_supply(&mut env).unwrap();
+        assert_eq!(after_balance, before_balance);
+        assert_eq!(after_supply, before_supply);
     }
 
     #[test]

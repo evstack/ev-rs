@@ -293,6 +293,22 @@ fn resolve_references_in_value(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::registry::SimpleRegistry;
+    use evolve_core::InvokeRequest;
+
+    fn build_test_registry() -> SimpleRegistry {
+        let mut registry = SimpleRegistry::new();
+        registry.register("test/init", "Test initialization", |_value| {
+            #[derive(Clone, borsh::BorshSerialize)]
+            struct EmptyMsg;
+            impl evolve_core::InvokableMessage for EmptyMsg {
+                const FUNCTION_IDENTIFIER: u64 = 0;
+                const FUNCTION_IDENTIFIER_NAME: &'static str = "init";
+            }
+            InvokeRequest::new(&EmptyMsg).map_err(|e| GenesisError::EncodeError(format!("{:?}", e)))
+        });
+        registry
+    }
 
     #[test]
     fn test_parse_genesis_file() {
@@ -365,21 +381,7 @@ mod tests {
 
     #[test]
     fn test_to_transactions_with_references() {
-        use crate::registry::SimpleRegistry;
-        use evolve_core::InvokeRequest;
-
-        // Create a mock registry that just creates empty requests
-        let mut registry = SimpleRegistry::new();
-        registry.register("test/init", "Test initialization", |_value| {
-            // Create a minimal valid InvokeRequest
-            #[derive(Clone, borsh::BorshSerialize)]
-            struct EmptyMsg;
-            impl evolve_core::InvokableMessage for EmptyMsg {
-                const FUNCTION_IDENTIFIER: u64 = 0;
-                const FUNCTION_IDENTIFIER_NAME: &'static str = "init";
-            }
-            InvokeRequest::new(&EmptyMsg).map_err(|e| GenesisError::EncodeError(format!("{:?}", e)))
-        });
+        let registry = build_test_registry();
 
         let json = r#"{
             "chain_id": "test-chain",
@@ -418,8 +420,6 @@ mod tests {
 
     #[test]
     fn test_to_transactions_unknown_message_type() {
-        use crate::registry::SimpleRegistry;
-
         let registry = SimpleRegistry::new(); // Empty registry
 
         let json = r#"{
@@ -491,6 +491,114 @@ mod tests {
         assert!(matches!(
             genesis.transactions[0].recipient,
             RecipientSpec::AccountId(456)
+        ));
+    }
+
+    #[test]
+    fn test_validate_rejects_empty_reference_id() {
+        let json = r#"{
+            "chain_id": "test-chain",
+            "transactions": [
+                { "recipient": "$", "msg_type": "test/init", "msg": {} }
+            ]
+        }"#;
+
+        let genesis = GenesisFile::parse(json).unwrap();
+        assert!(matches!(
+            genesis.validate(),
+            Err(GenesisError::InvalidReference(ref_id, 0)) if ref_id.is_empty()
+        ));
+    }
+
+    #[test]
+    fn test_validate_rejects_unknown_sender_reference() {
+        let json = r#"{
+            "chain_id": "test-chain",
+            "transactions": [
+                { "id": "alice", "recipient": "runtime", "msg_type": "test/init", "msg": {} },
+                { "sender": "$missing", "recipient": "runtime", "msg_type": "test/init", "msg": {} }
+            ]
+        }"#;
+
+        let genesis = GenesisFile::parse(json).unwrap();
+        assert!(matches!(
+            genesis.validate(),
+            Err(GenesisError::InvalidReference(ref_id, 1)) if ref_id == "missing"
+        ));
+    }
+
+    #[test]
+    fn test_to_transactions_rejects_malformed_sender_path() {
+        let registry = build_test_registry();
+        let json = r#"{
+            "chain_id": "test-chain",
+            "transactions": [
+                { "sender": "not-a-number", "recipient": "runtime", "msg_type": "test/init", "msg": {} }
+            ]
+        }"#;
+
+        let genesis = GenesisFile::parse(json).unwrap();
+        assert!(matches!(
+            genesis.to_transactions(&registry),
+            Err(GenesisError::ParseError(err)) if err == "invalid sender: not-a-number"
+        ));
+    }
+
+    #[test]
+    fn test_to_transactions_rejects_malformed_recipient_path() {
+        let registry = build_test_registry();
+        let json = r#"{
+            "chain_id": "test-chain",
+            "transactions": [
+                { "recipient": "not-a-number", "msg_type": "test/init", "msg": {} }
+            ]
+        }"#;
+
+        let genesis = GenesisFile::parse(json).unwrap();
+        assert!(matches!(
+            genesis.to_transactions(&registry),
+            Err(GenesisError::ParseError(err)) if err == "invalid recipient: not-a-number"
+        ));
+    }
+
+    #[test]
+    fn test_to_transactions_uses_id_mapping_for_references_only() {
+        let registry = build_test_registry();
+        let json = r#"{
+            "chain_id": "test-chain",
+            "transactions": [
+                { "id": "alice", "recipient": "runtime", "msg_type": "test/init", "msg": {} },
+                { "recipient": "runtime", "msg_type": "test/init", "msg": {} },
+                { "sender": "$alice", "recipient": "$alice", "msg_type": "test/init", "msg": {} }
+            ]
+        }"#;
+
+        let genesis = GenesisFile::parse(json).unwrap();
+        let txs = genesis.to_transactions(&registry).unwrap();
+
+        assert_eq!(txs.len(), 3);
+        assert_eq!(txs[2].sender, AccountId::new(1));
+        assert_eq!(txs[2].recipient, AccountId::new(1));
+    }
+
+    #[test]
+    fn test_to_transactions_propagates_encoder_error() {
+        let mut registry = SimpleRegistry::new();
+        registry.register("test/fail", "Always fail", |_value| {
+            Err(GenesisError::EncodeError("boom".to_string()))
+        });
+
+        let json = r#"{
+            "chain_id": "test-chain",
+            "transactions": [
+                { "recipient": "runtime", "msg_type": "test/fail", "msg": {} }
+            ]
+        }"#;
+
+        let genesis = GenesisFile::parse(json).unwrap();
+        assert!(matches!(
+            genesis.to_transactions(&registry),
+            Err(GenesisError::EncodeError(err)) if err == "boom"
         ));
     }
 }

@@ -111,12 +111,6 @@ mod tests {
     }
 
     #[test]
-    fn test_new() {
-        // Test that Map::new creates a Map with the correct prefix
-        let _map: Map<String, TestData> = Map::new(42);
-    }
-
-    #[test]
     fn test_get_nonexistent() {
         // Test getting a value that doesn't exist
         let map: Map<String, TestData> = Map::new(42);

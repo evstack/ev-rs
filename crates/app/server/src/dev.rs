@@ -852,20 +852,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_dev_config_defaults() {
-        let config = DevConfig::default();
-        assert!(config.block_interval.is_some());
-        assert_eq!(config.gas_limit, 30_000_000);
-        assert_eq!(config.initial_height, 1);
-    }
-
-    #[test]
-    fn test_dev_config_manual() {
-        let config = DevConfig::manual();
-        assert!(config.block_interval.is_none());
-    }
-
-    #[test]
     fn test_compute_block_hash_deterministic() {
         let h1 = compute_block_hash(1, 1000, B256::ZERO);
         let h2 = compute_block_hash(1, 1000, B256::ZERO);

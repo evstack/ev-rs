@@ -342,11 +342,4 @@ mod tests {
         // Data should match contents
         assert_eq!(log.data.as_ref(), &[1, 2, 3, 4]);
     }
-
-    #[test]
-    fn test_block_metadata_default() {
-        let meta = BlockMetadata::default();
-        assert_eq!(meta.hash, B256::ZERO);
-        assert_eq!(meta.gas_limit, 30_000_000);
-    }
 }

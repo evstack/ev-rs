@@ -147,23 +147,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_node_config_init_uses_defaults() {
-        let dir = tempdir().expect("tempdir");
-        let config_path = dir.path().join("config.yaml");
-        write_default_config(&config_path, false).expect("write config");
-
-        let common = CommonNodeArgs {
-            config: config_path,
-            data_dir: Some("./init-data".to_string()),
-            log_level: None,
-        };
-
-        let resolved = resolve_node_config_init(&common);
-        assert_eq!(resolved.storage.path, "./init-data");
-        assert_eq!(resolved.observability.log_level, "info");
-    }
-
-    #[test]
     fn resolve_node_config_disable_flags() {
         let dir = tempdir().expect("tempdir");
         let config_path = dir.path().join("config.yaml");

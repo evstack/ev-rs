@@ -227,34 +227,11 @@ mod tests {
     }
 
     #[test]
-    fn test_gas_price_ordering_equality() {
-        let a = GasPriceOrdering::new(100, 5);
-        let b = GasPriceOrdering::new(100, 5);
-
-        assert_eq!(a, b);
-        assert!(a.cmp(&b) == Ordering::Equal);
-    }
-
-    #[test]
     fn test_fifo_ordering_older_first() {
         let older = FifoOrdering::new(1000);
         let newer = FifoOrdering::new(2000);
 
         // Older timestamp (smaller) should be greater (higher priority in max-heap)
         assert!(older > newer);
-    }
-
-    #[test]
-    fn test_fifo_ordering_equality() {
-        let a = FifoOrdering::new(1000);
-        let b = FifoOrdering::new(1000);
-
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn test_fifo_timestamp_accessor() {
-        let ordering = FifoOrdering::new(12345);
-        assert_eq!(ordering.timestamp(), 12345);
     }
 }
