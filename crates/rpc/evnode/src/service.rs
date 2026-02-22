@@ -605,7 +605,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use evolve_core::{InvokeResponse, Message};
+    use evolve_mempool::shared_mempool_from;
+    use evolve_stf::results::TxResult;
     use std::sync::atomic::AtomicUsize;
+    use std::sync::Mutex;
     use tonic::Code;
 
     use crate::proto::evnode::v1::executor_service_server::ExecutorService;
@@ -635,16 +639,30 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Clone)]
+    struct ObservedBlock {
+        number: u64,
+        timestamp: u64,
+        tx_count: usize,
+        tx_hashes: Vec<B256>,
+    }
+
     struct MockStf {
         emit_genesis_change: bool,
         run_genesis_calls: AtomicUsize,
+        execute_changes: Vec<StateChange>,
+        execute_block_calls: AtomicUsize,
+        last_executed_block: Mutex<Option<ObservedBlock>>,
     }
 
     impl MockStf {
-        fn new(emit_genesis_change: bool) -> Self {
+        fn new(emit_genesis_change: bool, execute_changes: Vec<StateChange>) -> Self {
             Self {
                 emit_genesis_change,
                 run_genesis_calls: AtomicUsize::new(0),
+                execute_changes,
+                execute_block_calls: AtomicUsize::new(0),
+                last_executed_block: Mutex::new(None),
             }
         }
     }
@@ -652,11 +670,56 @@ mod tests {
     impl EvnodeStfExecutor<MockStorage, MockCodes> for MockStf {
         fn execute_block<'a>(
             &self,
-            _storage: &'a MockStorage,
+            storage: &'a MockStorage,
             _codes: &'a MockCodes,
-            _block: &ExecutorBlock,
+            block: &ExecutorBlock,
         ) -> (BlockResult, ExecutionState<'a, MockStorage>) {
-            panic!("execute_block is not used by these tests")
+            self.execute_block_calls.fetch_add(1, Ordering::SeqCst);
+
+            let observed = ObservedBlock {
+                number: block.number(),
+                timestamp: block.timestamp(),
+                tx_count: block.transactions.len(),
+                tx_hashes: block.transactions.iter().map(|tx| tx.hash()).collect(),
+            };
+            *self
+                .last_executed_block
+                .lock()
+                .expect("last_executed_block lock should not be poisoned") = Some(observed);
+
+            let mut exec_state = ExecutionState::new(storage);
+            for change in &self.execute_changes {
+                match change {
+                    StateChange::Set { key, value } => exec_state
+                        .set(key, Message::from_bytes(value.clone()))
+                        .expect("set change should be valid"),
+                    StateChange::Remove { key } => exec_state
+                        .remove(key)
+                        .expect("remove change should be valid"),
+                }
+            }
+
+            let tx_results: Vec<TxResult> = block
+                .transactions
+                .iter()
+                .map(|tx| TxResult {
+                    events: vec![],
+                    gas_used: tx.envelope().gas_limit(),
+                    response: Ok(InvokeResponse::new(&()).expect("unit response should encode")),
+                })
+                .collect();
+            let gas_used = tx_results.iter().map(|r| r.gas_used).sum();
+
+            (
+                BlockResult {
+                    begin_block_events: vec![],
+                    tx_results,
+                    end_block_events: vec![],
+                    gas_used,
+                    txs_skipped: 0,
+                },
+                exec_state,
+            )
         }
 
         fn run_genesis<'a>(
@@ -683,11 +746,56 @@ mod tests {
         emit_genesis_change: bool,
     ) -> ExecutorServiceImpl<MockStf, MockStorage, MockCodes> {
         ExecutorServiceImpl::new(
-            MockStf::new(emit_genesis_change),
+            MockStf::new(emit_genesis_change, Vec::new()),
             MockStorage,
             MockCodes,
             ExecutorServiceConfig::default(),
         )
+    }
+
+    fn mk_service_with_execute_changes(
+        execute_changes: Vec<StateChange>,
+    ) -> ExecutorServiceImpl<MockStf, MockStorage, MockCodes> {
+        ExecutorServiceImpl::new(
+            MockStf::new(false, execute_changes),
+            MockStorage,
+            MockCodes,
+            ExecutorServiceConfig::default(),
+        )
+    }
+
+    async fn init_test_chain(service: &ExecutorServiceImpl<MockStf, MockStorage, MockCodes>) {
+        service
+            .init_chain(Request::new(InitChainRequest {
+                genesis_time: None,
+                initial_height: 1,
+                chain_id: "chain-test".to_string(),
+            }))
+            .await
+            .expect("init should succeed");
+    }
+
+    fn decode_hex(s: &str) -> Vec<u8> {
+        assert!(
+            s.len() % 2 == 0,
+            "hex input length must be even, got {}",
+            s.len()
+        );
+        let mut out = Vec::with_capacity(s.len() / 2);
+        for idx in (0..s.len()).step_by(2) {
+            let byte = u8::from_str_radix(&s[idx..idx + 2], 16)
+                .expect("hex input should contain only valid hex characters");
+            out.push(byte);
+        }
+        out
+    }
+
+    fn sample_legacy_tx_bytes() -> Vec<u8> {
+        decode_hex(concat!(
+            "f86c098504a817c800825208943535353535353535353535353535353535353535880de0",
+            "b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590",
+            "620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83"
+        ))
     }
 
     #[tokio::test]
@@ -851,6 +959,234 @@ mod tests {
                 FilterStatus::FilterRemove as i32,
                 FilterStatus::FilterRemove as i32
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_txs_updates_state_and_pending_changes_and_skips_invalid_input() {
+        let expected_changes = vec![
+            StateChange::Set {
+                key: b"foo".to_vec(),
+                value: b"bar".to_vec(),
+            },
+            StateChange::Remove {
+                key: b"gone".to_vec(),
+            },
+        ];
+        let expected_root = compute_state_root(&expected_changes);
+        let service = mk_service_with_execute_changes(expected_changes);
+        init_test_chain(&service).await;
+
+        let valid_tx = sample_legacy_tx_bytes();
+        let valid_tx_hash = TxContext::decode(&valid_tx)
+            .expect("sample tx should decode")
+            .hash();
+        let req = ExecuteTxsRequest {
+            block_height: 2,
+            timestamp: Some(Timestamp {
+                seconds: 777,
+                nanos: 0,
+            }),
+            prev_state_root: vec![],
+            txs: vec![vec![0x01, 0x02], valid_tx],
+        };
+
+        let resp = service
+            .execute_txs(Request::new(req))
+            .await
+            .expect("execute_txs should succeed")
+            .into_inner();
+
+        assert_eq!(resp.updated_state_root, expected_root.to_vec());
+        assert_eq!(
+            service.state.current_height.load(Ordering::SeqCst),
+            2,
+            "block height should update after execution"
+        );
+        assert_eq!(*service.state.last_state_root.read().await, expected_root);
+        assert_eq!(
+            service.state.pending_changes.read().await.len(),
+            2,
+            "execute changes should be persisted when no block callback is set"
+        );
+
+        let observed = service
+            .stf
+            .last_executed_block
+            .lock()
+            .expect("last_executed_block lock should not be poisoned")
+            .clone()
+            .expect("execute_block should have been called");
+        assert_eq!(observed.number, 2);
+        assert_eq!(observed.timestamp, 777);
+        assert_eq!(observed.tx_count, 1, "invalid tx bytes should be skipped");
+        assert_eq!(observed.tx_hashes, vec![valid_tx_hash]);
+    }
+
+    #[tokio::test]
+    async fn execute_txs_prefers_block_callback_over_state_change_callback() {
+        let execute_changes = vec![StateChange::Set {
+            key: b"k1".to_vec(),
+            value: b"v1".to_vec(),
+        }];
+        let state_change_calls = Arc::new(AtomicUsize::new(0));
+        let block_callback_calls = Arc::new(AtomicUsize::new(0));
+
+        let service = mk_service_with_execute_changes(execute_changes)
+            .with_state_change_callback({
+                let calls = Arc::clone(&state_change_calls);
+                Arc::new(move |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                })
+            })
+            .with_on_block_executed({
+                let calls = Arc::clone(&block_callback_calls);
+                Arc::new(move |_| {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                })
+            });
+        init_test_chain(&service).await;
+
+        let req = ExecuteTxsRequest {
+            block_height: 2,
+            timestamp: None,
+            prev_state_root: vec![],
+            txs: vec![sample_legacy_tx_bytes()],
+        };
+        let state_calls_before_execute = state_change_calls.load(Ordering::SeqCst);
+        service
+            .execute_txs(Request::new(req))
+            .await
+            .expect("execute_txs should succeed");
+
+        assert_eq!(
+            state_change_calls.load(Ordering::SeqCst),
+            state_calls_before_execute,
+            "state change callback should be bypassed when block callback is set"
+        );
+        assert_eq!(block_callback_calls.load(Ordering::SeqCst), 1);
+        assert!(
+            service.state.pending_changes.read().await.is_empty(),
+            "pending changes should not be accumulated when block callback handles execution output"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_txs_block_callback_receives_expected_payload() {
+        let execute_changes = vec![StateChange::Set {
+            key: b"payload".to_vec(),
+            value: b"ok".to_vec(),
+        }];
+        let expected_root = compute_state_root(&execute_changes);
+        let callback_snapshot = Arc::new(Mutex::new(None::<(u64, u64, usize, usize, B256)>));
+        let service = mk_service_with_execute_changes(execute_changes).with_on_block_executed({
+            let snapshot = Arc::clone(&callback_snapshot);
+            Arc::new(move |info| {
+                *snapshot
+                    .lock()
+                    .expect("callback snapshot lock should not be poisoned") = Some((
+                    info.height,
+                    info.timestamp,
+                    info.transactions.len(),
+                    info.block_result.tx_results.len(),
+                    info.state_root,
+                ));
+            })
+        });
+        init_test_chain(&service).await;
+
+        service
+            .execute_txs(Request::new(ExecuteTxsRequest {
+                block_height: 3,
+                timestamp: Some(Timestamp {
+                    seconds: 456,
+                    nanos: 0,
+                }),
+                prev_state_root: vec![],
+                txs: vec![sample_legacy_tx_bytes()],
+            }))
+            .await
+            .expect("execute_txs should succeed");
+
+        let snapshot = callback_snapshot
+            .lock()
+            .expect("callback snapshot lock should not be poisoned")
+            .expect("block callback should have been invoked");
+        assert_eq!(snapshot.0, 3);
+        assert_eq!(snapshot.1, 456);
+        assert_eq!(snapshot.2, 1);
+        assert_eq!(snapshot.3, 1);
+        assert_eq!(snapshot.4, expected_root);
+    }
+
+    #[tokio::test]
+    async fn get_txs_filter_limits_and_finalize_interact_consistently() {
+        let tx_bytes = sample_legacy_tx_bytes();
+        let tx = TxContext::decode(&tx_bytes).expect("sample tx should decode");
+        let tx_gas = tx.envelope().gas_limit();
+        let tx_len = tx_bytes.len() as u64;
+
+        let mut pool = Mempool::<TxContext>::new();
+        pool.add(tx).expect("tx should be added to mempool");
+        let mempool = shared_mempool_from(pool);
+
+        let service = ExecutorServiceImpl::with_mempool(
+            MockStf::new(false, Vec::new()),
+            MockStorage,
+            MockCodes,
+            ExecutorServiceConfig {
+                max_gas: tx_gas,
+                max_bytes: DEFAULT_MAX_BYTES,
+            },
+            mempool,
+        );
+        init_test_chain(&service).await;
+
+        let proposed = service
+            .get_txs(Request::new(GetTxsRequest {}))
+            .await
+            .expect("get_txs should succeed")
+            .into_inner()
+            .txs;
+        assert_eq!(proposed.len(), 1, "one tx should be proposed from mempool");
+
+        let filter_resp = service
+            .filter_txs(Request::new(FilterTxsRequest {
+                txs: vec![proposed[0].clone(), proposed[0].clone()],
+                max_bytes: tx_len,
+                max_gas: tx_gas,
+                has_force_included_transaction: false,
+            }))
+            .await
+            .expect("filter_txs should succeed")
+            .into_inner();
+        assert_eq!(
+            filter_resp.statuses,
+            vec![
+                FilterStatus::FilterOk as i32,
+                FilterStatus::FilterPostpone as i32
+            ],
+            "second tx should be postponed when cumulative bytes/gas exceed limits"
+        );
+
+        service
+            .execute_txs(Request::new(ExecuteTxsRequest {
+                block_height: 2,
+                timestamp: None,
+                prev_state_root: vec![],
+                txs: proposed,
+            }))
+            .await
+            .expect("execute_txs should succeed");
+
+        let after_finalize = service
+            .get_txs(Request::new(GetTxsRequest {}))
+            .await
+            .expect("second get_txs should succeed")
+            .into_inner();
+        assert!(
+            after_finalize.txs.is_empty(),
+            "executed tx should be finalized out of mempool"
         );
     }
 }

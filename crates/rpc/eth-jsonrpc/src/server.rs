@@ -845,7 +845,7 @@ impl<S: StateProvider> Clone for EthRpcServer<S> {
 #[allow(clippy::disallowed_types)]
 mod tests {
     use super::*;
-    use evolve_rpc_types::{BlockTag, RpcBlock};
+    use evolve_rpc_types::{block::BlockTransactions, BlockTag, RpcBlock, RpcTransaction};
     use std::collections::HashMap;
     use std::sync::RwLock;
 
@@ -856,6 +856,7 @@ mod tests {
         blocks_by_number: RwLock<HashMap<u64, RpcBlock>>,
         blocks_by_hash: RwLock<HashMap<B256, RpcBlock>>,
         error: RwLock<Option<RpcError>>,
+        get_block_by_number_calls: RwLock<Vec<(u64, bool)>>,
         protocol_version: RwLock<String>,
         gas_price: RwLock<U256>,
         syncing_status: RwLock<SyncStatus>,
@@ -868,6 +869,7 @@ mod tests {
                 blocks_by_number: RwLock::new(HashMap::new()),
                 blocks_by_hash: RwLock::new(HashMap::new()),
                 error: RwLock::new(None),
+                get_block_by_number_calls: RwLock::new(Vec::new()),
                 protocol_version: RwLock::new("0x0".to_string()),
                 gas_price: RwLock::new(U256::ZERO),
                 syncing_status: RwLock::new(SyncStatus::NotSyncing(false)),
@@ -895,6 +897,10 @@ mod tests {
             self
         }
 
+        fn get_block_by_number_calls(&self) -> Vec<(u64, bool)> {
+            self.get_block_by_number_calls.read().unwrap().clone()
+        }
+
         fn with_protocol_version(self, version: String) -> Self {
             *self.protocol_version.write().unwrap() = version;
             self
@@ -913,8 +919,21 @@ mod tests {
         fn check_error(&self) -> Result<(), RpcError> {
             if let Some(ref err) = *self.error.read().unwrap() {
                 Err(match err {
+                    RpcError::ParseError(msg) => RpcError::ParseError(msg.clone()),
+                    RpcError::InvalidParams(msg) => RpcError::InvalidParams(msg.clone()),
                     RpcError::InternalError(msg) => RpcError::InternalError(msg.clone()),
-                    _ => RpcError::InternalError("Mock error".to_string()),
+                    RpcError::BlockNotFound => RpcError::BlockNotFound,
+                    RpcError::TransactionNotFound => RpcError::TransactionNotFound,
+                    RpcError::ReceiptNotFound => RpcError::ReceiptNotFound,
+                    RpcError::AccountNotFound => RpcError::AccountNotFound,
+                    RpcError::ExecutionReverted(msg) => RpcError::ExecutionReverted(msg.clone()),
+                    RpcError::GasEstimationFailed(msg) => {
+                        RpcError::GasEstimationFailed(msg.clone())
+                    }
+                    RpcError::NotImplemented(method) => RpcError::NotImplemented(method.clone()),
+                    RpcError::InvalidBlockNumberOrTag => RpcError::InvalidBlockNumberOrTag,
+                    RpcError::InvalidAddress(msg) => RpcError::InvalidAddress(msg.clone()),
+                    RpcError::InvalidTransaction(msg) => RpcError::InvalidTransaction(msg.clone()),
                 })
             } else {
                 Ok(())
@@ -932,9 +951,13 @@ mod tests {
         async fn get_block_by_number(
             &self,
             number: u64,
-            _full_transactions: bool,
+            full_transactions: bool,
         ) -> Result<Option<RpcBlock>, RpcError> {
             self.check_error()?;
+            self.get_block_by_number_calls
+                .write()
+                .unwrap()
+                .push((number, full_transactions));
             Ok(self.blocks_by_number.read().unwrap().get(&number).cloned())
         }
 
@@ -1036,6 +1059,16 @@ mod tests {
         }
     }
 
+    fn make_test_transaction(hash: B256) -> RpcTransaction {
+        RpcTransaction::minimal(
+            hash,
+            Address::repeat_byte(0x01),
+            Some(Address::repeat_byte(0x02)),
+            1,
+            U256::from(1u64),
+        )
+    }
+
     // ==================== Block tag resolution tests ====================
     // These test the resolve_block_number method which has actual branching logic
 
@@ -1092,6 +1125,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_state_provider_error_mapping_variants() {
+        let cases: Vec<(RpcError, i32, &str)> = vec![
+            (
+                RpcError::InvalidParams("bad input".to_string()),
+                crate::error::codes::INVALID_PARAMS,
+                "bad input",
+            ),
+            (
+                RpcError::BlockNotFound,
+                crate::error::codes::RESOURCE_NOT_FOUND,
+                "Block not found",
+            ),
+            (
+                RpcError::ExecutionReverted("reverted".to_string()),
+                crate::error::codes::EXECUTION_REVERTED,
+                "reverted",
+            ),
+            (
+                RpcError::NotImplemented("eth_foo".to_string()),
+                crate::error::codes::METHOD_NOT_SUPPORTED,
+                "Method not implemented: eth_foo",
+            ),
+            (
+                RpcError::InvalidTransaction("rejected".to_string()),
+                crate::error::codes::TRANSACTION_REJECTED,
+                "rejected",
+            ),
+        ];
+
+        for (provider_error, expected_code, expected_message) in cases {
+            let provider = MockStateProvider::new().with_error(provider_error);
+            let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+            let err = EthApiServer::block_number(&server).await.unwrap_err();
+            assert_eq!(err.code(), expected_code);
+            assert_eq!(err.message(), expected_message);
+        }
+    }
+
+    #[tokio::test]
     async fn test_block_number_success() {
         let provider = MockStateProvider::new().with_block_number(777);
         let server = EthRpcServer::new(RpcServerConfig::default(), provider);
@@ -1131,8 +1204,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_block_transaction_count_extraction() {
-        use evolve_rpc_types::block::BlockTransactions;
-
         let hash = B256::repeat_byte(0x14);
         let mut block = make_test_block(100, hash);
         block.transactions = Some(BlockTransactions::Hashes(vec![
@@ -1159,6 +1230,68 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, Some(U64::from(3)));
+    }
+
+    #[tokio::test]
+    async fn test_get_block_by_number_resolves_tags_and_forwards_full_flag() {
+        let latest_hash = B256::repeat_byte(0x20);
+        let earliest_hash = B256::repeat_byte(0x21);
+        let provider = MockStateProvider::new()
+            .with_block_number(42)
+            .with_block(make_test_block(42, latest_hash))
+            .with_block(make_test_block(0, earliest_hash));
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        let latest = EthApiServer::get_block_by_number(
+            &server,
+            BlockNumberOrTag::Tag(BlockTag::Latest),
+            true,
+        )
+        .await
+        .unwrap();
+        assert_eq!(latest.unwrap().hash, latest_hash);
+
+        let earliest = EthApiServer::get_block_by_number(
+            &server,
+            BlockNumberOrTag::Tag(BlockTag::Earliest),
+            false,
+        )
+        .await
+        .unwrap();
+        assert_eq!(earliest.unwrap().hash, earliest_hash);
+
+        assert_eq!(
+            server.state.get_block_by_number_calls(),
+            vec![(42, true), (0, false)]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_block_transaction_count_with_full_transactions() {
+        let hash = B256::repeat_byte(0x30);
+        let mut block = make_test_block(55, hash);
+        block.transactions = Some(BlockTransactions::Full(vec![
+            make_test_transaction(B256::repeat_byte(0x31)),
+            make_test_transaction(B256::repeat_byte(0x32)),
+        ]));
+
+        let provider = MockStateProvider::new()
+            .with_block_number(55)
+            .with_block(block);
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        let by_number = EthApiServer::get_block_transaction_count_by_number(
+            &server,
+            BlockNumberOrTag::Number(U64::from(55)),
+        )
+        .await
+        .unwrap();
+        assert_eq!(by_number, Some(U64::from(2)));
+
+        let by_hash = EthApiServer::get_block_transaction_count_by_hash(&server, hash)
+            .await
+            .unwrap();
+        assert_eq!(by_hash, Some(U64::from(2)));
     }
 
     #[tokio::test]

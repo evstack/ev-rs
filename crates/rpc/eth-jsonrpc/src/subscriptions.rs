@@ -410,4 +410,100 @@ mod tests {
         assert_eq!(received.log_index, log.log_index);
         assert_eq!(received.removed, log.removed);
     }
+
+    #[test]
+    fn test_log_filter_combines_address_and_topics_semantics() {
+        let manager = SubscriptionManager::new();
+        let params = LogSubscriptionParams {
+            address: Some(LogFilterAddress::Multiple(vec![
+                Address::repeat_byte(0xAA),
+                Address::repeat_byte(0xBB),
+            ])),
+            topics: Some(vec![
+                Some(LogFilterTopic::Single(B256::repeat_byte(0x01))),
+                None,
+                Some(LogFilterTopic::Multiple(vec![
+                    B256::repeat_byte(0x03),
+                    B256::repeat_byte(0x04),
+                ])),
+            ]),
+        };
+        let sub_id = manager.subscribe(SubscriptionKind::Logs, Some(params));
+        let stored = manager.get(sub_id).expect("subscription exists");
+
+        let matching_log = RpcLog {
+            address: Address::repeat_byte(0xAA),
+            topics: vec![
+                B256::repeat_byte(0x01),
+                B256::repeat_byte(0xFF),
+                B256::repeat_byte(0x04),
+            ],
+            data: Bytes::new(),
+            block_number: Some(U64::from(1)),
+            transaction_hash: Some(B256::repeat_byte(0x11)),
+            transaction_index: Some(U64::from(0)),
+            block_hash: Some(B256::repeat_byte(0x12)),
+            log_index: Some(U64::from(0)),
+            removed: false,
+        };
+        assert!(SubscriptionManager::log_matches_filter(
+            &matching_log,
+            &stored.params
+        ));
+
+        let wrong_address_log = RpcLog {
+            address: Address::repeat_byte(0xCC),
+            ..matching_log.clone()
+        };
+        assert!(!SubscriptionManager::log_matches_filter(
+            &wrong_address_log,
+            &stored.params
+        ));
+
+        let wrong_topic_log = RpcLog {
+            topics: vec![
+                B256::repeat_byte(0x01),
+                B256::repeat_byte(0xFF),
+                B256::repeat_byte(0x05),
+            ],
+            ..matching_log
+        };
+        assert!(!SubscriptionManager::log_matches_filter(
+            &wrong_topic_log,
+            &stored.params
+        ));
+    }
+
+    #[test]
+    fn test_log_filter_empty_alternatives_match_nothing() {
+        let log = RpcLog {
+            address: Address::repeat_byte(0x01),
+            topics: vec![B256::repeat_byte(0x02)],
+            data: Bytes::new(),
+            block_number: None,
+            transaction_hash: None,
+            transaction_index: None,
+            block_hash: None,
+            log_index: None,
+            removed: false,
+        };
+
+        let empty_address_filter = LogSubscriptionParams {
+            address: Some(LogFilterAddress::Multiple(vec![])),
+            topics: None,
+        };
+        assert!(!SubscriptionManager::log_matches_filter(
+            &log,
+            &Some(empty_address_filter)
+        ));
+
+        let empty_topic_alternatives = LogSubscriptionParams {
+            address: None,
+            topics: Some(vec![Some(LogFilterTopic::Multiple(vec![]))]),
+        };
+        assert!(!SubscriptionManager::log_matches_filter(
+            &log,
+            &Some(empty_topic_alternatives)
+        ));
+    }
 }
