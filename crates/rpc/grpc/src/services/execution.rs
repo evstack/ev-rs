@@ -539,11 +539,18 @@ mod tests {
             Ok(None)
         }
 
-        async fn get_transaction_receipt(&self, _hash: B256) -> Result<Option<RpcReceipt>, RpcError> {
+        async fn get_transaction_receipt(
+            &self,
+            _hash: B256,
+        ) -> Result<Option<RpcReceipt>, RpcError> {
             Ok(None)
         }
 
-        async fn get_balance(&self, _address: Address, _block: Option<u64>) -> Result<U256, RpcError> {
+        async fn get_balance(
+            &self,
+            _address: Address,
+            _block: Option<u64>,
+        ) -> Result<U256, RpcError> {
             Ok(U256::ZERO)
         }
 
@@ -555,7 +562,11 @@ mod tests {
             Ok(0)
         }
 
-        async fn call(&self, _request: &CallRequest, _block: Option<u64>) -> Result<Bytes, RpcError> {
+        async fn call(
+            &self,
+            _request: &CallRequest,
+            _block: Option<u64>,
+        ) -> Result<Bytes, RpcError> {
             Ok(Bytes::new())
         }
 
@@ -575,7 +586,11 @@ mod tests {
             Ok(B256::ZERO)
         }
 
-        async fn get_code(&self, _address: Address, _block: Option<u64>) -> Result<Bytes, RpcError> {
+        async fn get_code(
+            &self,
+            _address: Address,
+            _block: Option<u64>,
+        ) -> Result<Bytes, RpcError> {
             Ok(Bytes::new())
         }
 
@@ -627,7 +642,10 @@ mod tests {
         let earliest = proto::BlockId {
             id: Some(proto::block_id::Id::Tag(proto::BlockTag::Earliest as i32)),
         };
-        assert_eq!(service.resolve_block(Some(&earliest)).await.unwrap(), Some(0));
+        assert_eq!(
+            service.resolve_block(Some(&earliest)).await.unwrap(),
+            Some(0)
+        );
 
         for tag in [
             RpcBlockTag::Latest,
@@ -650,7 +668,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_block_bubbles_state_error() {
-        let service = ExecutionServiceImpl::new(1, Arc::new(MockProvider::new(10).with_block_number_error()));
+        let service =
+            ExecutionServiceImpl::new(1, Arc::new(MockProvider::new(10).with_block_number_error()));
         let latest = proto::BlockId {
             id: Some(proto::block_id::Id::Tag(proto::BlockTag::Latest as i32)),
         };
@@ -668,7 +687,9 @@ mod tests {
 
         let service = ExecutionServiceImpl::new(1, Arc::new(MockProvider::new(1)));
         let req = proto::GetBlockByHashRequest {
-            hash: Some(proto::H256 { data: vec![0xAA; 3] }),
+            hash: Some(proto::H256 {
+                data: vec![0xAA; 3],
+            }),
             full_transactions: false,
         };
 

@@ -161,3 +161,96 @@ fn main() {
         std::process::exit(1);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::path::PathBuf;
+
+    #[test]
+    fn parse_run_uses_expected_defaults() {
+        let cli = Cli::parse_from(["evolve-sim", "run"]);
+
+        match cli.command {
+            Commands::Run {
+                seed,
+                blocks,
+                max_txs,
+                trace,
+                read_fault_prob,
+                write_fault_prob,
+                output,
+            } => {
+                assert_eq!(seed, None);
+                assert_eq!(blocks, 100);
+                assert_eq!(max_txs, 10);
+                assert_eq!(trace, None);
+                assert_eq!(read_fault_prob, 0.0);
+                assert_eq!(write_fault_prob, 0.0);
+                assert_eq!(output, "text");
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn parse_replay_with_all_flags() {
+        let cli = Cli::parse_from([
+            "evolve-sim",
+            "replay",
+            "--trace",
+            "trace.bin",
+            "--block",
+            "42",
+            "--break-on-error",
+            "--break-on-block",
+            "99",
+            "--break-on-key",
+            "abc",
+            "--interactive",
+            "--summary",
+        ]);
+
+        match cli.command {
+            Commands::Replay {
+                trace,
+                block,
+                break_on_error,
+                break_on_block,
+                break_on_key,
+                interactive,
+                summary,
+            } => {
+                assert_eq!(trace, PathBuf::from("trace.bin"));
+                assert_eq!(block, Some(42));
+                assert!(break_on_error);
+                assert_eq!(break_on_block, Some(99));
+                assert_eq!(break_on_key.as_deref(), Some("abc"));
+                assert!(interactive);
+                assert!(summary);
+            }
+            _ => panic!("expected replay command"),
+        }
+    }
+
+    #[test]
+    fn parse_report_defaults_and_optional_output() {
+        let cli = Cli::parse_from(["evolve-sim", "report", "--trace", "trace.bin"]);
+
+        match cli.command {
+            Commands::Report {
+                trace,
+                format,
+                output,
+                per_block,
+            } => {
+                assert_eq!(trace, Some(PathBuf::from("trace.bin")));
+                assert_eq!(format, "text");
+                assert_eq!(output, None);
+                assert!(!per_block);
+            }
+            _ => panic!("expected report command"),
+        }
+    }
+}
