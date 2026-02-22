@@ -66,7 +66,7 @@ pub trait PostTxExecution<Tx> {
     fn after_tx_executed(
         tx: &Tx,
         gas_consumed: u64,
-        tx_result: SdkResult<InvokeResponse>,
+        tx_result: &SdkResult<InvokeResponse>,
         env: &mut dyn Environment,
     ) -> SdkResult<()>;
 }
@@ -154,7 +154,7 @@ pub struct SignatureVerificationResult {
 /// A vector of verification results, one per transaction, in order.
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// let results = verify_signatures_parallel(&transactions, &my_verifier);
 ///
 /// // Filter out transactions with invalid signatures

@@ -8,7 +8,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```text
 //! use evolve_server::{DevConfig, DevConsensus};
 //! use commonware_runtime::Spawner;
 //!

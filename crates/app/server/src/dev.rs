@@ -9,7 +9,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```text
 //! use evolve_server::{DevConsensus, DevConfig};
 //! use commonware_runtime::Spawner;
 //!
@@ -535,7 +535,7 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// // Spawn block production as a managed task
     /// let dev = Arc::new(DevConsensus::new(...));
     /// context.clone().spawn(|ctx| {

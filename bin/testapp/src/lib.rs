@@ -23,7 +23,7 @@ impl PostTxExecution<TxContext> for MempoolNoOpPostTx {
     fn after_tx_executed(
         _tx: &TxContext,
         _gas_consumed: u64,
-        _tx_result: SdkResult<InvokeResponse>,
+        _tx_result: &SdkResult<InvokeResponse>,
         _env: &mut dyn Environment,
     ) -> SdkResult<()> {
         Ok(())

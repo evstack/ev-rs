@@ -399,7 +399,7 @@ mod tests {
         fn after_tx_executed(
             _: &TestTx,
             _: u64,
-            _: SdkResult<InvokeResponse>,
+            _: &SdkResult<InvokeResponse>,
             _: &mut dyn Environment,
         ) -> SdkResult<()> {
             Ok(())

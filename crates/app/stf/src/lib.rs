@@ -229,7 +229,7 @@ mod model_tests {
         fn after_tx_executed(
             _tx: &TestTx,
             _gas_consumed: u64,
-            _tx_result: SdkResult<InvokeResponse>,
+            _tx_result: &SdkResult<InvokeResponse>,
             _env: &mut dyn Environment,
         ) -> SdkResult<()> {
             Ok(())
@@ -761,7 +761,7 @@ mod model_tests {
             fn after_tx_executed(
                 tx: &TestTx,
                 _gas_consumed: u64,
-                tx_result: SdkResult<InvokeResponse>,
+                tx_result: &SdkResult<InvokeResponse>,
                 _env: &mut dyn Environment,
             ) -> SdkResult<()> {
                 // Reject successful txs where sender has a specific pattern
@@ -929,7 +929,7 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// use evolve_stf::{Stf, StorageGasConfig};
     ///
     /// let stf = Stf::new(
@@ -1319,8 +1319,7 @@ where
 
         // Run post-tx handler (e.g., for fee collection, logging, etc.)
         // The handler can observe the result and make additional state changes
-        let post_tx_result =
-            PostTx::after_tx_executed(tx, ctx.gas_used(), response.clone(), &mut ctx);
+        let post_tx_result = PostTx::after_tx_executed(tx, ctx.gas_used(), &response, &mut ctx);
 
         drop(ctx);
         let gas_used = gas_counter.gas_used();

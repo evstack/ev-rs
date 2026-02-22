@@ -328,15 +328,15 @@ where
                     }
 
                     sets += 1;
-                    keys_to_invalidate.push(key.clone());
                     let storage_key = create_storage_key(&key)?;
                     let storage_value = create_storage_value_chunk(&value)?;
+                    keys_to_invalidate.push(key);
                     prepared_updates.push((storage_key, Some(storage_value)));
                 }
                 crate::types::Operation::Remove { key } => {
                     deletes += 1;
-                    keys_to_invalidate.push(key.clone());
                     let storage_key = create_storage_key(&key)?;
+                    keys_to_invalidate.push(key);
                     prepared_updates.push((storage_key, None));
                 }
             }

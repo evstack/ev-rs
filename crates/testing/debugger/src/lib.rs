@@ -12,7 +12,7 @@
 //!
 //! ## Example
 //!
-//! ```ignore
+//! ```text
 //! use evolve_debugger::{TraceBuilder, Replayer, Breakpoint, StateSnapshot};
 //!
 //! // Build a trace during simulation

@@ -16,7 +16,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```text
 //! use evolve_evnode::{EvnodeServer, EvnodeServerConfig};
 //!
 //! // Create the server with your STF, storage, and account codes
