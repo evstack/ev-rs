@@ -54,35 +54,18 @@ impl Default for NetworkConfig {
 mod tests {
     use super::*;
     use crate::channels::channel;
+    use std::time::Duration;
 
     #[test]
-    fn default_listen_addr() {
+    fn default_config_invariants() {
         let cfg = NetworkConfig::default();
+
         assert_eq!(cfg.listen_addr.port(), 9000);
-    }
-
-    #[test]
-    fn default_bootstrappers_empty() {
-        let cfg = NetworkConfig::default();
         assert!(cfg.bootstrappers.is_empty());
-    }
-
-    #[test]
-    fn default_channel_count() {
-        let cfg = NetworkConfig::default();
         assert_eq!(cfg.channel_configs.len(), channel::COUNT as usize);
-    }
-
-    #[test]
-    fn default_namespace() {
-        let cfg = NetworkConfig::default();
         assert_eq!(cfg.namespace, b"_EVOLVE");
-    }
-
-    #[test]
-    fn default_max_peers_positive() {
-        let cfg = NetworkConfig::default();
         assert!(cfg.max_peers > 0);
+        assert!(cfg.connection_timeout > Duration::ZERO);
     }
 
     #[test]

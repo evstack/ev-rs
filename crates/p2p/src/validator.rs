@@ -121,15 +121,25 @@ mod tests {
         let mut vs = ValidatorSet::new(2);
         let id1 = make_identity(10);
         let p2p_key = id1.p2p_key.clone();
+        let old_consensus = id1.consensus_key.clone();
 
         let id2 = ValidatorIdentity {
             p2p_key: p2p_key.clone(),
             consensus_key: bls12381::PrivateKey::from_seed(99).public_key(),
         };
+        let new_consensus = id2.consensus_key.clone();
 
         vs.add_validator(id1);
         vs.add_validator(id2);
         assert_eq!(vs.len(), 1);
+        assert_eq!(
+            vs.validators()
+                .get(&p2p_key)
+                .expect("validator should exist")
+                .consensus_key,
+            new_consensus
+        );
+        assert_ne!(old_consensus, new_consensus);
     }
 
     #[test]
@@ -155,5 +165,27 @@ mod tests {
             vs.add_validator(make_identity(seed));
         }
         assert_eq!(vs.p2p_keys().len(), vs.consensus_keys().len());
+    }
+
+    #[test]
+    fn p2p_and_consensus_keys_preserve_mapping_order() {
+        let mut vs = ValidatorSet::new(5);
+        for seed in 0..6u64 {
+            vs.add_validator(make_identity(seed));
+        }
+
+        let p2p_keys = vs.p2p_keys();
+        let consensus_keys = vs.consensus_keys();
+        for idx in 0..p2p_keys.len() {
+            let expected = &vs
+                .validators()
+                .get(&p2p_keys[idx])
+                .expect("p2p key should exist")
+                .consensus_key;
+            assert_eq!(
+                &consensus_keys[idx], expected,
+                "consensus key order must match p2p key order"
+            );
+        }
     }
 }

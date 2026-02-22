@@ -369,4 +369,56 @@ mod tests {
         );
         assert_eq!(decoded.digest, consensus_block.digest);
     }
+
+    #[test]
+    fn test_decode_rejects_truncated_payload() {
+        let header = BlockHeader::new(9, 123, B256::repeat_byte(0xEF));
+        let block = Block::new(
+            header,
+            vec![TestTx {
+                data: vec![1, 2, 3],
+            }],
+        );
+        let consensus_block = ConsensusBlock::new(block);
+        let mut encoded = consensus_block.encode().to_vec();
+        encoded.pop();
+
+        let result = ConsensusBlock::<TestTx>::decode(encoded.as_slice());
+        assert!(matches!(result, Err(CodecError::EndOfBuffer)));
+    }
+
+    #[test]
+    fn test_decode_rejects_invalid_wire_payload() {
+        let payload = vec![0x01, 0x02, 0x03, 0x04];
+        let mut encoded = (payload.len() as u32).to_le_bytes().to_vec();
+        encoded.extend_from_slice(&payload);
+
+        let result = ConsensusBlock::<TestTx>::decode(encoded.as_slice());
+        assert!(result.is_err(), "invalid wire payload must fail decode");
+    }
+
+    #[test]
+    fn test_decode_rejects_invalid_transaction_encoding() {
+        let wire = WireBlock {
+            number: 1,
+            timestamp: 2,
+            parent_hash: B256::ZERO.0,
+            gas_limit: 30_000_000,
+            gas_used: 21_000,
+            beneficiary: alloy_primitives::Address::ZERO.0 .0,
+            transactions_root: B256::ZERO.0,
+            state_root: B256::ZERO.0,
+            transactions_encoded: vec![vec![0xFF]],
+        };
+
+        let payload = borsh::to_vec(&wire).expect("wire block serialization should not fail");
+        let mut encoded = (payload.len() as u32).to_le_bytes().to_vec();
+        encoded.extend_from_slice(&payload);
+
+        let result = ConsensusBlock::<TestTx>::decode(encoded.as_slice());
+        assert!(
+            result.is_err(),
+            "invalid transaction encoding must fail decode"
+        );
+    }
 }

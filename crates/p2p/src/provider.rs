@@ -158,6 +158,10 @@ mod tests {
         Set::from_iter_dedup(seeds.iter().map(|&s| make_key(s)))
     }
 
+    fn has_key(set: &Set<ed25519::PublicKey>, key: &ed25519::PublicKey) -> bool {
+        set.iter().any(|k| k == key)
+    }
+
     #[tokio::test]
     async fn peer_set_returns_none_before_registration() {
         let mut provider = EpochPeerProvider::new();
@@ -220,5 +224,65 @@ mod tests {
         provider.update_epoch(0, peer_set(&[7, 8])).await;
         let result = clone.peer_set(0).await;
         assert!(result.is_some(), "clone must see updates from original");
+    }
+
+    #[tokio::test]
+    async fn update_epoch_replaces_existing_epoch_set() {
+        let mut provider = EpochPeerProvider::new();
+        provider.update_epoch(3, peer_set(&[1, 2])).await;
+        provider.update_epoch(3, peer_set(&[2, 9])).await;
+
+        let epoch_set = provider.peer_set(3).await.expect("epoch must exist");
+        assert_eq!(epoch_set.len(), 2);
+        assert!(has_key(&epoch_set, &make_key(2)));
+        assert!(has_key(&epoch_set, &make_key(9)));
+        assert!(!has_key(&epoch_set, &make_key(1)));
+    }
+
+    #[tokio::test]
+    async fn retain_epochs_prunes_old_sets_and_updates_union() {
+        let mut provider = EpochPeerProvider::new();
+        let mut subscriber = provider.clone();
+        let mut rx = subscriber.subscribe().await;
+
+        provider.update_epoch(0, peer_set(&[1, 2])).await;
+        let _ = rx.recv().await;
+        provider.update_epoch(1, peer_set(&[3])).await;
+        let _ = rx.recv().await;
+        provider.update_epoch(2, peer_set(&[4])).await;
+        let _ = rx.recv().await;
+
+        provider.retain_epochs(1).await;
+        assert!(provider.peer_set(0).await.is_none());
+        assert!(provider.peer_set(1).await.is_some());
+        assert!(provider.peer_set(2).await.is_some());
+
+        provider.update_epoch(3, peer_set(&[5])).await;
+        let (_, _, all) = rx.recv().await.expect("notification expected");
+        assert_eq!(all.len(), 3);
+        assert!(has_key(&all, &make_key(3)));
+        assert!(has_key(&all, &make_key(4)));
+        assert!(has_key(&all, &make_key(5)));
+        assert!(!has_key(&all, &make_key(1)));
+        assert!(!has_key(&all, &make_key(2)));
+    }
+
+    #[tokio::test]
+    async fn dropped_subscriber_is_pruned_on_notify() {
+        let provider = EpochPeerProvider::new();
+        let mut sub_a = provider.clone();
+        let mut sub_b = provider.clone();
+        let _rx_a = sub_a.subscribe().await;
+        let rx_b = sub_b.subscribe().await;
+
+        assert_eq!(provider.inner.read().await.subscribers.len(), 2);
+        drop(rx_b);
+
+        provider.update_epoch(9, peer_set(&[42])).await;
+        assert_eq!(
+            provider.inner.read().await.subscribers.len(),
+            1,
+            "dead subscriber should be removed after notify"
+        );
     }
 }

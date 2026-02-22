@@ -54,3 +54,74 @@ where
         );
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloy_primitives::B256;
+    use evolve_core::{AccountId, FungibleAsset, InvokeRequest, Message};
+    use evolve_stf_traits::Transaction;
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, RwLock};
+
+    #[derive(Debug, Clone)]
+    struct TestTx {
+        id: [u8; 32],
+        request: InvokeRequest,
+        funds: Vec<FungibleAsset>,
+    }
+
+    impl TestTx {
+        fn new(id: [u8; 32]) -> Self {
+            Self {
+                id,
+                request: InvokeRequest::new_from_message("test", 1, Message::from_bytes(vec![])),
+                funds: Vec::new(),
+            }
+        }
+    }
+
+    impl Transaction for TestTx {
+        fn sender(&self) -> AccountId {
+            AccountId::new(1)
+        }
+
+        fn recipient(&self) -> AccountId {
+            AccountId::new(2)
+        }
+
+        fn request(&self) -> &InvokeRequest {
+            &self.request
+        }
+
+        fn gas_limit(&self) -> u64 {
+            21_000
+        }
+
+        fn funds(&self) -> &[FungibleAsset] {
+            &self.funds
+        }
+
+        fn compute_identifier(&self) -> [u8; 32] {
+            self.id
+        }
+    }
+
+    #[test]
+    fn insert_and_get_block_by_digest() {
+        let store = Arc::new(RwLock::new(BTreeMap::new()));
+        let relay = EvolveRelay::new(store);
+        let block = evolve_server::Block::new(
+            evolve_server::BlockHeader::new(1, 100, B256::ZERO),
+            vec![TestTx::new([7u8; 32])],
+        );
+        let consensus_block = ConsensusBlock::new(block);
+        let digest = consensus_block.digest.0;
+
+        relay.insert_block(consensus_block.clone());
+
+        let fetched = relay.get_block(&digest).expect("block should exist");
+        assert_eq!(fetched.digest, consensus_block.digest);
+        assert_eq!(fetched.inner.header.number, 1);
+    }
+}
