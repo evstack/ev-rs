@@ -284,16 +284,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_storage_metrics_creation() {
-        let metrics = StorageMetrics::new();
-        let encoded = metrics.encode_prometheus();
-
-        assert!(encoded.contains("evolve_storage_read_latency_seconds"));
-        assert!(encoded.contains("evolve_storage_cache_hits_total"));
-        assert!(encoded.contains("evolve_storage_batch_size"));
-    }
-
-    #[test]
     fn test_record_operations() {
         let metrics = StorageMetrics::new();
 

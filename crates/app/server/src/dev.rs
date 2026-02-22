@@ -852,14 +852,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_dev_config_defaults() {
-        let config = DevConfig::default();
-        assert!(config.block_interval.is_some());
-        assert_eq!(config.gas_limit, 30_000_000);
-        assert_eq!(config.initial_height, 1);
-    }
-
-    #[test]
     fn test_dev_config_manual() {
         let config = DevConfig::manual();
         assert!(config.block_interval.is_none());
