@@ -10,7 +10,7 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```text
 //! use evolve_tx_eth::{EthGateway, TxContext};
 //!
 //! // Create a gateway for transaction validation
