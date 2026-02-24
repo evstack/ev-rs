@@ -49,6 +49,12 @@ check:
 # QUALITY
 # ============================================================================
 
+# Generate token module Rust code from Quint spec
+[group('build')]
+gen-token:
+    cargo run -p evolve_specgen -- specs/token.qnt crates/app/sdk/extensions/token/src/generated/token_from_spec.rs
+    cargo fmt --all
+
 # Format all code
 [group('quality')]
 fmt:
@@ -207,6 +213,24 @@ sim-debug trace:
 [group('sim')]
 sim-report trace:
     cargo run -p evolve-sim -- report --trace {{trace}}
+
+# ============================================================================
+# SPEC CONFORMANCE
+# ============================================================================
+
+# Run Quint STF spec tests and Rust conformance checks
+[group('spec')]
+spec-test:
+    quint test specs/stf.qnt
+    rm -f specs/traces/*.itf.json
+    quint test specs/stf.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
+    cargo test -p evolve_stf --test quint_conformance
+
+# Regenerate ITF traces from Quint spec (run after editing specs/stf.qnt)
+[group('spec')]
+spec-traces:
+    rm -f specs/traces/*.itf.json
+    quint test specs/stf.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
 
 # ============================================================================
 # BENCHMARKS
