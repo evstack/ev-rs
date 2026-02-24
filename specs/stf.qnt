@@ -104,12 +104,25 @@ module stf {
   /// AccountId is u128 in the Rust implementation = 16 bytes.
   /// The real storage key is `account_id_bytes ++ user_key`.
   val ACCOUNT_ID_BYTE_SIZE: int = 16
+  val ACCOUNT_CODE_PREFIX_SIZE: int = 1
+  val BORSH_LEN_PREFIX_SIZE: int = 4
+  val TEST_ACCOUNT_CODE_ID_LEN: int = 12 // "test_account"
 
   /// Compute gas cost for a storage write operation.
   /// Real formula: set_charge * (full_key_len + 1 + value_len + 1)
   /// where full_key_len = ACCOUNT_ID_BYTE_SIZE + user_key.length()
   pure def write_gas_cost(config: GasConfig, key: Key, value: Value): int =
     config.set_charge * (ACCOUNT_ID_BYTE_SIZE + key.length() + 1 + value.length() + 1)
+
+  /// Gas cost for sender bootstrap account-code registration.
+  /// Real runtime charges storage set gas for:
+  /// key   = ACCOUNT_IDENTIFIER_PREFIX (1 byte) ++ account_id (16 bytes)
+  /// value = Borsh-encoded code id string ("test_account" => 4-byte len + 12 bytes)
+  pure def bootstrap_gas_cost(config: GasConfig): int =
+    config.set_charge * (
+      ACCOUNT_CODE_PREFIX_SIZE + ACCOUNT_ID_BYTE_SIZE + 1 +
+      BORSH_LEN_PREFIX_SIZE + TEST_ACCOUNT_CODE_ID_LEN + 1
+    )
 
   /// Determine whether a transaction's write would exceed its gas limit.
   pure def would_exceed_gas(config: GasConfig, tx: Tx): bool =
@@ -135,10 +148,10 @@ module stf {
       if (tx.needs_bootstrap and not(registered.contains(tx.sender)))
         if (tx.fail_bootstrap)
           // Bootstrap failed
-          { ok: false, accounts: registered, gas: 1 }
+          { ok: false, accounts: registered, gas: bootstrap_gas_cost(config) }
         else
           // Bootstrap succeeds: register sender
-          { ok: true, accounts: registered.union(Set(tx.sender)), gas: 1 }
+          { ok: true, accounts: registered.union(Set(tx.sender)), gas: bootstrap_gas_cost(config) }
       else
         // No bootstrap needed or already registered
         { ok: true, accounts: registered, gas: 0 }

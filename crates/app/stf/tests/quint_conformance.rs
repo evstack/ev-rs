@@ -19,7 +19,7 @@ use evolve_stf::gas::StorageGasConfig;
 use evolve_stf::Stf;
 use evolve_stf_traits::{
     AccountsCodeStorage, BeginBlocker, Block as BlockTrait, EndBlocker, PostTxExecution,
-    StateChange, Transaction, TxValidator, WritableKV,
+    SenderBootstrap, StateChange, Transaction, TxValidator, WritableKV,
 };
 use hashbrown::HashMap;
 use serde::Deserialize;
@@ -106,6 +106,8 @@ struct TestTx {
     gas_limit: u64,
     funds: Vec<FungibleAsset>,
     fail_validate: bool,
+    needs_bootstrap: bool,
+    fail_bootstrap: bool,
 }
 
 impl Transaction for TestTx {
@@ -126,6 +128,20 @@ impl Transaction for TestTx {
     }
     fn compute_identifier(&self) -> [u8; 32] {
         [0u8; 32]
+    }
+    fn sender_bootstrap(&self) -> Option<SenderBootstrap> {
+        if !self.needs_bootstrap {
+            return None;
+        }
+        let init = BootstrapInit {
+            fail: self.fail_bootstrap,
+        };
+        let init_message =
+            Message::new(&init).expect("bootstrap init serialization must succeed in tests");
+        Some(SenderBootstrap {
+            account_code_id: "test_account",
+            init_message,
+        })
     }
 }
 
@@ -188,6 +204,11 @@ impl PostTxExecution<TestTx> for NoopPostTx {
 #[derive(Default)]
 struct TestAccount;
 
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
+struct BootstrapInit {
+    fail: bool,
+}
+
 impl AccountCode for TestAccount {
     fn identifier(&self) -> String {
         "test_account".to_string()
@@ -198,8 +219,12 @@ impl AccountCode for TestAccount {
     fn init(
         &self,
         _env: &mut dyn Environment,
-        _request: &InvokeRequest,
+        request: &InvokeRequest,
     ) -> SdkResult<InvokeResponse> {
+        let init: BootstrapInit = request.get()?;
+        if init.fail {
+            return Err(ErrorCode::new(300));
+        }
         InvokeResponse::new(&())
     }
     fn execute(
@@ -287,12 +312,6 @@ fn account_code_key(account: AccountId) -> Vec<u8> {
     out
 }
 
-fn account_storage_key(account: AccountId, key: &[u8]) -> Vec<u8> {
-    let mut out = account.as_bytes();
-    out.extend_from_slice(key);
-    out
-}
-
 // ---------------------------------------------------------------------------
 // Test case definitions (must match the Quint spec's run declarations)
 // ---------------------------------------------------------------------------
@@ -301,7 +320,7 @@ const SPEC_ERR_OUT_OF_GAS: i64 = 0x01;
 const SPEC_ERR_VALIDATION: i64 = 100;
 const SPEC_ERR_EXECUTION: i64 = 200;
 
-fn make_tx(
+struct TxCase {
     sender: u128,
     recipient: u128,
     key: Vec<u8>,
@@ -309,88 +328,317 @@ fn make_tx(
     gas_limit: u64,
     fail_validate: bool,
     fail_execute: bool,
-) -> TestTx {
+    needs_bootstrap: bool,
+    fail_bootstrap: bool,
+}
+
+fn make_tx(tc: TxCase) -> TestTx {
     let msg = TestMsg {
-        key,
-        value,
-        fail_after_write: fail_execute,
+        key: tc.key,
+        value: tc.value,
+        fail_after_write: tc.fail_execute,
     };
     TestTx {
-        sender: AccountId::new(sender),
-        recipient: AccountId::new(recipient),
+        sender: AccountId::new(tc.sender),
+        recipient: AccountId::new(tc.recipient),
         request: InvokeRequest::new(&msg).unwrap(),
-        gas_limit,
+        gas_limit: tc.gas_limit,
         funds: vec![],
-        fail_validate,
+        fail_validate: tc.fail_validate,
+        needs_bootstrap: tc.needs_bootstrap,
+        fail_bootstrap: tc.fail_bootstrap,
     }
 }
 
-fn known_test_cases() -> Vec<(&'static str, TestBlock)> {
+const SPEC_ERR_BOOTSTRAP: i64 = 300;
+const TEST_ACCOUNT: u128 = 100;
+const TEST_SENDER: u128 = 200;
+
+struct ConformanceCase {
+    test_name: &'static str,
+    blocks: Vec<TestBlock>,
+}
+
+fn known_test_cases() -> Vec<ConformanceCase> {
     vec![
-        (
-            "emptyBlockTest",
-            TestBlock { height: 1, time: 0, txs: vec![], gas_limit: 1_000_000 },
-        ),
-        (
-            "successfulTxTest",
-            TestBlock {
-                height: 1, time: 0, gas_limit: 1_000_000,
-                txs: vec![make_tx(200, 100, vec![1], vec![11], 10000, false, false)],
-            },
-        ),
-        (
-            "validationFailureTest",
-            TestBlock {
-                height: 1, time: 0, gas_limit: 1_000_000,
-                txs: vec![make_tx(200, 100, vec![1], vec![11], 10000, true, false)],
-            },
-        ),
-        (
-            "executionFailureRollbackTest",
-            TestBlock {
-                height: 1, time: 0, gas_limit: 1_000_000,
-                txs: vec![make_tx(200, 100, vec![1], vec![11], 10000, false, true)],
-            },
-        ),
-        (
-            "outOfGasTest",
-            TestBlock {
-                height: 1, time: 0, gas_limit: 1_000_000,
-                txs: vec![make_tx(200, 100, vec![1], vec![11], 1, false, false)],
-            },
-        ),
-        (
-            "blockGasLimitTest",
-            TestBlock {
-                height: 1, time: 0, gas_limit: 30,
+        ConformanceCase {
+            test_name: "emptyBlockTest",
+            blocks: vec![TestBlock {
+                height: 1,
+                time: 0,
+                txs: vec![],
+                gas_limit: 1_000_000,
+            }],
+        },
+        ConformanceCase {
+            test_name: "successfulTxTest",
+            blocks: vec![TestBlock {
+                height: 1,
+                time: 0,
+                gas_limit: 1_000_000,
+                txs: vec![make_tx(TxCase {
+                    sender: TEST_SENDER,
+                    recipient: TEST_ACCOUNT,
+                    key: vec![1],
+                    value: vec![11],
+                    gas_limit: 10000,
+                    fail_validate: false,
+                    fail_execute: false,
+                    needs_bootstrap: false,
+                    fail_bootstrap: false,
+                })],
+            }],
+        },
+        ConformanceCase {
+            test_name: "validationFailureTest",
+            blocks: vec![TestBlock {
+                height: 1,
+                time: 0,
+                gas_limit: 1_000_000,
+                txs: vec![make_tx(TxCase {
+                    sender: TEST_SENDER,
+                    recipient: TEST_ACCOUNT,
+                    key: vec![1],
+                    value: vec![11],
+                    gas_limit: 10000,
+                    fail_validate: true,
+                    fail_execute: false,
+                    needs_bootstrap: false,
+                    fail_bootstrap: false,
+                })],
+            }],
+        },
+        ConformanceCase {
+            test_name: "executionFailureRollbackTest",
+            blocks: vec![TestBlock {
+                height: 1,
+                time: 0,
+                gas_limit: 1_000_000,
+                txs: vec![make_tx(TxCase {
+                    sender: TEST_SENDER,
+                    recipient: TEST_ACCOUNT,
+                    key: vec![1],
+                    value: vec![11],
+                    gas_limit: 10000,
+                    fail_validate: false,
+                    fail_execute: true,
+                    needs_bootstrap: false,
+                    fail_bootstrap: false,
+                })],
+            }],
+        },
+        ConformanceCase {
+            test_name: "outOfGasTest",
+            blocks: vec![TestBlock {
+                height: 1,
+                time: 0,
+                gas_limit: 1_000_000,
+                txs: vec![make_tx(TxCase {
+                    sender: TEST_SENDER,
+                    recipient: TEST_ACCOUNT,
+                    key: vec![1],
+                    value: vec![11],
+                    gas_limit: 1,
+                    fail_validate: false,
+                    fail_execute: false,
+                    needs_bootstrap: false,
+                    fail_bootstrap: false,
+                })],
+            }],
+        },
+        ConformanceCase {
+            test_name: "blockGasLimitTest",
+            blocks: vec![TestBlock {
+                height: 1,
+                time: 0,
+                gas_limit: 30,
                 txs: vec![
-                    make_tx(200, 100, vec![1], vec![11], 25, false, false),
-                    make_tx(200, 100, vec![2], vec![12], 25, false, false),
+                    make_tx(TxCase {
+                        sender: TEST_SENDER,
+                        recipient: TEST_ACCOUNT,
+                        key: vec![1],
+                        value: vec![11],
+                        gas_limit: 25,
+                        fail_validate: false,
+                        fail_execute: false,
+                        needs_bootstrap: false,
+                        fail_bootstrap: false,
+                    }),
+                    make_tx(TxCase {
+                        sender: TEST_SENDER,
+                        recipient: TEST_ACCOUNT,
+                        key: vec![2],
+                        value: vec![12],
+                        gas_limit: 25,
+                        fail_validate: false,
+                        fail_execute: false,
+                        needs_bootstrap: false,
+                        fail_bootstrap: false,
+                    }),
                 ],
-            },
-        ),
-        (
-            "mixedOutcomesTest",
-            TestBlock {
-                height: 1, time: 0, gas_limit: 1_000_000,
+            }],
+        },
+        ConformanceCase {
+            test_name: "mixedOutcomesTest",
+            blocks: vec![TestBlock {
+                height: 1,
+                time: 0,
+                gas_limit: 1_000_000,
                 txs: vec![
-                    make_tx(200, 100, vec![0], vec![10], 10000, false, false),
-                    make_tx(200, 100, vec![1], vec![11], 10000, true, false),
-                    make_tx(200, 100, vec![2], vec![12], 10000, false, true),
-                    make_tx(200, 100, vec![3], vec![13], 1, false, false),
+                    make_tx(TxCase {
+                        sender: TEST_SENDER,
+                        recipient: TEST_ACCOUNT,
+                        key: vec![0],
+                        value: vec![10],
+                        gas_limit: 10000,
+                        fail_validate: false,
+                        fail_execute: false,
+                        needs_bootstrap: false,
+                        fail_bootstrap: false,
+                    }),
+                    make_tx(TxCase {
+                        sender: TEST_SENDER,
+                        recipient: TEST_ACCOUNT,
+                        key: vec![1],
+                        value: vec![11],
+                        gas_limit: 10000,
+                        fail_validate: true,
+                        fail_execute: false,
+                        needs_bootstrap: false,
+                        fail_bootstrap: false,
+                    }),
+                    make_tx(TxCase {
+                        sender: TEST_SENDER,
+                        recipient: TEST_ACCOUNT,
+                        key: vec![2],
+                        value: vec![12],
+                        gas_limit: 10000,
+                        fail_validate: false,
+                        fail_execute: true,
+                        needs_bootstrap: false,
+                        fail_bootstrap: false,
+                    }),
+                    make_tx(TxCase {
+                        sender: TEST_SENDER,
+                        recipient: TEST_ACCOUNT,
+                        key: vec![3],
+                        value: vec![13],
+                        gas_limit: 1,
+                        fail_validate: false,
+                        fail_execute: false,
+                        needs_bootstrap: false,
+                        fail_bootstrap: false,
+                    }),
                 ],
-            },
-        ),
-        (
-            "overwriteTest",
-            TestBlock {
-                height: 1, time: 0, gas_limit: 1_000_000,
+            }],
+        },
+        ConformanceCase {
+            test_name: "bootstrapTest",
+            blocks: vec![TestBlock {
+                height: 1,
+                time: 0,
+                gas_limit: 1_000_000,
+                txs: vec![make_tx(TxCase {
+                    sender: TEST_SENDER,
+                    recipient: TEST_ACCOUNT,
+                    key: vec![1],
+                    value: vec![11],
+                    gas_limit: 10000,
+                    fail_validate: false,
+                    fail_execute: false,
+                    needs_bootstrap: true,
+                    fail_bootstrap: false,
+                })],
+            }],
+        },
+        ConformanceCase {
+            test_name: "bootstrapFailureTest",
+            blocks: vec![TestBlock {
+                height: 1,
+                time: 0,
+                gas_limit: 1_000_000,
+                txs: vec![make_tx(TxCase {
+                    sender: TEST_SENDER,
+                    recipient: TEST_ACCOUNT,
+                    key: vec![1],
+                    value: vec![11],
+                    gas_limit: 10000,
+                    fail_validate: false,
+                    fail_execute: false,
+                    needs_bootstrap: true,
+                    fail_bootstrap: true,
+                })],
+            }],
+        },
+        ConformanceCase {
+            test_name: "multiBlockTest",
+            blocks: vec![
+                TestBlock {
+                    height: 1,
+                    time: 0,
+                    gas_limit: 1_000_000,
+                    txs: vec![make_tx(TxCase {
+                        sender: TEST_SENDER,
+                        recipient: TEST_ACCOUNT,
+                        key: vec![1],
+                        value: vec![11],
+                        gas_limit: 10000,
+                        fail_validate: false,
+                        fail_execute: false,
+                        needs_bootstrap: false,
+                        fail_bootstrap: false,
+                    })],
+                },
+                TestBlock {
+                    height: 2,
+                    time: 10,
+                    gas_limit: 1_000_000,
+                    txs: vec![make_tx(TxCase {
+                        sender: TEST_SENDER,
+                        recipient: TEST_ACCOUNT,
+                        key: vec![2],
+                        value: vec![12],
+                        gas_limit: 10000,
+                        fail_validate: false,
+                        fail_execute: false,
+                        needs_bootstrap: false,
+                        fail_bootstrap: false,
+                    })],
+                },
+            ],
+        },
+        ConformanceCase {
+            test_name: "overwriteTest",
+            blocks: vec![TestBlock {
+                height: 1,
+                time: 0,
+                gas_limit: 1_000_000,
                 txs: vec![
-                    make_tx(200, 100, vec![1], vec![20], 10000, false, false),
-                    make_tx(200, 100, vec![1], vec![21], 10000, false, false),
+                    make_tx(TxCase {
+                        sender: TEST_SENDER,
+                        recipient: TEST_ACCOUNT,
+                        key: vec![1],
+                        value: vec![20],
+                        gas_limit: 10000,
+                        fail_validate: false,
+                        fail_execute: false,
+                        needs_bootstrap: false,
+                        fail_bootstrap: false,
+                    }),
+                    make_tx(TxCase {
+                        sender: TEST_SENDER,
+                        recipient: TEST_ACCOUNT,
+                        key: vec![1],
+                        value: vec![21],
+                        gas_limit: 10000,
+                        fail_validate: false,
+                        fail_execute: false,
+                        needs_bootstrap: false,
+                        fail_bootstrap: false,
+                    }),
                 ],
-            },
-        ),
+            }],
+        },
     ]
 }
 
@@ -414,33 +662,42 @@ fn quint_itf_conformance() {
     let test_cases = known_test_cases();
     let mut matched = 0;
 
-    for (test_name, block) in &test_cases {
-        // Find the trace file for this test.
-        let trace_file = fs::read_dir(&traces_dir)
+    for case in &test_cases {
+        // Find the unique trace file for this test.
+        let trace_files: Vec<_> = fs::read_dir(&traces_dir)
             .unwrap()
             .filter_map(|e| e.ok())
-            .find(|e| {
+            .filter(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                name.contains(test_name) && name.ends_with(".itf.json")
-            });
+                name.starts_with(&format!("out_{}_", case.test_name)) && name.ends_with(".itf.json")
+            })
+            .collect();
 
-        let trace_file = match trace_file {
-            Some(f) => f,
-            None => {
-                eprintln!("SKIP: no trace file for {test_name}");
-                continue;
-            }
-        };
+        assert_eq!(
+            trace_files.len(),
+            1,
+            "{}: expected exactly 1 trace file, found {}",
+            case.test_name,
+            trace_files.len()
+        );
+        let trace_file = &trace_files[0];
 
         let trace_json = fs::read_to_string(trace_file.path()).unwrap();
         let trace: ItfTrace = serde_json::from_str(&trace_json).unwrap();
 
-        // Find the state after apply_block (block_height > 0).
+        // Find the final state for this run after all apply_block steps.
+        let expected_block_height =
+            case.blocks.last().expect("case must have blocks").height as i64;
         let spec_state = trace
             .states
             .iter()
-            .find(|s| s.block_height.as_i64() > 0)
-            .unwrap_or_else(|| panic!("{test_name}: no apply_block state in trace"));
+            .find(|s| s.block_height.as_i64() == expected_block_height)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: no trace state with block_height={expected_block_height}",
+                    case.test_name
+                )
+            });
 
         let spec_result = &spec_state.last_result;
 
@@ -457,18 +714,23 @@ fn quint_itf_conformance() {
         codes.add_code(TestAccount);
 
         // Register account 100 (matches spec's register_account(100)).
-        let test_account = AccountId::new(100);
+        let test_account = AccountId::new(TEST_ACCOUNT);
         let code_id = "test_account".to_string();
         storage.data.insert(
             account_code_key(test_account),
             Message::new(&code_id).unwrap().into_bytes().unwrap(),
         );
 
-        // Execute.
-        let (real_result, exec_state) = stf.apply_block(&storage, &codes, block);
-        storage
-            .apply_changes(exec_state.into_changes().unwrap())
-            .unwrap();
+        // Execute the full block sequence for this case.
+        let mut real_result = None;
+        for block in &case.blocks {
+            let (result, exec_state) = stf.apply_block(&storage, &codes, block);
+            storage
+                .apply_changes(exec_state.into_changes().unwrap())
+                .unwrap();
+            real_result = Some(result);
+        }
+        let real_result = real_result.expect("case must execute at least one block");
 
         // --- Assert conformance ---
 
@@ -476,7 +738,8 @@ fn quint_itf_conformance() {
         assert_eq!(
             real_result.tx_results.len(),
             spec_result.tx_results.len(),
-            "{test_name}: tx_results count mismatch"
+            "{}: tx_results count mismatch",
+            case.test_name
         );
 
         // 2. Per-tx outcomes.
@@ -490,7 +753,8 @@ fn quint_itf_conformance() {
             let real_ok = real_tx.response.is_ok();
             assert_eq!(
                 real_ok, spec_ok,
-                "{test_name} tx[{i}]: ok mismatch (real={real_ok}, spec={spec_ok})"
+                "{} tx[{i}]: ok mismatch (real={real_ok}, spec={spec_ok})",
+                case.test_name
             );
 
             if !spec_ok {
@@ -500,17 +764,28 @@ fn quint_itf_conformance() {
                     SPEC_ERR_OUT_OF_GAS => assert_eq!(
                         real_err,
                         evolve_stf::ERR_OUT_OF_GAS.id,
-                        "{test_name} tx[{i}]: expected OOG"
+                        "{} tx[{i}]: expected OOG",
+                        case.test_name
                     ),
                     SPEC_ERR_VALIDATION => assert_eq!(
                         real_err, 100,
-                        "{test_name} tx[{i}]: expected validation error"
+                        "{} tx[{i}]: expected validation error",
+                        case.test_name
                     ),
                     SPEC_ERR_EXECUTION => assert_eq!(
                         real_err, 200,
-                        "{test_name} tx[{i}]: expected execution error"
+                        "{} tx[{i}]: expected execution error",
+                        case.test_name
                     ),
-                    _ => {}
+                    SPEC_ERR_BOOTSTRAP => assert_eq!(
+                        real_err, 300,
+                        "{} tx[{i}]: expected bootstrap error",
+                        case.test_name
+                    ),
+                    _ => panic!(
+                        "{} tx[{i}]: unknown spec error code {spec_err}",
+                        case.test_name
+                    ),
                 }
             }
 
@@ -518,7 +793,8 @@ fn quint_itf_conformance() {
             assert_eq!(
                 real_tx.gas_used,
                 spec_tx.gas_used.as_u64(),
-                "{test_name} tx[{i}]: gas_used mismatch"
+                "{} tx[{i}]: gas_used mismatch",
+                case.test_name
             );
         }
 
@@ -526,41 +802,60 @@ fn quint_itf_conformance() {
         assert_eq!(
             real_result.gas_used,
             spec_result.gas_used.as_u64(),
-            "{test_name}: block gas_used mismatch"
+            "{}: block gas_used mismatch",
+            case.test_name
         );
 
         // 5. Skipped count.
         assert_eq!(
             real_result.txs_skipped,
             spec_result.txs_skipped.as_u64() as usize,
-            "{test_name}: txs_skipped mismatch"
+            "{}: txs_skipped mismatch",
+            case.test_name
         );
 
-        // 6. Storage state.
-        for (account_id_itf, account_store_itf) in &spec_state.storage.entries {
-            let account_id = AccountId::new(account_id_itf.as_u64() as u128);
-            for (key_itf, value_itf) in &account_store_itf.entries {
-                let key: Vec<u8> = key_itf.iter().map(|b| b.as_u64() as u8).collect();
-                let value: Vec<u8> = value_itf.iter().map(|b| b.as_u64() as u8).collect();
-                let storage_key = account_storage_key(account_id, &key);
-                let real_value = storage.data.get(&storage_key);
-                assert_eq!(
-                    real_value.map(|v| v.as_slice()),
-                    Some(value.as_slice()),
-                    "{test_name}: storage mismatch for account {account_id:?} key {key:?}",
-                );
+        // 6. Storage state must match exactly (for modeled accounts).
+        let modeled_accounts = [AccountId::new(TEST_ACCOUNT), AccountId::new(TEST_SENDER)];
+        for account_id in modeled_accounts {
+            let mut expected = HashMap::<Vec<u8>, Vec<u8>>::new();
+            for (account_id_itf, account_store_itf) in &spec_state.storage.entries {
+                if AccountId::new(account_id_itf.as_u64() as u128) != account_id {
+                    continue;
+                }
+                for (key_itf, value_itf) in &account_store_itf.entries {
+                    let key: Vec<u8> = key_itf.iter().map(|b| b.as_u64() as u8).collect();
+                    let value: Vec<u8> = value_itf.iter().map(|b| b.as_u64() as u8).collect();
+                    expected.insert(key, value);
+                }
             }
+
+            let mut actual = HashMap::<Vec<u8>, Vec<u8>>::new();
+            let account_prefix = account_id.as_bytes();
+            for (raw_key, raw_value) in &storage.data {
+                if raw_key.len() < account_prefix.len() {
+                    continue;
+                }
+                if raw_key[..account_prefix.len()] == account_prefix {
+                    actual.insert(raw_key[account_prefix.len()..].to_vec(), raw_value.clone());
+                }
+            }
+            assert_eq!(
+                actual, expected,
+                "{}: exact storage mismatch for account {:?}",
+                case.test_name, account_id
+            );
         }
 
         matched += 1;
-        eprintln!("PASS: {test_name}");
+        eprintln!("PASS: {}", case.test_name);
     }
 
     assert!(
-        matched > 0,
-        "No trace files matched. Regenerate with: \
+        matched == test_cases.len(),
+        "Matched {matched}/{} traces. Regenerate with: \
          quint test specs/stf.qnt \
-         --out-itf \"specs/traces/out_{{test}}_{{seq}}.itf.json\""
+         --out-itf \"specs/traces/out_{{test}}_{{seq}}.itf.json\"",
+        test_cases.len()
     );
     eprintln!("{matched}/{} conformance tests passed", test_cases.len());
 }
