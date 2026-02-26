@@ -49,6 +49,12 @@ check:
 # QUALITY
 # ============================================================================
 
+# Generate token module Rust code from Quint spec
+[group('build')]
+gen-token:
+    cargo run -p evolve_specgen -- specs/token.qnt crates/app/sdk/extensions/token/src/generated/token_from_spec.rs
+    cargo fmt --all
+
 # Format all code
 [group('quality')]
 fmt:
@@ -207,6 +213,40 @@ sim-debug trace:
 [group('sim')]
 sim-report trace:
     cargo run -p evolve-sim -- report --trace {{trace}}
+
+# ============================================================================
+# SPEC CONFORMANCE
+# ============================================================================
+
+# Run core STF Quint tests/traces and Rust conformance checks
+[group('spec')]
+spec-test-core:
+    quint test specs/stf_core.qnt
+    rm -f specs/traces/*.itf.json
+    quint test specs/stf_core.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
+    cargo test -p evolve_stf --test quint_conformance
+
+# Run extended STF model specs (currently Quint-only)
+[group('spec')]
+spec-test-extended:
+    quint test specs/stf_post_tx.qnt
+    quint test specs/stf_post_tx.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
+    cargo test -p evolve_stf --test quint_post_tx_conformance
+    quint test specs/stf_call_depth.qnt
+    quint test specs/stf_call_depth.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
+    cargo test -p evolve_stf --test quint_call_depth_conformance
+
+# Run full STF spec suite (core + extended)
+[group('spec')]
+spec-test:
+    just spec-test-core
+    just spec-test-extended
+
+# Regenerate ITF traces from core Quint spec (run after editing specs/stf_core.qnt)
+[group('spec')]
+spec-traces:
+    rm -f specs/traces/*.itf.json
+    quint test specs/stf_core.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
 
 # ============================================================================
 # BENCHMARKS

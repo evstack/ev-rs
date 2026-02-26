@@ -177,7 +177,6 @@ mod tests {
     use crate::account::Token;
     // The generated account struct
     use crate::account::{ERR_NOT_ENOUGH_BALANCE, ERR_UNDERFLOW};
-
     use evolve_testing::MockEnv;
 
     /// Helper to initialize a `Token` with some default data.
