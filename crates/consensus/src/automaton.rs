@@ -141,7 +141,7 @@ where
             compute_transactions_root(&genesis_block.transactions);
 
         let cb = ConsensusBlock::new(genesis_block);
-        let digest = cb.digest;
+        let digest = cb.digest_value();
 
         // Store genesis in pending blocks.
         self.pending_blocks.write().unwrap().insert(digest.0, cb);
@@ -156,7 +156,7 @@ where
         let (sender, receiver) = oneshot::channel();
 
         let height = self.height.clone();
-        let last_hash = *self.last_hash.read().await;
+        let last_hash = self.last_hash.clone();
         let gas_limit = self.config.gas_limit;
         let mempool = self.mempool.clone();
         let pending_blocks = self.pending_blocks.clone();
@@ -180,23 +180,25 @@ where
                 .unwrap_or_default()
                 .as_secs();
 
-            // Increment height only after successful block construction to avoid
-            // gaps when the spawned task fails or is cancelled.
-            let block_height = height.fetch_add(1, Ordering::SeqCst);
+            let parent_hash = *last_hash.read().await;
 
-            let block = BlockBuilder::<Tx>::new()
-                .number(block_height)
+            // Build first, then consume the height counter so a failed build
+            // cannot permanently skip a height.
+            let mut block = BlockBuilder::<Tx>::new()
+                .number(0)
                 .timestamp(timestamp)
-                .parent_hash(last_hash)
+                .parent_hash(parent_hash)
                 .gas_limit(gas_limit)
                 .transactions(transactions)
                 .build();
 
-            let mut block = block;
+            let block_height = height.fetch_add(1, Ordering::SeqCst);
+            block.header.number = block_height;
+
             block.header.transactions_root = compute_transactions_root(&block.transactions);
 
             let cb = ConsensusBlock::new(block);
-            let digest = cb.digest;
+            let digest = cb.digest_value();
 
             // Store in pending blocks for later retrieval.
             pending_blocks.write().unwrap().insert(digest.0, cb);

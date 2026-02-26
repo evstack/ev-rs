@@ -17,15 +17,33 @@ pub struct ConsensusBlock<Tx> {
     /// The inner evolve block.
     pub inner: Block<Tx>,
     /// Cached digest (SHA-256 of the header fields).
-    pub digest: commonware_cryptography::sha256::Digest,
+    digest: commonware_cryptography::sha256::Digest,
     /// Cached parent digest.
-    pub parent_digest: commonware_cryptography::sha256::Digest,
+    parent_digest: commonware_cryptography::sha256::Digest,
 }
 
 impl<Tx> ConsensusBlock<Tx> {
+    /// Return the cached block digest.
+    pub fn digest_value(&self) -> commonware_cryptography::sha256::Digest {
+        self.digest
+    }
+
     /// Return the inner block hash as a B256.
     pub fn block_hash(&self) -> B256 {
         B256::from_slice(&self.digest.0)
+    }
+
+    /// Return the cached parent digest.
+    pub fn parent_digest(&self) -> commonware_cryptography::sha256::Digest {
+        self.parent_digest
+    }
+
+    fn serialize_wire_bytes(&self) -> Vec<u8>
+    where
+        Tx: BorshSerialize,
+    {
+        let wire = to_wire(&self.inner);
+        borsh::to_vec(&wire).expect("wire block serialization should not fail")
     }
 }
 
@@ -112,8 +130,7 @@ struct WireBlock {
 
 impl<Tx: Clone + Send + Sync + 'static + BorshSerialize> Write for ConsensusBlock<Tx> {
     fn write(&self, buf: &mut impl BufMut) {
-        let wire = to_wire(&self.inner);
-        let bytes = borsh::to_vec(&wire).expect("wire block serialization should not fail");
+        let bytes = self.serialize_wire_bytes();
         // Write length-prefixed bytes.
         (bytes.len() as u32).write(buf);
         buf.put_slice(&bytes);
@@ -163,8 +180,7 @@ impl<Tx: Clone + Send + Sync + 'static + BorshDeserialize + Transaction> Read
 
 impl<Tx: Clone + Send + Sync + 'static + BorshSerialize> EncodeSize for ConsensusBlock<Tx> {
     fn encode_size(&self) -> usize {
-        let wire = to_wire(&self.inner);
-        let bytes = borsh::to_vec(&wire).expect("wire block serialization should not fail");
+        let bytes = self.serialize_wire_bytes();
         // u32 length prefix + payload
         4 + bytes.len()
     }
@@ -192,7 +208,7 @@ impl<Tx: Clone + Send + Sync + 'static + BorshSerialize + BorshDeserialize + Tra
     commonware_consensus::Block for ConsensusBlock<Tx>
 {
     fn parent(&self) -> Self::Commitment {
-        self.parent_digest
+        self.parent_digest()
     }
 }
 

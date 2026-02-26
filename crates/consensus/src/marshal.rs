@@ -36,6 +36,12 @@ use commonware_cryptography::certificate::{ConstantProvider, Scheme};
 use commonware_parallel::Sequential;
 use commonware_runtime::buffer::paged::CacheRef;
 use std::num::{NonZeroU16, NonZeroU64, NonZeroUsize};
+use std::time::Duration;
+
+const DEFAULT_ITEMS_PER_SECTION: u64 = 10;
+const DEFAULT_PAGE_SIZE: u16 = 4096;
+const DEFAULT_PAGE_COUNT: usize = 1024;
+const DEFAULT_BUFFER_COUNT: usize = 1024;
 
 /// Re-export marshal types needed for wiring.
 pub use commonware_consensus::marshal::{
@@ -61,6 +67,29 @@ pub struct MarshalConfig {
     pub view_retention: u64,
     /// Maximum concurrent repair requests. Must be non-zero.
     pub max_repair: NonZeroUsize,
+    /// Resolver timing and priority settings.
+    pub resolver: ResolverConfig,
+}
+
+/// Tuning knobs for the marshal's P2P resolver.
+pub struct ResolverConfig {
+    pub initial: Duration,
+    pub timeout: Duration,
+    pub fetch_retry_timeout: Duration,
+    pub priority_requests: bool,
+    pub priority_responses: bool,
+}
+
+impl Default for ResolverConfig {
+    fn default() -> Self {
+        Self {
+            initial: Duration::from_secs(1),
+            timeout: Duration::from_secs(2),
+            fetch_retry_timeout: Duration::from_millis(100),
+            priority_requests: false,
+            priority_responses: false,
+        }
+    }
 }
 
 impl Default for MarshalConfig {
@@ -71,8 +100,16 @@ impl Default for MarshalConfig {
             mailbox_size: 1024,
             view_retention: 10,
             max_repair: NonZeroUsize::new(10).unwrap(),
+            resolver: ResolverConfig::default(),
         }
     }
+}
+
+fn make_default_cache_ref() -> CacheRef {
+    CacheRef::new(
+        NonZeroU16::new(DEFAULT_PAGE_SIZE).unwrap(),
+        NonZeroUsize::new(DEFAULT_PAGE_COUNT).unwrap(),
+    )
 }
 
 /// Create a marshal [`MarshalActorConfig`] from a [`MarshalConfig`] and signing scheme.
@@ -99,14 +136,11 @@ where
         partition_prefix: config.partition_prefix.clone(),
         mailbox_size: config.mailbox_size,
         view_retention_timeout: ViewDelta::new(config.view_retention),
-        prunable_items_per_section: NonZeroU64::new(10).unwrap(),
-        page_cache: CacheRef::new(
-            NonZeroU16::new(4096).unwrap(),
-            NonZeroUsize::new(1024).unwrap(),
-        ),
-        replay_buffer: NonZeroUsize::new(1024).unwrap(),
-        key_write_buffer: NonZeroUsize::new(1024).unwrap(),
-        value_write_buffer: NonZeroUsize::new(1024).unwrap(),
+        prunable_items_per_section: NonZeroU64::new(DEFAULT_ITEMS_PER_SECTION).unwrap(),
+        page_cache: make_default_cache_ref(),
+        replay_buffer: NonZeroUsize::new(DEFAULT_BUFFER_COUNT).unwrap(),
+        key_write_buffer: NonZeroUsize::new(DEFAULT_BUFFER_COUNT).unwrap(),
+        value_write_buffer: NonZeroUsize::new(DEFAULT_BUFFER_COUNT).unwrap(),
         block_codec_config,
         max_repair: config.max_repair,
         strategy: Sequential,
@@ -123,10 +157,7 @@ pub fn archive_config<C: Clone>(
     codec_config: C,
 ) -> immutable::Config<C> {
     let prefix = format!("{}-{}", partition_prefix, store_name);
-    let page_cache = CacheRef::new(
-        NonZeroU16::new(4096).unwrap(),
-        NonZeroUsize::new(1024).unwrap(),
-    );
+    let page_cache = make_default_cache_ref();
 
     immutable::Config {
         metadata_partition: format!("{prefix}-metadata"),
@@ -137,15 +168,15 @@ pub fn archive_config<C: Clone>(
         freezer_key_partition: format!("{prefix}-freezer-key"),
         freezer_key_page_cache: page_cache,
         freezer_value_partition: format!("{prefix}-freezer-value"),
-        freezer_value_target_size: 4096,
+        freezer_value_target_size: u64::from(DEFAULT_PAGE_SIZE),
         freezer_value_compression: None,
         ordinal_partition: format!("{prefix}-ordinal"),
-        items_per_section: NonZeroU64::new(10).unwrap(),
+        items_per_section: NonZeroU64::new(DEFAULT_ITEMS_PER_SECTION).unwrap(),
         codec_config,
-        replay_buffer: NonZeroUsize::new(1024).unwrap(),
-        freezer_key_write_buffer: NonZeroUsize::new(1024).unwrap(),
-        freezer_value_write_buffer: NonZeroUsize::new(1024).unwrap(),
-        ordinal_write_buffer: NonZeroUsize::new(1024).unwrap(),
+        replay_buffer: NonZeroUsize::new(DEFAULT_BUFFER_COUNT).unwrap(),
+        freezer_key_write_buffer: NonZeroUsize::new(DEFAULT_BUFFER_COUNT).unwrap(),
+        freezer_value_write_buffer: NonZeroUsize::new(DEFAULT_BUFFER_COUNT).unwrap(),
+        ordinal_write_buffer: NonZeroUsize::new(DEFAULT_BUFFER_COUNT).unwrap(),
     }
 }
 
@@ -154,7 +185,7 @@ pub fn resolver_config<P, C, B>(
     public_key: P,
     provider: C,
     blocker: B,
-    mailbox_size: usize,
+    config: &MarshalConfig,
 ) -> resolver::p2p::Config<P, C, B>
 where
     P: commonware_cryptography::PublicKey,
@@ -165,11 +196,11 @@ where
         public_key,
         provider,
         blocker,
-        mailbox_size,
-        initial: std::time::Duration::from_secs(1),
-        timeout: std::time::Duration::from_secs(2),
-        fetch_retry_timeout: std::time::Duration::from_millis(100),
-        priority_requests: false,
-        priority_responses: false,
+        mailbox_size: config.mailbox_size,
+        initial: config.resolver.initial,
+        timeout: config.resolver.timeout,
+        fetch_retry_timeout: config.resolver.fetch_retry_timeout,
+        priority_requests: config.resolver.priority_requests,
+        priority_responses: config.resolver.priority_responses,
     }
 }

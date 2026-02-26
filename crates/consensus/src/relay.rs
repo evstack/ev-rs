@@ -25,7 +25,14 @@ impl<Tx> EvolveRelay<Tx> {
     where
         Tx: Clone,
     {
-        self.blocks.read().unwrap().get(digest).cloned()
+        self.blocks
+            .read()
+            .unwrap_or_else(|poison| {
+                tracing::warn!("relay: recovered from poisoned read lock");
+                poison.into_inner()
+            })
+            .get(digest)
+            .cloned()
     }
 
     /// Insert a block into the relay's store.
@@ -33,8 +40,14 @@ impl<Tx> EvolveRelay<Tx> {
     where
         Tx: Clone,
     {
-        let digest = block.digest.0;
-        self.blocks.write().unwrap().insert(digest, block);
+        let digest = block.digest_value().0;
+        self.blocks
+            .write()
+            .unwrap_or_else(|poison| {
+                tracing::warn!("relay: recovered from poisoned write lock");
+                poison.into_inner()
+            })
+            .insert(digest, block);
     }
 }
 
@@ -116,12 +129,12 @@ mod tests {
             vec![TestTx::new([7u8; 32])],
         );
         let consensus_block = ConsensusBlock::new(block);
-        let digest = consensus_block.digest.0;
+        let digest = consensus_block.digest_value().0;
 
         relay.insert_block(consensus_block.clone());
 
         let fetched = relay.get_block(&digest).expect("block should exist");
-        assert_eq!(fetched.digest, consensus_block.digest);
+        assert_eq!(fetched.digest_value(), consensus_block.digest_value());
         assert_eq!(fetched.inner.header.number, 1);
     }
 }

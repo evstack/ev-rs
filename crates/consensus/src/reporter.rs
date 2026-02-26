@@ -106,7 +106,10 @@ where
         };
 
         let finalized_block = {
-            let mut pending = state.pending_blocks.write().unwrap();
+            let mut pending = state.pending_blocks.write().unwrap_or_else(|poison| {
+                tracing::warn!("reporter: recovered from poisoned pending_blocks lock");
+                poison.into_inner()
+            });
             pending.remove(&finalized_digest)
         };
 
@@ -120,7 +123,7 @@ where
 
         let finalized_hash = block.block_hash();
         *state.last_hash.write().await = finalized_hash;
-        state.height.store(
+        state.height.fetch_max(
             block.inner.header.number.saturating_add(1),
             Ordering::SeqCst,
         );
@@ -226,12 +229,12 @@ mod tests {
             vec![TestTx::new([1u8; 32])],
         );
         let consensus_block = ConsensusBlock::new(block);
-        let digest = consensus_block.digest;
+        let digest = consensus_block.digest_value();
         let block_hash = consensus_block.block_hash();
         pending_blocks
             .write()
             .unwrap()
-            .insert(consensus_block.digest.0, consensus_block);
+            .insert(consensus_block.digest_value().0, consensus_block);
 
         let chain_state = ChainState {
             last_hash: last_hash.clone(),
@@ -287,6 +290,37 @@ mod tests {
 
         assert_eq!(*last_hash.read().await, B256::repeat_byte(0xAA));
         assert_eq!(height.load(Ordering::SeqCst), 42);
+        assert!(pending_blocks.read().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn finalization_with_unknown_digest_does_not_mutate_chain_state() {
+        let last_hash = Arc::new(TokioRwLock::new(B256::repeat_byte(0xBB)));
+        let height = Arc::new(AtomicU64::new(7));
+        let pending_blocks = Arc::new(RwLock::new(
+            BTreeMap::<[u8; 32], ConsensusBlock<TestTx>>::new(),
+        ));
+
+        let chain_state = ChainState {
+            last_hash: last_hash.clone(),
+            height: height.clone(),
+            pending_blocks: pending_blocks.clone(),
+        };
+        let mut reporter =
+            EvolveReporter::<Activity<ed25519::Scheme, Sha256Digest>, TestTx>::with_chain_state(
+                chain_state,
+            );
+
+        let scheme = test_scheme();
+        reporter
+            .report(finalization_activity_for_digest(
+                &scheme,
+                Sha256Digest([0xCC; 32]),
+            ))
+            .await;
+
+        assert_eq!(*last_hash.read().await, B256::repeat_byte(0xBB));
+        assert_eq!(height.load(Ordering::SeqCst), 7);
         assert!(pending_blocks.read().unwrap().is_empty());
     }
 }
