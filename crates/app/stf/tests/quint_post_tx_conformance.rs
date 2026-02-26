@@ -191,16 +191,26 @@ struct ConformanceCase {
 }
 
 fn make_tx(fail_execute: bool, reject_post_tx: bool) -> TestTx {
+    make_tx_with(vec![1], vec![11], 10000, fail_execute, reject_post_tx)
+}
+
+fn make_tx_with(
+    key: Vec<u8>,
+    value: Vec<u8>,
+    gas_limit: u64,
+    fail_execute: bool,
+    reject_post_tx: bool,
+) -> TestTx {
     let msg = TestMsg {
-        key: vec![1],
-        value: vec![11],
+        key,
+        value,
         fail_after_write: fail_execute,
     };
     TestTx {
         sender: AccountId::new(TEST_SENDER),
         recipient: AccountId::new(TEST_ACCOUNT),
         request: InvokeRequest::new(&msg).unwrap(),
-        gas_limit: 10000,
+        gas_limit,
         funds: vec![],
         reject_post_tx,
     }
@@ -222,6 +232,33 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 height: 1,
                 time: 0,
                 txs: vec![make_tx(true, true)],
+            },
+        },
+        ConformanceCase {
+            test_name: "happyPathTest",
+            block: TestBlock {
+                height: 1,
+                time: 0,
+                txs: vec![make_tx(false, false)],
+            },
+        },
+        ConformanceCase {
+            test_name: "mixedPostTxTest",
+            block: TestBlock {
+                height: 1,
+                time: 0,
+                txs: vec![
+                    make_tx(false, true),
+                    make_tx_with(vec![2], vec![12], 10000, false, false),
+                ],
+            },
+        },
+        ConformanceCase {
+            test_name: "outOfGasIgnoresPostTxTest",
+            block: TestBlock {
+                height: 1,
+                time: 0,
+                txs: vec![make_tx_with(vec![1], vec![11], 1, false, true)],
             },
         },
     ]

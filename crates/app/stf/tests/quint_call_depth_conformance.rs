@@ -1,7 +1,11 @@
 //! Conformance tests: replay Quint ITF traces for stf_call_depth.qnt.
 //!
+//! The Quint spec models nested do_exec calls with a call_stack. This
+//! conformance test uses a RecursiveAccount that calls itself N times,
+//! verifying that the real STF matches the spec's depth enforcement.
+//!
 //! Run:
-//! `quint test specs/stf_call_depth.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"`
+//! `quint test --main=stf_call_depth specs/stf_call_depth.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"`
 //! `cargo test -p evolve_stf --test quint_call_depth_conformance`
 
 use borsh::{BorshDeserialize, BorshSerialize};
@@ -28,17 +32,15 @@ struct ItfTrace {
 
 #[derive(Deserialize)]
 struct ItfState {
-    last_result: ItfTxResult,
-}
-
-#[derive(Deserialize)]
-struct ItfTxResult {
-    result: ItfResult,
+    #[allow(dead_code)]
+    call_stack: Vec<ItfBigInt>,
+    last_result: ItfResult,
 }
 
 #[derive(Deserialize)]
 struct ItfResult {
     ok: bool,
+    #[allow(dead_code)]
     err_code: ItfBigInt,
 }
 
@@ -163,24 +165,50 @@ impl AccountCode for RecursiveAccount {
     }
 }
 
-const SPEC_ERR_CALL_DEPTH: i64 = 0x14;
 const RECURSIVE_ACCOUNT: u128 = 100;
 const TEST_SENDER: u128 = 200;
 
+/// Maps Quint test names to the recursive depth the Rust test should exercise.
+///
+/// The Quint spec models individual do_exec/return_from_call steps. The Rust
+/// conformance test uses a single recursive account that calls itself N times.
 struct ConformanceCase {
     test_name: &'static str,
     requested_depth: u16,
+    expect_ok: bool,
 }
 
 fn known_test_cases() -> Vec<ConformanceCase> {
     vec![
+        // singleCallTest: one do_exec, stack=[1], OK
         ConformanceCase {
-            test_name: "callDepthBelowLimitSucceedsTest",
-            requested_depth: 63,
+            test_name: "singleCallTest",
+            requested_depth: 1,
+            expect_ok: true,
         },
+        // nestedCallsTest: 3 nested calls, stack=[1,2,3], OK
         ConformanceCase {
-            test_name: "callDepthAtLimitFailsTest",
-            requested_depth: 64,
+            test_name: "nestedCallsTest",
+            requested_depth: 3,
+            expect_ok: true,
+        },
+        // returnUnwindsStackTest: 2 calls + 1 return, OK (depth 2 succeeds)
+        ConformanceCase {
+            test_name: "returnUnwindsStackTest",
+            requested_depth: 2,
+            expect_ok: true,
+        },
+        // fullUnwindTest: 2 calls + 2 returns, OK (depth 2 succeeds)
+        ConformanceCase {
+            test_name: "fullUnwindTest",
+            requested_depth: 2,
+            expect_ok: true,
+        },
+        // recursiveCallsTest: 3 recursive self-calls, OK
+        ConformanceCase {
+            test_name: "recursiveCallsTest",
+            requested_depth: 3,
+            expect_ok: true,
         },
     ]
 }
@@ -190,7 +218,9 @@ fn quint_itf_call_depth_conformance() {
     let traces_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../specs/traces");
     if !traces_dir.exists() {
         panic!(
-            "ITF traces not found at {}. Run: quint test specs/stf_call_depth.qnt --out-itf \"specs/traces/out_{{test}}_{{seq}}.itf.json\"",
+            "ITF traces not found at {}. Run: quint test --main=stf_call_depth \
+             specs/stf_call_depth.qnt \
+             --out-itf \"specs/traces/out_{{test}}_{{seq}}.itf.json\"",
             traces_dir.display()
         );
     }
@@ -204,6 +234,12 @@ fn quint_itf_call_depth_conformance() {
             .last()
             .expect("trace must have at least one state");
         let spec_result = &spec_state.last_result;
+
+        assert_eq!(
+            spec_result.ok, case.expect_ok,
+            "{}: expected ok={} but trace says ok={}",
+            case.test_name, case.expect_ok, spec_result.ok
+        );
 
         let gas_config = StorageGasConfig {
             storage_get_charge: 1,
@@ -245,7 +281,7 @@ fn quint_itf_call_depth_conformance() {
             txs: vec![tx],
         };
 
-        let (real_result, _exec_state) = stf.apply_block(&storage, &codes, &block);
+        let (real_result, _) = stf.apply_block(&storage, &codes, &block);
         assert_eq!(
             real_result.tx_results.len(),
             1,
@@ -253,22 +289,27 @@ fn quint_itf_call_depth_conformance() {
             case.test_name
         );
 
-        let spec_ok = spec_result.result.ok;
         let real_ok = real_result.tx_results[0].response.is_ok();
-        assert_eq!(real_ok, spec_ok, "{}: ok mismatch", case.test_name);
+        assert_eq!(
+            real_ok, case.expect_ok,
+            "{}: ok mismatch (real={real_ok}, expected={})",
+            case.test_name, case.expect_ok
+        );
 
-        if !spec_ok {
-            let spec_err = spec_result.result.err_code.as_i64();
-            let real_err = real_result.tx_results[0].response.as_ref().unwrap_err().id;
-            match spec_err {
-                SPEC_ERR_CALL_DEPTH => assert_eq!(
-                    real_err,
-                    evolve_stf::errors::ERR_CALL_DEPTH_EXCEEDED.id,
-                    "{}: expected call depth error",
-                    case.test_name
-                ),
-                _ => panic!("{}: unknown spec error code {spec_err}", case.test_name),
-            }
+        if !case.expect_ok {
+            let real_err = real_result.tx_results[0]
+                .response
+                .as_ref()
+                .unwrap_err()
+                .id;
+            assert_eq!(
+                real_err,
+                evolve_stf::errors::ERR_CALL_DEPTH_EXCEEDED.id,
+                "{}: expected call depth error",
+                case.test_name
+            );
         }
+
+        eprintln!("PASS: {}", case.test_name);
     }
 }

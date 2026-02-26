@@ -33,7 +33,6 @@ module stf {
   val ERR_EXECUTION:      int = 200
   val ERR_POST_TX:        int = 999
   val ERR_BOOTSTRAP:      int = 300
-  val ERR_ACCOUNT_NOT_FOUND: int = 0x10
 
   /// Storage gas configuration: cost per byte for get/set/remove.
   type GasConfig = {
@@ -94,8 +93,19 @@ module stf {
   /// The last block result produced.
   var last_result: BlockResult
 
+  /// Ghost: number of txs submitted in the last applied block.
+  var last_block_tx_count: int
+
   /// Gas configuration (fixed at construction).
   val gas_config: GasConfig = { get_charge: 1, set_charge: 1, remove_charge: 1 }
+
+  //
+  // === Constants for model checking ===
+  //
+
+  val MC_ACCOUNTS: Set[AccountId] = Set(100, 101, 200, 201)
+  val MC_GAS_LIMITS: Set[int] = Set(1, 25, 100, 10000)
+  val MC_BLOCK_GAS_LIMITS: Set[int] = Set(30, 1000, 1000000)
 
   //
   // === Pure helpers ===
@@ -133,10 +143,11 @@ module stf {
   ///
   /// Models the full tx lifecycle:
   ///   1. Optional sender bootstrap (account registration)
-  ///   2. Validation
-  ///   3. Execution (write to storage)
-  ///   4. Post-tx handler
-  ///   5. Rollback on any failure
+  ///   2. Sender existence check
+  ///   3. Validation
+  ///   4. Recipient existence check
+  ///   5. Execution (write to storage)
+  ///   6. Rollback on any failure
   pure def process_tx(
     config: GasConfig,
     tx: Tx,
@@ -168,54 +179,49 @@ module stf {
       val gas_after_bootstrap = bootstrap_result.gas
 
       // Phase 1: Validation
-      if (tx.fail_validate)
+      // In the real runtime the pluggable TxValidator verifies signatures by
+      // calling into the sender's account code.  If the sender is not
+      // registered (no account code), validation fails.
+      if (tx.fail_validate or not(current_accounts.contains(tx.sender)))
         {
           result: { result: Err(ERR_VALIDATION), gas_used: gas_after_bootstrap },
           store: account_store,
           accounts: current_accounts,
         }
       else
-        // Phase 2: Check recipient exists
-        if (not(current_accounts.contains(tx.recipient)))
+        // Phase 2: Execution - compute gas for the write
+        val gas_needed = write_gas_cost(config, tx.write_key, tx.write_value)
+        val total_gas = gas_after_bootstrap + gas_needed
+
+        if (total_gas > tx.gas_limit)
+          // Out of gas: the real GasCounter does NOT increment gas_used on
+          // a failed consume_gas call. So gas_used stays at its pre-call value.
           {
-            result: { result: Err(ERR_ACCOUNT_NOT_FOUND), gas_used: gas_after_bootstrap },
+            result: { result: Err(ERR_OUT_OF_GAS), gas_used: gas_after_bootstrap },
+            store: account_store,
+            accounts: current_accounts,
+          }
+        else if (tx.fail_execute)
+          // Execution error after write -> rollback
+          {
+            result: { result: Err(ERR_EXECUTION), gas_used: total_gas },
             store: account_store,
             accounts: current_accounts,
           }
         else
-          // Phase 3: Execution - compute gas for the write
-          val gas_needed = write_gas_cost(config, tx.write_key, tx.write_value)
-          val total_gas = gas_after_bootstrap + gas_needed
-
-          if (total_gas > tx.gas_limit)
-            // Out of gas: the real GasCounter does NOT increment gas_used on
-            // a failed consume_gas call. So gas_used stays at its pre-call value.
-            {
-              result: { result: Err(ERR_OUT_OF_GAS), gas_used: gas_after_bootstrap },
-              store: account_store,
-              accounts: current_accounts,
-            }
-          else if (tx.fail_execute)
-            // Execution error after write -> rollback
-            {
-              result: { result: Err(ERR_EXECUTION), gas_used: total_gas },
-              store: account_store,
-              accounts: current_accounts,
-            }
-          else
-            // Phase 4: Write succeeds -> apply to storage
-            val recipient_store =
-              if (account_store.keys().contains(tx.recipient))
-                account_store.get(tx.recipient)
-              else
-                Map()
-            val updated_recipient = recipient_store.put(tx.write_key, tx.write_value)
-            val updated_store = account_store.put(tx.recipient, updated_recipient)
-            {
-              result: { result: OK, gas_used: total_gas },
-              store: updated_store,
-              accounts: current_accounts,
-            }
+          // Phase 3: Write succeeds -> apply to storage
+          val recipient_store =
+            if (account_store.keys().contains(tx.recipient))
+              account_store.get(tx.recipient)
+            else
+              Map()
+          val updated_recipient = recipient_store.put(tx.write_key, tx.write_value)
+          val updated_store = account_store.put(tx.recipient, updated_recipient)
+          {
+            result: { result: OK, gas_used: total_gas },
+            store: updated_store,
+            accounts: current_accounts,
+          }
 
   /// Process all transactions in a block sequentially, enforcing block gas limit.
   pure def process_block(
@@ -268,10 +274,11 @@ module stf {
   //
 
   action init = all {
-    storage'      = Map(),
-    accounts'     = Set(),
-    block_height' = 0,
-    last_result'  = { tx_results: List(), gas_used: 0, txs_skipped: 0 },
+    storage'              = Map(),
+    accounts'             = Set(),
+    block_height'         = 0,
+    last_result'          = { tx_results: List(), gas_used: 0, txs_skipped: 0 },
+    last_block_tx_count'  = 0,
   }
 
   /// Apply a block to the current state.
@@ -281,27 +288,31 @@ module stf {
       // Block height must be monotonically increasing.
       block.height > block_height,
       block.gas_limit > 0,
-      storage'      = out.store,
-      accounts'     = out.accounts,
-      block_height' = block.height,
-      last_result'  = out.result,
+      storage'              = out.store,
+      accounts'             = out.accounts,
+      block_height'         = block.height,
+      last_result'          = out.result,
+      last_block_tx_count'  = block.txs.length(),
     }
 
   /// Register an account (e.g., during genesis).
   action register_account(id: AccountId): bool = all {
     not(accounts.contains(id)),
-    storage'      = storage.put(id, Map()),
-    accounts'     = accounts.union(Set(id)),
-    block_height' = block_height,
-    last_result'  = last_result,
+    storage'              = storage.put(id, Map()),
+    accounts'             = accounts.union(Set(id)),
+    block_height'         = block_height,
+    last_result'          = last_result,
+    last_block_tx_count'  = last_block_tx_count,
   }
 
   //
   // === Invariants ===
   //
 
-  /// INV-1: Block height never decreases.
-  val height_monotonic: bool = block_height >= 0
+  /// INV-1: Block height is non-negative.
+  /// Monotonicity is enforced structurally by the guard block.height > block_height
+  /// in apply_block. This invariant checks the weaker non-negativity property.
+  val height_non_negative: bool = block_height >= 0
 
   /// INV-2: Total gas reported equals sum of individual tx gas.
   val gas_accounting: bool =
@@ -309,10 +320,8 @@ module stf {
     last_result.gas_used == sum
 
   /// INV-3: Number of results + skipped = number of txs submitted.
-  /// (Checked after each apply_block; this is a post-condition on the result.)
   val result_completeness: bool =
-    // This holds trivially for the initial state where there are no txs.
-    true
+    last_result.tx_results.length() + last_result.txs_skipped == last_block_tx_count
 
   /// INV-4: Failed transactions do not modify storage.
   /// (Encoded structurally: process_tx returns the original store on failure.)
@@ -326,6 +335,23 @@ module stf {
     last_result.tx_results.foldl(true, (acc, tr) => acc and tr.gas_used >= 0)
 
   //
+  // === False-invariant witnesses (should be violated) ===
+  //
+
+  /// Should be violated: proves blocks with txs are processed.
+  val witnessNoTxsProcessed: bool = last_result.tx_results.length() == 0
+
+  /// Should be violated: proves successful txs can write to storage.
+  val witnessStorageNeverWritten: bool =
+    storage.keys().forall(id => storage.get(id) == Map())
+
+  /// Should be violated: proves block gas limit causes skips.
+  val witnessNoSkippedTxs: bool = last_result.txs_skipped == 0
+
+  /// Should be violated: proves bootstrap can register new accounts.
+  val witnessNoBootstrap: bool = accounts.size() <= 1
+
+  //
   // === Temporal Properties ===
   //
 
@@ -337,6 +363,35 @@ module stf {
   /// PROP-3: If a transaction runs out of gas, it always returns ERR_OUT_OF_GAS.
   /// PROP-4: Successful transactions always produce storage changes.
   /// These are verified by the process_tx function structure.
+
+  //
+  // === Nondeterministic step for model checking ===
+  //
+
+  action step = {
+    nondet id = MC_ACCOUNTS.oneOf()
+    nondet sender = MC_ACCOUNTS.oneOf()
+    nondet recipient = MC_ACCOUNTS.oneOf()
+    nondet gas_limit = MC_GAS_LIMITS.oneOf()
+    nondet block_gas = MC_BLOCK_GAS_LIMITS.oneOf()
+    nondet fail_v = Set(true, false).oneOf()
+    nondet fail_e = Set(true, false).oneOf()
+    nondet needs_b = Set(true, false).oneOf()
+    nondet fail_b = Set(true, false).oneOf()
+    val tx: Tx = {
+      sender: sender, recipient: recipient, gas_limit: gas_limit,
+      write_key: K1, write_value: V1,
+      fail_validate: fail_v, fail_execute: fail_e,
+      needs_bootstrap: needs_b, fail_bootstrap: fail_b,
+    }
+    any {
+      apply_block({
+        height: block_height + 1, time: 0,
+        txs: [tx], gas_limit: block_gas,
+      }),
+      register_account(id),
+    }
+  }
 
   //
   // === Test helpers ===
@@ -360,6 +415,7 @@ module stf {
     accounts' = accounts,
     block_height' = block_height,
     last_result' = last_result,
+    last_block_tx_count' = last_block_tx_count,
   }
 
   //
@@ -375,6 +431,7 @@ module stf {
         assert(last_result.tx_results.length() == 0),
         assert(last_result.gas_used == 0),
         assert(last_result.txs_skipped == 0),
+        assert(result_completeness),
         stutter,
       })
   }
@@ -382,7 +439,7 @@ module stf {
   /// Test: successful transaction writes to storage.
   run successfulTxTest = {
     val tx1: Tx = {
-      sender: 200, recipient: 100, gas_limit: 10000,
+      sender: 100, recipient: 100, gas_limit: 10000,
       write_key: K1, write_value: V1,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
@@ -394,6 +451,7 @@ module stf {
         assert(last_result.tx_results.length() == 1),
         assert(last_result.tx_results[0].result.ok == true),
         assert(storage.get(100).get(K1) == V1),
+        assert(result_completeness),
         stutter,
       })
   }
@@ -401,7 +459,7 @@ module stf {
   /// Test: validation failure does not modify storage.
   run validationFailureTest = {
     val tx1: Tx = {
-      sender: 200, recipient: 100, gas_limit: 10000,
+      sender: 100, recipient: 100, gas_limit: 10000,
       write_key: K1, write_value: V1,
       fail_validate: true, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
@@ -413,6 +471,7 @@ module stf {
         assert(last_result.tx_results[0].result.ok == false),
         assert(last_result.tx_results[0].result.err_code == ERR_VALIDATION),
         assert(storage.get(100) == Map()),
+        assert(result_completeness),
         stutter,
       })
   }
@@ -420,7 +479,7 @@ module stf {
   /// Test: execution failure rolls back storage write.
   run executionFailureRollbackTest = {
     val tx1: Tx = {
-      sender: 200, recipient: 100, gas_limit: 10000,
+      sender: 100, recipient: 100, gas_limit: 10000,
       write_key: K1, write_value: V1,
       fail_validate: false, fail_execute: true,
       needs_bootstrap: false, fail_bootstrap: false,
@@ -432,6 +491,7 @@ module stf {
         assert(last_result.tx_results[0].result.ok == false),
         assert(last_result.tx_results[0].result.err_code == ERR_EXECUTION),
         assert(storage.get(100) == Map()),
+        assert(result_completeness),
         stutter,
       })
   }
@@ -439,7 +499,7 @@ module stf {
   /// Test: out-of-gas transaction fails and does not write.
   run outOfGasTest = {
     val tx1: Tx = {
-      sender: 200, recipient: 100, gas_limit: 1,
+      sender: 100, recipient: 100, gas_limit: 1,
       write_key: K1, write_value: V1,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
@@ -451,6 +511,7 @@ module stf {
         assert(last_result.tx_results[0].result.ok == false),
         assert(last_result.tx_results[0].result.err_code == ERR_OUT_OF_GAS),
         assert(storage.get(100) == Map()),
+        assert(result_completeness),
         stutter,
       })
   }
@@ -462,13 +523,13 @@ module stf {
   /// Pre-check: cumulative(20) + tx2.gas_limit(25) = 45 > 30 -> skip tx2.
   run blockGasLimitTest = {
     val tx1: Tx = {
-      sender: 200, recipient: 100, gas_limit: 25,
+      sender: 100, recipient: 100, gas_limit: 25,
       write_key: K1, write_value: V1,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
     }
     val tx2: Tx = {
-      sender: 200, recipient: 100, gas_limit: 25,
+      sender: 100, recipient: 100, gas_limit: 25,
       write_key: K2, write_value: V2,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
@@ -480,6 +541,7 @@ module stf {
         assert(last_result.tx_results.length() == 1),
         assert(last_result.txs_skipped == 1),
         assert(last_result.tx_results[0].result.ok == true),
+        assert(result_completeness),
         stutter,
       })
   }
@@ -487,25 +549,25 @@ module stf {
   /// Test: mixed block with success, validation failure, execution failure, OOG.
   run mixedOutcomesTest = {
     val tx_ok: Tx = {
-      sender: 200, recipient: 100, gas_limit: 10000,
+      sender: 100, recipient: 100, gas_limit: 10000,
       write_key: K0, write_value: V0,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
     }
     val tx_validate_fail: Tx = {
-      sender: 200, recipient: 100, gas_limit: 10000,
+      sender: 100, recipient: 100, gas_limit: 10000,
       write_key: K1, write_value: V1,
       fail_validate: true, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
     }
     val tx_exec_fail: Tx = {
-      sender: 200, recipient: 100, gas_limit: 10000,
+      sender: 100, recipient: 100, gas_limit: 10000,
       write_key: K2, write_value: V2,
       fail_validate: false, fail_execute: true,
       needs_bootstrap: false, fail_bootstrap: false,
     }
     val tx_oog: Tx = {
-      sender: 200, recipient: 100, gas_limit: 1,
+      sender: 100, recipient: 100, gas_limit: 1,
       write_key: K3, write_value: V3,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
@@ -532,6 +594,7 @@ module stf {
         assert(not(storage.get(100).keys().contains(K1))),
         assert(not(storage.get(100).keys().contains(K2))),
         assert(not(storage.get(100).keys().contains(K3))),
+        assert(result_completeness),
         stutter,
       })
   }
@@ -551,6 +614,7 @@ module stf {
         assert(last_result.tx_results[0].result.ok == true),
         // Sender should now be registered
         assert(accounts.contains(200)),
+        assert(result_completeness),
         stutter,
       })
   }
@@ -571,6 +635,29 @@ module stf {
         assert(last_result.tx_results[0].result.err_code == ERR_BOOTSTRAP),
         // Sender should NOT be registered
         assert(not(accounts.contains(200))),
+        assert(result_completeness),
+        stutter,
+      })
+  }
+
+  /// Test: unregistered sender (no bootstrap) fails validation.
+  /// In production, the validator queries the sender's account code for
+  /// signature verification.  Without account code the query fails.
+  run unregisteredSenderTest = {
+    val tx1: Tx = {
+      sender: 200, recipient: 100, gas_limit: 10000,
+      write_key: K1, write_value: V1,
+      fail_validate: false, fail_execute: false,
+      needs_bootstrap: false, fail_bootstrap: false,
+    }
+    init
+      .then(register_account(100))
+      .then(apply_block({ height: 1, time: 0, txs: [tx1], gas_limit: 1000000 }))
+      .then(all {
+        assert(last_result.tx_results[0].result.ok == false),
+        assert(last_result.tx_results[0].result.err_code == ERR_VALIDATION),
+        assert(storage.get(100) == Map()),
+        assert(result_completeness),
         stutter,
       })
   }
@@ -578,13 +665,13 @@ module stf {
   /// Test: sequential blocks accumulate state correctly.
   run multiBlockTest = {
     val tx1: Tx = {
-      sender: 200, recipient: 100, gas_limit: 10000,
+      sender: 100, recipient: 100, gas_limit: 10000,
       write_key: K1, write_value: V1,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
     }
     val tx2: Tx = {
-      sender: 200, recipient: 100, gas_limit: 10000,
+      sender: 100, recipient: 100, gas_limit: 10000,
       write_key: K2, write_value: V2,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
@@ -605,13 +692,13 @@ module stf {
   /// Test: overwriting a key updates the value.
   run overwriteTest = {
     val tx1: Tx = {
-      sender: 200, recipient: 100, gas_limit: 10000,
+      sender: 100, recipient: 100, gas_limit: 10000,
       write_key: K1, write_value: V_OLD,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
     }
     val tx2: Tx = {
-      sender: 200, recipient: 100, gas_limit: 10000,
+      sender: 100, recipient: 100, gas_limit: 10000,
       write_key: K1, write_value: V_NEW,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,

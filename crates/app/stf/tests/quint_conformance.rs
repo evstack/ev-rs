@@ -6,7 +6,7 @@
 //! the spec's expected outcomes.
 //!
 //! Run: `cargo test -p evolve_stf --test quint_conformance`
-//! Regenerate traces: `quint test specs/stf_core.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"`
+//! Regenerate traces: `quint test --main=stf specs/stf_core.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"`
 
 use borsh::{BorshDeserialize, BorshSerialize};
 use evolve_core::storage_api::{StorageSetRequest, STORAGE_ACCOUNT_ID};
@@ -42,6 +42,8 @@ struct ItfTrace {
 struct ItfState {
     block_height: ItfBigInt,
     last_result: ItfBlockResult,
+    #[allow(dead_code)]
+    last_block_tx_count: ItfBigInt,
     storage: ItfMap<ItfBigInt, ItfMap<Vec<ItfBigInt>, Vec<ItfBigInt>>>,
 }
 
@@ -77,7 +79,7 @@ struct TestMsg {
 
 impl InvokableMessage for TestMsg {
     const FUNCTION_IDENTIFIER: u64 = 1;
-    const FUNCTION_IDENTIFIER_NAME: &'static str = "test_exec";
+    const FUNCTION_IDENTIFIER_NAME: &'static str = "test_msg";
 }
 
 #[derive(Clone, Debug)]
@@ -150,10 +152,20 @@ impl BlockTrait<TestTx> for TestBlock {
 #[derive(Default)]
 struct Validator;
 impl TxValidator<TestTx> for Validator {
-    fn validate_tx(&self, tx: &TestTx, _env: &mut dyn Environment) -> SdkResult<()> {
+    fn validate_tx(&self, tx: &TestTx, env: &mut dyn Environment) -> SdkResult<()> {
         if tx.fail_validate {
             return Err(ErrorCode::new(100));
         }
+        // Simulate production signature verification: query the sender's
+        // account code. If the sender is not registered this fails, mirroring
+        // the real validator that cannot verify signatures without account code.
+        let probe = TestMsg {
+            key: vec![],
+            value: vec![],
+            fail_after_write: false,
+        };
+        env.do_query(tx.sender(), &InvokeRequest::new(&probe).unwrap())
+            .map_err(|_| ErrorCode::new(100))?;
         Ok(())
     }
 }
@@ -229,6 +241,10 @@ impl AccountCode for TestAccount {
 const SPEC_ERR_OUT_OF_GAS: i64 = 0x01;
 const SPEC_ERR_VALIDATION: i64 = 100;
 const SPEC_ERR_EXECUTION: i64 = 200;
+const SPEC_ERR_BOOTSTRAP: i64 = 300;
+
+const TEST_ACCOUNT: u128 = 100;
+const TEST_SENDER: u128 = 200;
 
 struct TxCase {
     sender: u128,
@@ -260,10 +276,6 @@ fn make_tx(tc: TxCase) -> TestTx {
     }
 }
 
-const SPEC_ERR_BOOTSTRAP: i64 = 300;
-const TEST_ACCOUNT: u128 = 100;
-const TEST_SENDER: u128 = 200;
-
 struct ConformanceCase {
     test_name: &'static str,
     blocks: Vec<TestBlock>,
@@ -280,6 +292,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 gas_limit: 1_000_000,
             }],
         },
+        // sender=TEST_ACCOUNT (registered) for all non-bootstrap tests
         ConformanceCase {
             test_name: "successfulTxTest",
             blocks: vec![TestBlock {
@@ -287,7 +300,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 time: 0,
                 gas_limit: 1_000_000,
                 txs: vec![make_tx(TxCase {
-                    sender: TEST_SENDER,
+                    sender: TEST_ACCOUNT,
                     recipient: TEST_ACCOUNT,
                     key: vec![1],
                     value: vec![11],
@@ -306,7 +319,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 time: 0,
                 gas_limit: 1_000_000,
                 txs: vec![make_tx(TxCase {
-                    sender: TEST_SENDER,
+                    sender: TEST_ACCOUNT,
                     recipient: TEST_ACCOUNT,
                     key: vec![1],
                     value: vec![11],
@@ -325,7 +338,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 time: 0,
                 gas_limit: 1_000_000,
                 txs: vec![make_tx(TxCase {
-                    sender: TEST_SENDER,
+                    sender: TEST_ACCOUNT,
                     recipient: TEST_ACCOUNT,
                     key: vec![1],
                     value: vec![11],
@@ -344,7 +357,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 time: 0,
                 gas_limit: 1_000_000,
                 txs: vec![make_tx(TxCase {
-                    sender: TEST_SENDER,
+                    sender: TEST_ACCOUNT,
                     recipient: TEST_ACCOUNT,
                     key: vec![1],
                     value: vec![11],
@@ -364,7 +377,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 gas_limit: 30,
                 txs: vec![
                     make_tx(TxCase {
-                        sender: TEST_SENDER,
+                        sender: TEST_ACCOUNT,
                         recipient: TEST_ACCOUNT,
                         key: vec![1],
                         value: vec![11],
@@ -375,7 +388,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                         fail_bootstrap: false,
                     }),
                     make_tx(TxCase {
-                        sender: TEST_SENDER,
+                        sender: TEST_ACCOUNT,
                         recipient: TEST_ACCOUNT,
                         key: vec![2],
                         value: vec![12],
@@ -396,7 +409,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 gas_limit: 1_000_000,
                 txs: vec![
                     make_tx(TxCase {
-                        sender: TEST_SENDER,
+                        sender: TEST_ACCOUNT,
                         recipient: TEST_ACCOUNT,
                         key: vec![0],
                         value: vec![10],
@@ -407,7 +420,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                         fail_bootstrap: false,
                     }),
                     make_tx(TxCase {
-                        sender: TEST_SENDER,
+                        sender: TEST_ACCOUNT,
                         recipient: TEST_ACCOUNT,
                         key: vec![1],
                         value: vec![11],
@@ -418,7 +431,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                         fail_bootstrap: false,
                     }),
                     make_tx(TxCase {
-                        sender: TEST_SENDER,
+                        sender: TEST_ACCOUNT,
                         recipient: TEST_ACCOUNT,
                         key: vec![2],
                         value: vec![12],
@@ -429,7 +442,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                         fail_bootstrap: false,
                     }),
                     make_tx(TxCase {
-                        sender: TEST_SENDER,
+                        sender: TEST_ACCOUNT,
                         recipient: TEST_ACCOUNT,
                         key: vec![3],
                         value: vec![13],
@@ -480,6 +493,27 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 })],
             }],
         },
+        // unregisteredSenderTest: sender=200 (not registered), no bootstrap
+        // Validator queries sender account for sig verification -> fails
+        ConformanceCase {
+            test_name: "unregisteredSenderTest",
+            blocks: vec![TestBlock {
+                height: 1,
+                time: 0,
+                gas_limit: 1_000_000,
+                txs: vec![make_tx(TxCase {
+                    sender: TEST_SENDER,
+                    recipient: TEST_ACCOUNT,
+                    key: vec![1],
+                    value: vec![11],
+                    gas_limit: 10000,
+                    fail_validate: false,
+                    fail_execute: false,
+                    needs_bootstrap: false,
+                    fail_bootstrap: false,
+                })],
+            }],
+        },
         ConformanceCase {
             test_name: "multiBlockTest",
             blocks: vec![
@@ -488,7 +522,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                     time: 0,
                     gas_limit: 1_000_000,
                     txs: vec![make_tx(TxCase {
-                        sender: TEST_SENDER,
+                        sender: TEST_ACCOUNT,
                         recipient: TEST_ACCOUNT,
                         key: vec![1],
                         value: vec![11],
@@ -504,7 +538,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                     time: 10,
                     gas_limit: 1_000_000,
                     txs: vec![make_tx(TxCase {
-                        sender: TEST_SENDER,
+                        sender: TEST_ACCOUNT,
                         recipient: TEST_ACCOUNT,
                         key: vec![2],
                         value: vec![12],
@@ -525,7 +559,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 gas_limit: 1_000_000,
                 txs: vec![
                     make_tx(TxCase {
-                        sender: TEST_SENDER,
+                        sender: TEST_ACCOUNT,
                         recipient: TEST_ACCOUNT,
                         key: vec![1],
                         value: vec![20],
@@ -536,7 +570,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                         fail_bootstrap: false,
                     }),
                     make_tx(TxCase {
-                        sender: TEST_SENDER,
+                        sender: TEST_ACCOUNT,
                         recipient: TEST_ACCOUNT,
                         key: vec![1],
                         value: vec![21],
@@ -563,7 +597,7 @@ fn quint_itf_conformance() {
     if !traces_dir.exists() {
         panic!(
             "ITF traces not found at {}. \
-             Run: quint test specs/stf_core.qnt \
+             Run: quint test --main=stf specs/stf_core.qnt \
              --out-itf \"specs/traces/out_{{test}}_{{seq}}.itf.json\"",
             traces_dir.display()
         );
@@ -573,11 +607,9 @@ fn quint_itf_conformance() {
     let mut matched = 0;
 
     for case in &test_cases {
-        // Find the unique trace file for this test.
         let trace_file = find_single_trace_file(&traces_dir, case.test_name);
         let trace: ItfTrace = read_itf_trace(&trace_file);
 
-        // Find the final state for this run after all apply_block steps.
         let expected_block_height =
             case.blocks.last().expect("case must have blocks").height as i64;
         let spec_state = trace
@@ -593,7 +625,6 @@ fn quint_itf_conformance() {
 
         let spec_result = &spec_state.last_result;
 
-        // Set up STF with gas_config matching the spec (all charges = 1).
         let gas_config = StorageGasConfig {
             storage_get_charge: 1,
             storage_set_charge: 1,
@@ -611,7 +642,6 @@ fn quint_itf_conformance() {
         let mut codes = CodeStore::new();
         codes.add_code(TestAccount);
 
-        // Register account 100 (matches spec's register_account(100)).
         let test_account = AccountId::new(TEST_ACCOUNT);
         let code_id = "test_account".to_string();
         storage.data.insert(
@@ -619,7 +649,6 @@ fn quint_itf_conformance() {
             Message::new(&code_id).unwrap().into_bytes().unwrap(),
         );
 
-        // Execute the full block sequence for this case.
         let mut real_result = None;
         for block in &case.blocks {
             let (result, exec_state) = stf.apply_block(&storage, &codes, block);
@@ -628,11 +657,11 @@ fn quint_itf_conformance() {
                 .unwrap();
             real_result = Some(result);
         }
-        let real_result = real_result.expect("case must execute at least one block");
+        let real_result = real_result.expect("case must run at least one block");
 
         // --- Assert conformance ---
 
-        // 1. tx_results count.
+        // 1. tx_results count
         assert_eq!(
             real_result.tx_results.len(),
             spec_result.tx_results.len(),
@@ -640,7 +669,7 @@ fn quint_itf_conformance() {
             case.test_name
         );
 
-        // 2. Per-tx outcomes.
+        // 2. Per-tx outcomes
         for (i, (real_tx, spec_tx)) in real_result
             .tx_results
             .iter()
@@ -687,7 +716,7 @@ fn quint_itf_conformance() {
                 }
             }
 
-            // 3. Gas must match exactly.
+            // 3. Gas
             assert_eq!(
                 real_tx.gas_used,
                 spec_tx.gas_used.as_u64(),
@@ -696,7 +725,7 @@ fn quint_itf_conformance() {
             );
         }
 
-        // 4. Block-level gas.
+        // 4. Block-level gas
         assert_eq!(
             real_result.gas_used,
             spec_result.gas_used.as_u64(),
@@ -704,7 +733,7 @@ fn quint_itf_conformance() {
             case.test_name
         );
 
-        // 5. Skipped count.
+        // 5. Skipped count
         assert_eq!(
             real_result.txs_skipped,
             spec_result.txs_skipped.as_u64() as usize,
@@ -712,8 +741,9 @@ fn quint_itf_conformance() {
             case.test_name
         );
 
-        // 6. Storage state must match exactly (for modeled accounts).
-        let modeled_accounts = [AccountId::new(TEST_ACCOUNT), AccountId::new(TEST_SENDER)];
+        // 6. Storage
+        let modeled_accounts =
+            [AccountId::new(TEST_ACCOUNT), AccountId::new(TEST_SENDER)];
         for account_id in modeled_accounts {
             let mut expected = HashMap::<Vec<u8>, Vec<u8>>::new();
             for (account_id_itf, account_store_itf) in &spec_state.storage.entries {
@@ -722,7 +752,8 @@ fn quint_itf_conformance() {
                 }
                 for (key_itf, value_itf) in &account_store_itf.entries {
                     let key: Vec<u8> = key_itf.iter().map(|b| b.as_u64() as u8).collect();
-                    let value: Vec<u8> = value_itf.iter().map(|b| b.as_u64() as u8).collect();
+                    let value: Vec<u8> =
+                        value_itf.iter().map(|b| b.as_u64() as u8).collect();
                     expected.insert(key, value);
                 }
             }
@@ -734,12 +765,15 @@ fn quint_itf_conformance() {
                     continue;
                 }
                 if raw_key[..account_prefix.len()] == account_prefix {
-                    actual.insert(raw_key[account_prefix.len()..].to_vec(), raw_value.clone());
+                    actual.insert(
+                        raw_key[account_prefix.len()..].to_vec(),
+                        raw_value.clone(),
+                    );
                 }
             }
             assert_eq!(
                 actual, expected,
-                "{}: exact storage mismatch for account {:?}",
+                "{}: storage mismatch for account {:?}",
                 case.test_name, account_id
             );
         }
@@ -750,9 +784,7 @@ fn quint_itf_conformance() {
 
     assert!(
         matched == test_cases.len(),
-        "Matched {matched}/{} traces. Regenerate with: \
-         quint test specs/stf_core.qnt \
-         --out-itf \"specs/traces/out_{{test}}_{{seq}}.itf.json\"",
+        "Matched {matched}/{} traces",
         test_cases.len()
     );
     eprintln!("{matched}/{} conformance tests passed", test_cases.len());

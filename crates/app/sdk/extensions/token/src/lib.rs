@@ -1,5 +1,4 @@
 use evolve_core::account_impl;
-pub mod generated;
 
 #[account_impl(Token)]
 pub mod account {
