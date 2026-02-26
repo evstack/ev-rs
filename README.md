@@ -50,6 +50,12 @@ docker compose up --build evd
 Run `evd` + `ev-node`:
 
 ```bash
+docker compose -f docker-compose.yml -f docker-compose.ev-node.yml up --build
+```
+
+Override image if needed:
+
+```bash
 EV_NODE_IMAGE=<your-ev-node-image> \
 docker compose -f docker-compose.yml -f docker-compose.ev-node.yml up --build
 ```
