@@ -1,16 +1,13 @@
 //! Evolve Dev Node entrypoint.
 
-use std::net::SocketAddr;
-
 use clap::{Args, Parser, Subcommand};
 use evolve_core::ReadonlyKV;
 use evolve_node::{
     init_dev_node, init_tracing as init_node_tracing, resolve_node_config,
     resolve_node_config_init, run_dev_node_with_rpc_and_mempool_eth,
-    run_dev_node_with_rpc_and_mempool_mock_storage, GenesisOutput, InitArgs, RunArgs,
+    run_dev_node_with_rpc_and_mempool_mock_storage, GenesisOutput, InitArgs, NoArgs, RunArgs,
 };
 use evolve_storage::{QmdbStorage, Storage, StorageConfig};
-use evolve_testapp::genesis_config::EvdGenesisConfig;
 use evolve_testapp::{
     build_mempool_stf, default_gas_config, do_eth_genesis_inner, install_account_codes,
     GenesisAccounts, MempoolStf, PLACEHOLDER_ACCOUNT,
@@ -35,28 +32,13 @@ enum Commands {
 }
 
 type TestappRunArgs = RunArgs<TestappRunCustom>;
-type TestappInitArgs = InitArgs<TestappInitCustom>;
+type TestappInitArgs = InitArgs<NoArgs>;
 
 #[derive(Args)]
 struct TestappRunCustom {
     /// Use in-memory mock storage instead of persistent storage
     #[arg(long)]
     mock_storage: bool,
-
-    /// Path to a genesis JSON file with ETH accounts (uses default Alice/Bob genesis if omitted)
-    #[arg(long)]
-    genesis_file: Option<String>,
-
-    /// Enable gRPC server on this address (e.g. 127.0.0.1:9545)
-    #[arg(long)]
-    grpc_addr: Option<SocketAddr>,
-}
-
-#[derive(Args)]
-struct TestappInitCustom {
-    /// Path to a genesis JSON file with ETH accounts (uses default Alice/Bob genesis if omitted)
-    #[arg(long)]
-    genesis_file: Option<String>,
 }
 
 fn main() {
@@ -67,22 +49,14 @@ fn main() {
             let config = resolve_node_config(&args.common, &args.native);
             init_node_tracing(&config.observability.log_level);
 
-            let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
-
-            let mut rpc_config = config.to_rpc_config();
-            if let Some(grpc_addr) = args.custom.grpc_addr {
-                rpc_config.grpc_addr = Some(grpc_addr);
-            }
-
+            let rpc_config = config.to_rpc_config();
             if args.custom.mock_storage {
                 run_dev_node_with_rpc_and_mempool_mock_storage(
                     &config.storage.path,
                     build_genesis_stf,
                     build_stf_from_genesis,
                     build_codes,
-                    move |stf, codes, storage| {
-                        run_genesis_output(stf, codes, storage, genesis_config.as_ref())
-                    },
+                    run_genesis_output,
                     rpc_config,
                 );
             } else {
@@ -91,9 +65,7 @@ fn main() {
                     build_genesis_stf,
                     build_stf_from_genesis,
                     build_codes,
-                    move |stf, codes, storage| {
-                        run_genesis_output(stf, codes, storage, genesis_config.as_ref())
-                    },
+                    run_genesis_output,
                     build_storage,
                     rpc_config,
                 );
@@ -103,26 +75,15 @@ fn main() {
             let config = resolve_node_config_init(&args.common);
             init_node_tracing(&config.observability.log_level);
 
-            let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
-
             init_dev_node(
                 &config.storage.path,
                 build_genesis_stf,
                 build_codes,
-                move |stf, codes, storage| {
-                    run_genesis_output(stf, codes, storage, genesis_config.as_ref())
-                },
+                run_genesis_output,
                 build_storage,
             );
         }
     }
-}
-
-fn load_genesis_config(path: Option<&str>) -> Option<EvdGenesisConfig> {
-    path.map(|p| {
-        tracing::info!("Loading genesis config from: {}", p);
-        EvdGenesisConfig::load(p).expect("failed to load genesis config")
-    })
 }
 
 fn build_codes() -> AccountStorageMock {
@@ -140,18 +101,6 @@ fn build_stf_from_genesis(genesis: &GenesisAccounts) -> MempoolStf {
 }
 
 fn run_genesis_output<S: ReadonlyKV + Storage>(
-    stf: &MempoolStf,
-    codes: &AccountStorageMock,
-    storage: &S,
-    genesis_config: Option<&EvdGenesisConfig>,
-) -> Result<GenesisOutput<GenesisAccounts>, Box<dyn std::error::Error + Send + Sync>> {
-    match genesis_config {
-        Some(config) => run_custom_genesis(stf, codes, storage, config),
-        None => run_default_genesis(stf, codes, storage),
-    }
-}
-
-fn run_default_genesis<S: ReadonlyKV + Storage>(
     stf: &MempoolStf,
     codes: &AccountStorageMock,
     storage: &S,
@@ -180,72 +129,6 @@ fn run_default_genesis<S: ReadonlyKV + Storage>(
                 bob: eth_accounts.bob,
                 atom: eth_accounts.evolve,
                 scheduler: eth_accounts.scheduler,
-            })
-        })
-        .map_err(|e| format!("{:?}", e))?;
-
-    let changes = state.into_changes().map_err(|e| format!("{:?}", e))?;
-
-    Ok(GenesisOutput {
-        genesis_result: accounts,
-        changes,
-    })
-}
-
-fn run_custom_genesis<S: ReadonlyKV + Storage>(
-    stf: &MempoolStf,
-    codes: &AccountStorageMock,
-    storage: &S,
-    config: &EvdGenesisConfig,
-) -> Result<GenesisOutput<GenesisAccounts>, Box<dyn std::error::Error + Send + Sync>> {
-    use evolve_core::{AccountId, BlockContext};
-    use evolve_scheduler::scheduler_account::SchedulerRef;
-    use evolve_testapp::eth_eoa::eth_eoa_account::EthEoaAccountRef;
-    use evolve_token::account::TokenRef;
-    use evolve_tx_eth::address_to_account_id;
-
-    let funded_accounts: Vec<([u8; 20], u128)> = config
-        .accounts
-        .iter()
-        .filter(|acc| acc.balance > 0)
-        .map(|acc| {
-            let addr = acc
-                .parse_address()
-                .expect("invalid address in genesis config");
-            (addr.into_array(), acc.balance)
-        })
-        .collect();
-
-    let minter = AccountId::new(config.minter_id);
-    let metadata = config.token.to_metadata();
-
-    let genesis_block = BlockContext::new(0, 0);
-
-    let (accounts, state) = stf
-        .system_exec(storage, codes, genesis_block, |env| {
-            // Register funded EOA accounts through the STF environment
-            for (eth_addr, _) in &funded_accounts {
-                EthEoaAccountRef::initialize(*eth_addr, env)?;
-            }
-
-            let balances: Vec<(AccountId, u128)> = funded_accounts
-                .iter()
-                .map(|(eth_addr, balance)| {
-                    let addr = alloy_primitives::Address::from(*eth_addr);
-                    (address_to_account_id(addr), *balance)
-                })
-                .collect();
-
-            let token = TokenRef::initialize(metadata.clone(), balances, Some(minter), env)?.0;
-
-            let scheduler_acc = SchedulerRef::initialize(vec![], vec![], env)?.0;
-            scheduler_acc.update_begin_blockers(vec![], env)?;
-
-            Ok(GenesisAccounts {
-                alice: token.0,
-                bob: token.0,
-                atom: token.0,
-                scheduler: scheduler_acc.0,
             })
         })
         .map_err(|e| format!("{:?}", e))?;

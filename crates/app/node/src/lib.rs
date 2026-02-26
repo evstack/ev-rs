@@ -23,7 +23,6 @@ use evolve_chain_index::{ChainStateProvider, ChainStateProviderConfig, Persisten
 use evolve_core::encoding::Encodable;
 use evolve_core::ReadonlyKV;
 use evolve_eth_jsonrpc::{start_server_with_subscriptions, RpcServerConfig, SubscriptionManager};
-use evolve_grpc::{GrpcServer, GrpcServerConfig};
 use evolve_mempool::{new_shared_mempool, Mempool, MempoolTx, SharedMempool};
 use evolve_rpc_types::SyncStatus;
 use evolve_server::{
@@ -117,9 +116,6 @@ pub struct RpcConfig {
     pub enabled: bool,
     /// Whether block indexing is enabled while producing blocks.
     pub enable_block_indexing: bool,
-    /// Optional gRPC server address. When set, a gRPC server is started
-    /// alongside JSON-RPC, sharing the same state provider and subscriptions.
-    pub grpc_addr: Option<SocketAddr>,
 }
 
 impl Default for RpcConfig {
@@ -129,7 +125,6 @@ impl Default for RpcConfig {
             chain_id: 1,
             enabled: true,
             enable_block_indexing: true,
-            grpc_addr: None,
         }
     }
 }
@@ -158,12 +153,6 @@ impl RpcConfig {
     /// Enable or disable block indexing while keeping RPC enabled.
     pub fn with_block_indexing(mut self, enabled: bool) -> Self {
         self.enable_block_indexing = enabled;
-        self
-    }
-
-    /// Enable the gRPC server on the given address.
-    pub fn with_grpc(mut self, addr: SocketAddr) -> Self {
-        self.grpc_addr = Some(addr);
         self
     }
 }
@@ -839,8 +828,8 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                 };
                 let state_provider = ChainStateProvider::with_mempool(
                     Arc::clone(&chain_index),
-                    state_provider_config.clone(),
-                    Arc::clone(&codes_for_rpc),
+                    state_provider_config,
+                    codes_for_rpc,
                     mempool.clone(),
                 );
 
@@ -857,32 +846,6 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                 )
                 .await
                 .expect("failed to start RPC server");
-
-                // Start gRPC server if configured
-                if let Some(grpc_addr) = rpc_config.grpc_addr {
-                    let grpc_state_provider = ChainStateProvider::with_mempool(
-                        Arc::clone(&chain_index),
-                        state_provider_config,
-                        codes_for_rpc,
-                        mempool.clone(),
-                    );
-                    let grpc_config = GrpcServerConfig {
-                        addr: grpc_addr,
-                        chain_id: rpc_config.chain_id,
-                        ..Default::default()
-                    };
-                    tracing::info!("Starting gRPC server on {}", grpc_addr);
-                    let grpc_server = GrpcServer::with_subscription_manager(
-                        grpc_config,
-                        grpc_state_provider,
-                        Arc::clone(&subscriptions),
-                    );
-                    tokio::spawn(async move {
-                        if let Err(e) = grpc_server.serve().await {
-                            tracing::error!("gRPC server error: {}", e);
-                        }
-                    });
-                }
 
                 let consensus = DevConsensus::with_rpc_and_mempool(
                     stf,
