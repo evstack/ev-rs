@@ -53,13 +53,6 @@ Run `evd` + `ev-node`:
 docker compose -f docker-compose.yml -f docker-compose.ev-node.yml up --build
 ```
 
-Override image if needed:
-
-```bash
-EV_NODE_IMAGE=<your-ev-node-image> \
-docker compose -f docker-compose.yml -f docker-compose.ev-node.yml up --build
-```
-
 Notes:
 - `evd` JSON-RPC is exposed on `http://localhost:8545`
 - `evd` gRPC is exposed on `localhost:50051`

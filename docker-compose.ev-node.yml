@@ -1,6 +1,6 @@
 services:
   ev-node:
-    image: ${EV_NODE_IMAGE:-ghcr.io/evstack/ev-node-grpc:latest}
+    image: ghcr.io/evstack/ev-node-grpc:latest
     depends_on:
       - evd
     environment:
