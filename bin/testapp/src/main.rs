@@ -1,7 +1,5 @@
 //! Evolve Dev Node entrypoint.
 
-use std::net::SocketAddr;
-
 use clap::{Args, Parser, Subcommand};
 use evolve_core::ReadonlyKV;
 use evolve_node::{
@@ -46,10 +44,6 @@ struct TestappRunCustom {
     /// Path to a genesis JSON file with ETH accounts (uses default Alice/Bob genesis if omitted)
     #[arg(long)]
     genesis_file: Option<String>,
-
-    /// Enable gRPC server on this address (e.g. 127.0.0.1:9545)
-    #[arg(long)]
-    grpc_addr: Option<SocketAddr>,
 }
 
 #[derive(Args)]
@@ -70,9 +64,7 @@ fn main() {
             let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
 
             let mut rpc_config = config.to_rpc_config();
-            if let Some(grpc_addr) = args.custom.grpc_addr {
-                rpc_config.grpc_addr = Some(grpc_addr);
-            }
+            rpc_config.grpc_addr = Some(config.parsed_grpc_addr());
 
             if args.custom.mock_storage {
                 run_dev_node_with_rpc_and_mempool_mock_storage(
