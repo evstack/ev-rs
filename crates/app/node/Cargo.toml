@@ -29,6 +29,7 @@ evolve_stf_traits = { workspace = true }
 evolve_storage = { workspace = true }
 evolve_chain_index = { workspace = true }
 evolve_eth_jsonrpc = { workspace = true }
+evolve_grpc = { workspace = true }
 evolve_rpc_types = { workspace = true }
 
 [lints]
