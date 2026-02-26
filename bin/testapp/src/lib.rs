@@ -1,4 +1,5 @@
 pub mod eth_eoa;
+pub mod genesis_config;
 pub mod sim_testing;
 
 use crate::eth_eoa::eth_eoa_account::{EthEoaAccount, EthEoaAccountRef};

@@ -1,0 +1,9 @@
+.git
+.github
+.claude
+target
+docs/node_modules
+docs/.next
+docs/dist
+data
+.data
