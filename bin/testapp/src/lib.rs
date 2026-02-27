@@ -78,6 +78,55 @@ pub struct GenesisAccounts {
     pub scheduler: AccountId,
 }
 
+/// Shared custom-genesis resources used by evd and testapp binaries.
+#[derive(Clone, Copy, Debug)]
+pub struct CustomGenesisResources {
+    pub alice: Option<AccountId>,
+    pub bob: Option<AccountId>,
+    pub token: AccountId,
+    pub scheduler: AccountId,
+}
+
+/// Initialize funded EOAs, token, and scheduler for custom genesis.
+pub fn initialize_custom_genesis_resources(
+    funded_accounts: &[([u8; 20], u128)],
+    metadata: FungibleAssetMetadata,
+    minter: AccountId,
+    env: &mut dyn Environment,
+) -> SdkResult<CustomGenesisResources> {
+    for (eth_addr, _) in funded_accounts {
+        EthEoaAccountRef::initialize(*eth_addr, env)?;
+    }
+
+    let balances: Vec<(AccountId, u128)> = funded_accounts
+        .iter()
+        .map(|(eth_addr, balance)| {
+            let addr = alloy_primitives::Address::from(*eth_addr);
+            (address_to_account_id(addr), *balance)
+        })
+        .collect();
+
+    let token = TokenRef::initialize(metadata, balances, Some(minter), env)?.0;
+
+    let scheduler_acc = SchedulerRef::initialize(vec![], vec![], env)?.0;
+    scheduler_acc.update_begin_blockers(vec![], env)?;
+
+    let alice = funded_accounts
+        .first()
+        .map(|(eth_addr, _)| address_to_account_id(alloy_primitives::Address::from(*eth_addr)));
+    let bob = funded_accounts
+        .get(1)
+        .map(|(eth_addr, _)| address_to_account_id(alloy_primitives::Address::from(*eth_addr)))
+        .or(alice);
+
+    Ok(CustomGenesisResources {
+        alice,
+        bob,
+        token: token.0,
+        scheduler: scheduler_acc.0,
+    })
+}
+
 fn parse_genesis_address_env(var: &str) -> Option<[u8; 20]> {
     use alloy_primitives::Address;
     use std::str::FromStr;

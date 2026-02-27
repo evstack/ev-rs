@@ -73,7 +73,7 @@ impl NodeConfig {
             chain_id: self.chain.chain_id,
             enabled: self.rpc.enabled,
             enable_block_indexing: self.rpc.enable_block_indexing,
-            grpc_addr: None,
+            grpc_addr: Some(self.parsed_grpc_addr()),
         }
     }
 }

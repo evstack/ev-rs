@@ -83,20 +83,17 @@ use evolve_node::{
     GenesisOutput, InitArgs, NodeConfig, RunArgs,
 };
 use evolve_rpc_types::SyncStatus;
-use evolve_scheduler::scheduler_account::SchedulerRef;
 use evolve_server::{
     load_chain_state, save_chain_state, BlockBuilder, ChainState, CHAIN_STATE_KEY,
 };
 use evolve_stf_traits::{AccountsCodeStorage, StateChange};
 use evolve_storage::{Operation, QmdbStorage, Storage, StorageConfig};
-use evolve_testapp::genesis_config::{EvdGenesisConfig, EvdGenesisResult};
+use evolve_testapp::genesis_config::{load_genesis_config, EvdGenesisConfig, EvdGenesisResult};
 use evolve_testapp::{
-    build_mempool_stf, default_gas_config, do_genesis_inner, install_account_codes,
-    PLACEHOLDER_ACCOUNT,
+    build_mempool_stf, default_gas_config, do_genesis_inner, initialize_custom_genesis_resources,
+    install_account_codes, PLACEHOLDER_ACCOUNT,
 };
 use evolve_testing::server_mocks::AccountStorageMock;
-use evolve_token::account::TokenRef;
-use evolve_tx_eth::address_to_account_id;
 use evolve_tx_eth::TxContext;
 
 #[derive(Parser)]
@@ -140,23 +137,28 @@ fn main() {
         Commands::Run(args) => {
             let config = resolve_node_config(&args.common, &args.native);
             init_node_tracing(&config.observability.log_level);
-            let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
+            let genesis_config = match load_genesis_config(args.custom.genesis_file.as_deref()) {
+                Ok(genesis_config) => genesis_config,
+                Err(err) => {
+                    tracing::error!("{err}");
+                    std::process::exit(2);
+                }
+            };
             run_node(config, genesis_config);
         }
         Commands::Init(args) => {
             let config = resolve_node_config_init(&args.common);
             init_node_tracing(&config.observability.log_level);
-            let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
+            let genesis_config = match load_genesis_config(args.custom.genesis_file.as_deref()) {
+                Ok(genesis_config) => genesis_config,
+                Err(err) => {
+                    tracing::error!("{err}");
+                    std::process::exit(2);
+                }
+            };
             init_genesis(&config.storage.path, genesis_config);
         }
     }
-}
-
-fn load_genesis_config(path: Option<&str>) -> Option<EvdGenesisConfig> {
-    path.map(|p| {
-        tracing::info!("Loading genesis config from: {}", p);
-        EvdGenesisConfig::load(p).expect("failed to load genesis config")
-    })
 }
 
 fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
@@ -505,19 +507,10 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
     genesis_config: &EvdGenesisConfig,
 ) -> GenesisOutput<EvdGenesisResult> {
     use evolve_core::BlockContext;
-    use evolve_testapp::eth_eoa::eth_eoa_account::EthEoaAccountRef;
 
-    let funded_accounts: Vec<([u8; 20], u128)> = genesis_config
-        .accounts
-        .iter()
-        .filter(|acc| acc.balance > 0)
-        .map(|acc| {
-            let addr = acc
-                .parse_address()
-                .expect("invalid address in genesis config");
-            (addr.into_array(), acc.balance)
-        })
-        .collect();
+    let funded_accounts = genesis_config
+        .funded_accounts()
+        .expect("invalid address in genesis config");
 
     let minter = AccountId::new(genesis_config.minter_id);
     let metadata = genesis_config.token.to_metadata();
@@ -528,26 +521,16 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
 
     let (genesis_result, state) = stf
         .system_exec(storage, codes, genesis_block, |env| {
-            for (eth_addr, _) in &funded_accounts {
-                EthEoaAccountRef::initialize(*eth_addr, env)?;
-            }
-
-            let balances: Vec<(AccountId, u128)> = funded_accounts
-                .iter()
-                .map(|(eth_addr, balance)| {
-                    let addr = Address::from(*eth_addr);
-                    (address_to_account_id(addr), *balance)
-                })
-                .collect();
-
-            let token = TokenRef::initialize(metadata.clone(), balances, Some(minter), env)?.0;
-
-            let scheduler_acc = SchedulerRef::initialize(vec![], vec![], env)?.0;
-            scheduler_acc.update_begin_blockers(vec![], env)?;
+            let resources = initialize_custom_genesis_resources(
+                &funded_accounts,
+                metadata.clone(),
+                minter,
+                env,
+            )?;
 
             Ok(EvdGenesisResult {
-                token: token.0,
-                scheduler: scheduler_acc.0,
+                token: resources.token,
+                scheduler: resources.scheduler,
             })
         })
         .expect("genesis failed");
