@@ -10,11 +10,8 @@ use evolve_core::AccountId;
 use std::collections::HashMap;
 
 /// Convert AccountId to serializable bytes.
-fn account_to_bytes(id: AccountId) -> [u8; 16] {
-    let bytes = id.as_bytes();
-    let mut arr = [0u8; 16];
-    arr.copy_from_slice(&bytes[..16]);
-    arr
+fn account_to_bytes(id: AccountId) -> [u8; 32] {
+    id.as_bytes()
 }
 
 /// Inspector for examining trace and state.

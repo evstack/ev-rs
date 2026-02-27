@@ -22,7 +22,6 @@ pub mod eth_eoa_account {
     use evolve_collections::item::Item;
     use evolve_core::{AccountId, Environment, Message, SdkResult};
     use evolve_macros::{exec, init, query};
-    use evolve_tx_eth::address_to_account_id;
     use evolve_tx_eth::TxContext;
 
     /// An Ethereum-compatible externally owned account.
@@ -93,18 +92,20 @@ pub mod eth_eoa_account {
         /// - Just increments nonce (test mode, no signature verification)
         #[exec]
         fn authenticate(&self, tx: Message, env: &mut dyn Environment) -> SdkResult<()> {
+            let expected_address = self.eth_address.may_get(env)?.unwrap_or([0u8; 20]);
+
+            if let Ok(sender_address) = tx.get::<[u8; 20]>() {
+                if sender_address != expected_address {
+                    return Err(evolve_core::ErrorCode::new(0x51)); // Sender mismatch
+                }
             // Fast path: validator passes sender AccountId directly.
-            if let Ok(sender_id) = tx.get::<AccountId>() {
-                let expected_address = self.eth_address.may_get(env)?.unwrap_or([0u8; 20]);
-                let expected_id =
-                    address_to_account_id(alloy_primitives::Address::from(expected_address));
-                if sender_id != expected_id {
+            } else if let Ok(sender_id) = tx.get::<AccountId>() {
+                if sender_id != env.whoami() {
                     return Err(evolve_core::ErrorCode::new(0x51)); // Sender mismatch
                 }
             // Backward-compatible fallback for older validator payloads.
             } else if let Ok(mempool_tx) = tx.get::<TxContext>() {
                 let sender_bytes: [u8; 20] = mempool_tx.sender_address().into();
-                let expected_address = self.eth_address.may_get(env)?.unwrap_or([0u8; 20]);
                 if sender_bytes != expected_address {
                     return Err(evolve_core::ErrorCode::new(0x51)); // Sender mismatch
                 }

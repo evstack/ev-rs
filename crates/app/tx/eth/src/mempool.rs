@@ -13,12 +13,16 @@
 
 use alloy_primitives::{Address, B256};
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{AccountId, FungibleAsset, InvokeRequest, Message, SdkResult};
+use evolve_core::{AccountId, Environment, FungibleAsset, InvokeRequest, Message, SdkResult};
 use evolve_mempool::{GasPriceOrdering, MempoolTx, SenderKey};
-use evolve_stf_traits::{AuthenticationPayload, SenderBootstrap, Transaction};
+use evolve_stf_traits::{AuthenticationPayload, Transaction};
 
 use crate::envelope::TxEnvelope;
-use crate::traits::{address_to_account_id, TypedTransaction};
+use crate::eoa_registry::{
+    lookup_account_id_in_env, lookup_contract_account_id_in_env, resolve_or_create_eoa_account,
+};
+use crate::error::ERR_RECIPIENT_REQUIRED;
+use crate::traits::TypedTransaction;
 
 /// A verified transaction ready for mempool storage.
 ///
@@ -28,10 +32,6 @@ use crate::traits::{address_to_account_id, TypedTransaction};
 pub struct TxContext {
     /// The original Ethereum transaction envelope.
     envelope: TxEnvelope,
-    /// Sender account ID (derived from address).
-    sender_id: AccountId,
-    /// Recipient account ID (derived from address).
-    recipient_id: AccountId,
     /// The invoke request to execute (derived by evolve_tx).
     invoke_request: InvokeRequest,
     /// Gas price for ordering (effective gas price).
@@ -43,9 +43,10 @@ impl TxContext {
     ///
     /// Returns `None` if the transaction has no recipient (contract creation).
     pub fn new(envelope: TxEnvelope, base_fee: u128) -> Option<Self> {
-        let sender_id = address_to_account_id(envelope.sender());
-        let recipient = envelope.to()?;
-        let recipient_id = address_to_account_id(recipient);
+        // TODO(vm): when EVM contract creation is supported, allow `to == None`
+        // and route create-transactions through deployment execution instead of
+        // rejecting them at mempool decode time.
+        envelope.to()?;
 
         let invoke_request = envelope.to_invoke_requests().into_iter().next()?;
 
@@ -54,8 +55,6 @@ impl TxContext {
 
         Some(Self {
             envelope,
-            sender_id,
-            recipient_id,
             invoke_request,
             effective_gas_price,
         })
@@ -114,11 +113,29 @@ impl MempoolTx for TxContext {
 
 impl Transaction for TxContext {
     fn sender(&self) -> AccountId {
-        self.sender_id
+        AccountId::invalid()
+    }
+
+    fn resolve_sender_account(&self, env: &mut dyn Environment) -> SdkResult<AccountId> {
+        resolve_or_create_eoa_account(self.sender_address(), env)
     }
 
     fn recipient(&self) -> AccountId {
-        self.recipient_id
+        AccountId::invalid()
+    }
+
+    fn resolve_recipient_account(&self, env: &mut dyn Environment) -> SdkResult<AccountId> {
+        // TODO(vm): contract creation currently has no recipient and is rejected.
+        // Once VM deployment is supported, this branch should route to creation
+        // logic instead of returning recipient-required.
+        let to = self.envelope.to().ok_or(ERR_RECIPIENT_REQUIRED)?;
+        if let Some(account_id) = lookup_account_id_in_env(to, env)? {
+            return Ok(account_id);
+        }
+        if let Some(account_id) = lookup_contract_account_id_in_env(to, env)? {
+            return Ok(account_id);
+        }
+        resolve_or_create_eoa_account(to, env)
     }
 
     fn request(&self) -> &InvokeRequest {
@@ -138,18 +155,19 @@ impl Transaction for TxContext {
         self.envelope.tx_hash().0
     }
 
-    fn sender_bootstrap(&self) -> Option<SenderBootstrap> {
-        let eth_address: [u8; 20] = self.sender_address().into();
-        Some(SenderBootstrap {
-            account_code_id: "EthEoaAccount",
-            init_message: Message::new(&eth_address).ok()?,
-        })
+    fn sender_eth_address(&self) -> Option<[u8; 20]> {
+        Some(self.sender_address().into())
+    }
+
+    fn recipient_eth_address(&self) -> Option<[u8; 20]> {
+        self.envelope.to().map(Into::into)
     }
 }
 
 impl AuthenticationPayload for TxContext {
     fn authentication_payload(&self) -> SdkResult<Message> {
-        Message::new(&self.sender_id)
+        let sender: [u8; 20] = self.sender_address().into();
+        Message::new(&sender)
     }
 }
 
@@ -164,9 +182,7 @@ impl Decodable for TxContext {
         let envelope = TxEnvelope::decode(bytes)?;
         // Use base_fee of 0 for decoding - the effective gas price will be
         // recalculated if needed when the transaction is added to a mempool
-        TxContext::new(envelope, 0).ok_or_else(|| {
-            evolve_core::ErrorCode::new(0x50) // Contract creation not supported
-        })
+        TxContext::new(envelope, 0).ok_or(ERR_RECIPIENT_REQUIRED)
     }
 }
 
@@ -190,4 +206,177 @@ fn calculate_effective_gas_price(envelope: &TxEnvelope, base_fee: u128) -> u128 
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::eoa_registry::{lookup_account_id_in_env, register_runtime_contract_account};
+    use crate::traits::{derive_eth_eoa_account_id, derive_runtime_contract_account_id};
+    use alloy_consensus::{SignableTransaction, TxLegacy};
+    use alloy_primitives::{Bytes, PrimitiveSignature, TxKind, U256};
+    use evolve_core::runtime_api::{
+        RegisterAccountAtIdRequest, RegisterAccountAtIdResponse, ACCOUNT_IDENTIFIER_PREFIX,
+        RUNTIME_ACCOUNT_ID,
+    };
+    use evolve_core::storage_api::{
+        StorageGetRequest, StorageGetResponse, StorageSetRequest, StorageSetResponse,
+        STORAGE_ACCOUNT_ID,
+    };
+    use evolve_core::{
+        BlockContext, EnvironmentQuery, FungibleAsset, InvokableMessage, InvokeResponse,
+        ERR_UNKNOWN_FUNCTION,
+    };
+    use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
+    use rand::rngs::OsRng;
+    use std::collections::BTreeMap;
+
+    #[derive(Default)]
+    struct MockEnv {
+        funds: Vec<FungibleAsset>,
+        storage: BTreeMap<Vec<u8>, Vec<u8>>,
+    }
+
+    impl MockEnv {
+        fn account_scoped_key(account_id: AccountId, key: &[u8]) -> Vec<u8> {
+            let mut full = account_id.as_bytes().to_vec();
+            full.extend_from_slice(key);
+            full
+        }
+    }
+
+    impl EnvironmentQuery for MockEnv {
+        fn whoami(&self) -> AccountId {
+            RUNTIME_ACCOUNT_ID
+        }
+
+        fn sender(&self) -> AccountId {
+            AccountId::invalid()
+        }
+
+        fn funds(&self) -> &[FungibleAsset] {
+            &self.funds
+        }
+
+        fn block(&self) -> BlockContext {
+            BlockContext::default()
+        }
+
+        fn do_query(
+            &mut self,
+            to: AccountId,
+            data: &InvokeRequest,
+        ) -> evolve_core::SdkResult<InvokeResponse> {
+            if to != STORAGE_ACCOUNT_ID {
+                return Err(ERR_UNKNOWN_FUNCTION);
+            }
+            match data.function() {
+                StorageGetRequest::FUNCTION_IDENTIFIER => {
+                    let req: StorageGetRequest = data.get()?;
+                    let key = Self::account_scoped_key(req.account_id, &req.key);
+                    let value = self
+                        .storage
+                        .get(&key)
+                        .cloned()
+                        .map(evolve_core::Message::from_bytes);
+                    InvokeResponse::new(&StorageGetResponse { value })
+                }
+                _ => Err(ERR_UNKNOWN_FUNCTION),
+            }
+        }
+    }
+
+    impl Environment for MockEnv {
+        fn do_exec(
+            &mut self,
+            to: AccountId,
+            data: &InvokeRequest,
+            _funds: Vec<FungibleAsset>,
+        ) -> evolve_core::SdkResult<InvokeResponse> {
+            if to == STORAGE_ACCOUNT_ID && data.function() == StorageSetRequest::FUNCTION_IDENTIFIER
+            {
+                let req: StorageSetRequest = data.get()?;
+                let key = Self::account_scoped_key(RUNTIME_ACCOUNT_ID, &req.key);
+                self.storage.insert(key, req.value.into_bytes()?);
+                return InvokeResponse::new(&StorageSetResponse {});
+            }
+
+            if to == RUNTIME_ACCOUNT_ID
+                && data.function() == RegisterAccountAtIdRequest::FUNCTION_IDENTIFIER
+            {
+                let req: RegisterAccountAtIdRequest = data.get()?;
+                let mut key = vec![ACCOUNT_IDENTIFIER_PREFIX];
+                key.extend_from_slice(&req.account_id.as_bytes());
+                self.storage
+                    .insert(key, evolve_core::Message::new(&req.code_id)?.into_bytes()?);
+                return InvokeResponse::new(&RegisterAccountAtIdResponse {});
+            }
+
+            Err(ERR_UNKNOWN_FUNCTION)
+        }
+
+        fn emit_event(&mut self, _name: &str, _data: &[u8]) -> evolve_core::SdkResult<()> {
+            Ok(())
+        }
+
+        fn unique_id(&mut self) -> evolve_core::SdkResult<[u8; 32]> {
+            Ok([0u8; 32])
+        }
+    }
+
+    fn sign_hash(signing_key: &SigningKey, hash: B256) -> PrimitiveSignature {
+        let (sig, recovery_id) = signing_key.sign_prehash(hash.as_ref()).unwrap();
+        let r = U256::from_be_slice(&sig.r().to_bytes());
+        let s = U256::from_be_slice(&sig.s().to_bytes());
+        let v = recovery_id.is_y_odd();
+        PrimitiveSignature::new(r, s, v)
+    }
+
+    fn build_tx_context(to: Address) -> TxContext {
+        let signing_key = SigningKey::random(&mut OsRng);
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce: 0,
+            gas_price: 1_000_000_000,
+            gas_limit: 21_000,
+            to: TxKind::Call(to),
+            value: U256::ZERO,
+            input: Bytes::new(),
+        };
+        let signature = sign_hash(&signing_key, tx.signature_hash());
+        let signed = tx.into_signed(signature);
+        let mut encoded = Vec::new();
+        signed.rlp_encode(&mut encoded);
+
+        let envelope = TxEnvelope::decode(&encoded).expect("decode signed tx");
+        TxContext::new(envelope, 0).expect("construct tx context")
+    }
+
+    #[test]
+    fn resolve_recipient_account_creates_mapping_for_unseen_eoa() {
+        let recipient = Address::repeat_byte(0xAB);
+        let tx = build_tx_context(recipient);
+        let mut env = MockEnv::default();
+
+        let resolved = tx
+            .resolve_recipient_account(&mut env)
+            .expect("resolve recipient");
+        assert_eq!(resolved, derive_eth_eoa_account_id(recipient));
+
+        let mapped = lookup_account_id_in_env(recipient, &mut env)
+            .expect("lookup recipient")
+            .expect("recipient mapping exists");
+        assert_eq!(mapped, resolved);
+    }
+
+    #[test]
+    fn resolve_recipient_account_prefers_existing_contract_mapping() {
+        let mut env = MockEnv::default();
+        let contract_id = derive_runtime_contract_account_id(b"mempool-test-contract");
+        let contract_address =
+            register_runtime_contract_account(contract_id, &mut env).expect("register contract");
+
+        let tx = build_tx_context(contract_address);
+        let resolved = tx
+            .resolve_recipient_account(&mut env)
+            .expect("resolve recipient");
+        assert_eq!(resolved, contract_id);
+    }
+}

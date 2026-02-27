@@ -8,7 +8,7 @@ use alloy_consensus::{SignableTransaction, TxEip1559};
 use alloy_primitives::{keccak256, Address, Bytes, PrimitiveSignature, TxKind, B256, U256};
 use clap::Parser;
 use evolve_core::AccountId;
-use evolve_tx_eth::address_to_account_id;
+use evolve_tx_eth::derive_eth_eoa_account_id;
 use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
 use rand::RngCore;
 use serde_json::{json, Value};
@@ -378,7 +378,7 @@ async fn run_loadtest(config: LoadtestConfig) -> Result<(), String> {
             wallets.push(WorkerWallet {
                 signing_key: key,
                 address,
-                account_id: address_to_account_id(address),
+                account_id: derive_eth_eoa_account_id(address),
                 next_nonce: 0,
             });
         }

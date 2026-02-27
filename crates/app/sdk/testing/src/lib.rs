@@ -111,7 +111,7 @@ impl MockEnv {
             StorageSetRequest::FUNCTION_IDENTIFIER => {
                 let storage_set: StorageSetRequest = request.get()?;
 
-                let mut key = self.whoami.as_bytes();
+                let mut key = self.whoami.as_bytes().to_vec();
                 key.extend(storage_set.key);
 
                 self.state.insert(key, storage_set.value.as_vec()?);
@@ -120,7 +120,7 @@ impl MockEnv {
             }
             StorageRemoveRequest::FUNCTION_IDENTIFIER => {
                 let storage_remove: StorageRemoveRequest = request.get()?;
-                let mut key = self.whoami.as_bytes();
+                let mut key = self.whoami.as_bytes().to_vec();
                 key.extend(storage_remove.key);
                 self.state.remove(&key);
                 Ok(InvokeResponse::new(&StorageRemoveResponse {})?)
@@ -134,7 +134,7 @@ impl MockEnv {
             StorageGetRequest::FUNCTION_IDENTIFIER => {
                 let storage_get: StorageGetRequest = request.get()?;
 
-                let mut key = storage_get.account_id.as_bytes();
+                let mut key = storage_get.account_id.as_bytes().to_vec();
                 key.extend(storage_get.key);
 
                 let value = self.state.get(&key).cloned();

@@ -6,6 +6,7 @@ use crate::eth_eoa::eth_eoa_account::{EthEoaAccount, EthEoaAccountRef};
 use evolve_authentication::AuthenticationTxValidator;
 use evolve_core::{AccountId, BlockContext, Environment, InvokeResponse, ReadonlyKV, SdkResult};
 use evolve_fungible_asset::FungibleAssetMetadata;
+use evolve_node::HasTokenAccountId;
 use evolve_scheduler::scheduler_account::{Scheduler, SchedulerRef};
 use evolve_scheduler::server::{SchedulerBeginBlocker, SchedulerEndBlocker};
 use evolve_server::Block;
@@ -13,8 +14,8 @@ use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::{Stf, StorageGasConfig};
 use evolve_stf_traits::{AccountsCodeStorage, PostTxExecution, WritableAccountsCodeStorage};
 use evolve_token::account::{Token, TokenRef};
-use evolve_tx_eth::address_to_account_id;
 use evolve_tx_eth::TxContext;
+use evolve_tx_eth::{register_runtime_contract_account, resolve_or_create_eoa_account};
 
 pub const MINTER: AccountId = AccountId::new(100_002);
 
@@ -78,55 +79,11 @@ pub struct GenesisAccounts {
     pub scheduler: AccountId,
 }
 
-/// Shared custom-genesis resources used by evd and testapp binaries.
-#[derive(Clone, Copy, Debug)]
-pub struct CustomGenesisResources {
-    pub alice: Option<AccountId>,
-    pub bob: Option<AccountId>,
-    pub token: AccountId,
-    pub scheduler: AccountId,
-}
-
-/// Initialize funded EOAs, token, and scheduler for custom genesis.
-pub fn initialize_custom_genesis_resources(
-    funded_accounts: &[([u8; 20], u128)],
-    metadata: FungibleAssetMetadata,
-    minter: AccountId,
-    env: &mut dyn Environment,
-) -> SdkResult<CustomGenesisResources> {
-    for (eth_addr, _) in funded_accounts {
-        EthEoaAccountRef::initialize(*eth_addr, env)?;
+impl HasTokenAccountId for GenesisAccounts {
+    fn token_account_id(&self) -> AccountId {
+        self.atom
     }
-
-    let balances: Vec<(AccountId, u128)> = funded_accounts
-        .iter()
-        .map(|(eth_addr, balance)| {
-            let addr = alloy_primitives::Address::from(*eth_addr);
-            (address_to_account_id(addr), *balance)
-        })
-        .collect();
-
-    let token = TokenRef::initialize(metadata, balances, Some(minter), env)?.0;
-
-    let scheduler_acc = SchedulerRef::initialize(vec![], vec![], env)?.0;
-    scheduler_acc.update_begin_blockers(vec![], env)?;
-
-    let alice = funded_accounts
-        .first()
-        .map(|(eth_addr, _)| address_to_account_id(alloy_primitives::Address::from(*eth_addr)));
-    let bob = funded_accounts
-        .get(1)
-        .map(|(eth_addr, _)| address_to_account_id(alloy_primitives::Address::from(*eth_addr)))
-        .or(alice);
-
-    Ok(CustomGenesisResources {
-        alice,
-        bob,
-        token: token.0,
-        scheduler: scheduler_acc.0,
-    })
 }
-
 fn parse_genesis_address_env(var: &str) -> Option<[u8; 20]> {
     use alloy_primitives::Address;
     use std::str::FromStr;
@@ -166,9 +123,11 @@ pub fn do_genesis_with_addresses(
         env,
     )?
     .0;
+    let _atom_eth_addr = register_runtime_contract_account(atom.0, env)?;
 
     // Create scheduler (no begin blockers needed for block info anymore)
     let scheduler_acc = SchedulerRef::initialize(vec![], vec![], env)?.0;
+    let _scheduler_eth_addr = register_runtime_contract_account(scheduler_acc.0, env)?;
 
     // Update scheduler's account's list.
     scheduler_acc.update_begin_blockers(vec![], env)?;
@@ -226,10 +185,9 @@ pub fn do_eth_genesis_inner(
     use alloy_primitives::Address;
     use std::str::FromStr;
 
-    // Convert Ethereum addresses to AccountIds
-    // (accounts should already be registered in storage)
-    let alice_id = address_to_account_id(Address::from(alice_eth_address));
-    let bob_id = address_to_account_id(Address::from(bob_eth_address));
+    // Resolve/create canonical EOA accounts from full 20-byte ETH addresses.
+    let alice_id = resolve_or_create_eoa_account(Address::from(alice_eth_address), env)?;
+    let bob_id = resolve_or_create_eoa_account(Address::from(bob_eth_address), env)?;
     let alice_balance = std::env::var("GENESIS_ALICE_TOKEN_BALANCE")
         .ok()
         .and_then(|v| u128::from_str(v.trim()).ok())
@@ -253,9 +211,11 @@ pub fn do_eth_genesis_inner(
         env,
     )?
     .0;
+    let _evolve_eth_addr = register_runtime_contract_account(evolve.0, env)?;
 
     // Create scheduler
     let scheduler_acc = SchedulerRef::initialize(vec![], vec![], env)?.0;
+    let _scheduler_eth_addr = register_runtime_contract_account(scheduler_acc.0, env)?;
     scheduler_acc.update_begin_blockers(vec![], env)?;
 
     Ok(EthGenesisAccounts {

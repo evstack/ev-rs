@@ -2,6 +2,7 @@ use alloy_primitives::Address;
 use borsh::{BorshDeserialize, BorshSerialize};
 use evolve_core::AccountId;
 use evolve_fungible_asset::FungibleAssetMetadata;
+use evolve_node::HasTokenAccountId;
 use serde::Deserialize;
 use std::collections::BTreeSet;
 
@@ -35,6 +36,12 @@ pub struct AccountConfig {
 pub struct EvdGenesisResult {
     pub token: AccountId,
     pub scheduler: AccountId,
+}
+
+impl HasTokenAccountId for EvdGenesisResult {
+    fn token_account_id(&self) -> AccountId {
+        self.token
+    }
 }
 
 impl EvdGenesisConfig {

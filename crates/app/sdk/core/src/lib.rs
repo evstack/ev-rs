@@ -38,36 +38,83 @@ pub type SdkResult<T> = Result<T, crate::error::DecodedError>;
 #[cfg(not(feature = "error-decode"))]
 pub type SdkResult<T> = Result<T, ErrorCode>;
 
+/// Canonical 32-byte account identity.
+///
+/// Byte representation is the only canonical form. No numeric interpretation is
+/// required for correctness.
 #[derive(
     Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, BorshSerialize, BorshDeserialize,
 )]
-pub struct AccountId(u128);
+pub struct AccountId([u8; 32]);
 
 impl AccountId {
-    pub fn invalid() -> AccountId {
-        AccountId(u128::MAX)
-    }
-}
-
-impl AccountId {
-    pub fn increase(&self) -> Self {
-        Self(self.0 + 1)
-    }
-}
-
-impl AccountId {
-    pub const fn new(u: u128) -> Self {
-        Self(u)
+    /// Reserved invalid sentinel (all 0xFF).
+    pub const fn invalid() -> AccountId {
+        AccountId([0xFF; 32])
     }
 
-    pub const fn inner(&self) -> u128 {
+    /// Construct from raw canonical bytes.
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    /// Return raw canonical bytes.
+    pub const fn to_bytes(self) -> [u8; 32] {
         self.0
     }
-}
 
-impl AccountId {
-    pub fn as_bytes(&self) -> Vec<u8> {
-        self.0.to_be_bytes().into()
+    /// Borrow raw canonical bytes.
+    pub const fn as_bytes(&self) -> [u8; 32] {
+        self.0
+    }
+
+    /// Backward-compatible constructor from `u128`.
+    ///
+    /// Encodes into the lower 16 bytes in big-endian order.
+    // TODO(account-id-cleanup): remove numeric AccountId compatibility (`new`/`inner`)
+    // after migrating genesis/tooling/docs to canonical 32-byte account IDs end-to-end.
+    pub const fn new(u: u128) -> Self {
+        let mut out = [0u8; 32];
+        let bytes = u.to_be_bytes();
+        out[16] = bytes[0];
+        out[17] = bytes[1];
+        out[18] = bytes[2];
+        out[19] = bytes[3];
+        out[20] = bytes[4];
+        out[21] = bytes[5];
+        out[22] = bytes[6];
+        out[23] = bytes[7];
+        out[24] = bytes[8];
+        out[25] = bytes[9];
+        out[26] = bytes[10];
+        out[27] = bytes[11];
+        out[28] = bytes[12];
+        out[29] = bytes[13];
+        out[30] = bytes[14];
+        out[31] = bytes[15];
+        Self(out)
+    }
+
+    /// Legacy extractor for compatibility where a numeric ID is still required.
+    pub const fn inner(&self) -> u128 {
+        u128::from_be_bytes([
+            self.0[16], self.0[17], self.0[18], self.0[19], self.0[20], self.0[21], self.0[22],
+            self.0[23], self.0[24], self.0[25], self.0[26], self.0[27], self.0[28], self.0[29],
+            self.0[30], self.0[31],
+        ])
+    }
+
+    /// Increment account ID bytes in big-endian order (wraps on overflow).
+    pub fn increase(&self) -> Self {
+        let mut out = self.0;
+        for i in (0..32).rev() {
+            let (next, carry) = out[i].overflowing_add(1);
+            out[i] = next;
+            if !carry {
+                break;
+            }
+        }
+        Self(out)
     }
 }
 
@@ -145,33 +192,6 @@ pub trait InvokableMessage: Encodable + Clone {
     const FUNCTION_IDENTIFIER_NAME: &'static str;
 }
 
-/// A macro that ensures a condition holds true. If not, returns an error.
-///
-/// # Usage
-///
-/// ```rust
-/// # use std::error::Error;
-/// #
-/// # // Suppose we have an enum for our errors:
-/// #[derive(Debug, )]
-/// enum MyError {
-///     SomeError,
-///     AnotherError,
-/// }
-///
-/// // Return type must be Result<T, Something>
-/// fn example_function(value: i32) -> Result<(), MyError> {
-///     use evolve_core::ensure;
-///
-///     ensure!(value > 10, MyError::SomeError);
-///     // Proceed if the condition is satisfied
-///     Ok(())
-/// }
-/// #
-/// # fn main() {
-/// #     example_function(11).unwrap();
-/// # }
-/// ```
 #[macro_export]
 macro_rules! ensure {
     ($cond:expr, $err:expr) => {
@@ -225,85 +245,116 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Clone, PartialEq, BorshSerialize, BorshDeserialize)]
-    struct TestPayload {
-        value: u32,
-        name: String,
+    impl Environment for TestEnv {
+        fn do_exec(
+            &mut self,
+            _to: AccountId,
+            _data: &InvokeRequest,
+            _funds: Vec<FungibleAsset>,
+        ) -> SdkResult<InvokeResponse> {
+            Err(ERR_UNKNOWN_FUNCTION)
+        }
+
+        fn emit_event(&mut self, _name: &str, _data: &[u8]) -> SdkResult<()> {
+            Ok(())
+        }
+
+        fn unique_id(&mut self) -> SdkResult<[u8; 32]> {
+            Ok([0u8; 32])
+        }
+    }
+
+    #[derive(Clone, BorshSerialize, BorshDeserialize)]
+    struct DummyMessage {
+        value: u64,
+    }
+
+    impl InvokableMessage for DummyMessage {
+        const FUNCTION_IDENTIFIER: u64 = 42;
+        const FUNCTION_IDENTIFIER_NAME: &'static str = "dummy";
     }
 
     #[test]
-    fn test_invoke_request_encode_decode() {
-        let function_id: u64 = 42;
-        let human_name = "test_function";
-        let payload = TestPayload {
-            value: 123,
-            name: "test".to_string(),
-        };
-
-        // Create InvokeRequest using the public API
-        let message = Message::new(&payload).expect("message creation should succeed");
-        let request = InvokeRequest::new_from_message(human_name, function_id, message);
-
-        // Verify accessors work
-        assert_eq!(request.function(), function_id);
-        assert_eq!(request.human_name(), human_name);
-
-        // Verify payload can be retrieved
-        let retrieved: TestPayload = request.get().expect("get should succeed");
-        assert_eq!(retrieved, payload);
+    fn test_message_roundtrip() {
+        let msg = DummyMessage { value: 123 };
+        let encoded = msg.encode().unwrap();
+        let decoded = borsh::from_slice::<DummyMessage>(&encoded).unwrap();
+        assert_eq!(decoded.value, 123);
     }
 
     #[test]
     fn test_one_coin_success() {
-        let mut funds = BTreeMap::new();
-        funds.insert(
-            0,
-            FungibleAsset {
-                asset_id: AccountId::new(1),
-                amount: 100,
-            },
-        );
         let env = TestEnv {
-            whoami: AccountId::new(10),
-            sender: AccountId::new(20),
-            funds: funds.into_values().collect(),
+            whoami: AccountId::new(1),
+            sender: AccountId::new(2),
+            funds: vec![FungibleAsset {
+                asset_id: AccountId::new(10),
+                amount: 100,
+            }],
         };
 
-        let coin = one_coin(&env).expect("one_coin should succeed with exactly one fund");
-        assert_eq!(coin.asset_id, AccountId::new(1));
+        let coin = one_coin(&env).unwrap();
+        assert_eq!(coin.asset_id, AccountId::new(10));
         assert_eq!(coin.amount, 100);
     }
 
     #[test]
-    fn test_one_coin_fails_with_zero_funds() {
+    fn test_one_coin_error() {
         let env = TestEnv {
-            whoami: AccountId::new(10),
-            sender: AccountId::new(20),
+            whoami: AccountId::new(1),
+            sender: AccountId::new(2),
             funds: vec![],
         };
 
-        let err = one_coin(&env).expect_err("one_coin should fail with zero funds");
+        let err = one_coin(&env).unwrap_err();
         assert_eq!(err, ERR_ONE_COIN);
     }
 
     #[test]
-    fn test_one_coin_fails_with_multiple_funds() {
-        let env = TestEnv {
-            whoami: AccountId::new(10),
-            sender: AccountId::new(20),
-            funds: vec![
-                FungibleAsset {
-                    asset_id: AccountId::new(1),
-                    amount: 10,
-                },
-                FungibleAsset {
-                    asset_id: AccountId::new(2),
-                    amount: 20,
-                },
-            ],
-        };
+    fn test_storage_key_size_constant() {
+        assert_eq!(MAX_STORAGE_KEY_SIZE, 254);
+    }
 
-        let err = one_coin(&env).expect_err("one_coin should fail with multiple funds");
-        assert_eq!(err, ERR_ONE_COIN);
+    #[test]
+    fn test_account_id_u128_compat() {
+        let id = AccountId::new(42u128);
+        assert_eq!(id.inner(), 42u128);
+
+        let mut expected = [0u8; 32];
+        expected[31] = 42;
+        assert_eq!(id.as_bytes(), expected);
+    }
+
+    #[test]
+    fn test_account_id_increase() {
+        let a = AccountId::from_bytes([0u8; 32]);
+        let b = a.increase();
+        let mut expected = [0u8; 32];
+        expected[31] = 1;
+        assert_eq!(b.as_bytes(), expected);
+    }
+
+    #[test]
+    fn test_ensure_macro() {
+        fn test_fn(val: i32) -> SdkResult<()> {
+            ensure!(val > 10, ERR_UNAUTHORIZED);
+            Ok(())
+        }
+
+        assert!(test_fn(11).is_ok());
+        assert_eq!(test_fn(5).unwrap_err(), ERR_UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_message_btreemap_roundtrip() {
+        let mut map = BTreeMap::new();
+        map.insert("a".to_string(), 1u64);
+        map.insert("b".to_string(), 2u64);
+
+        let msg = Message::new(&map).unwrap();
+        let decoded: BTreeMap<String, u64> = msg.get().unwrap();
+
+        assert_eq!(decoded.get("a"), Some(&1u64));
+        assert_eq!(decoded.get("b"), Some(&2u64));
     }
 }

@@ -11,18 +11,14 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Convert AccountId to serializable bytes.
-fn account_to_bytes(id: AccountId) -> [u8; 16] {
-    let bytes = id.as_bytes();
-    let mut arr = [0u8; 16];
-    arr.copy_from_slice(&bytes[..16]);
-    arr
+fn account_to_bytes(id: AccountId) -> [u8; 32] {
+    id.as_bytes()
 }
 
 /// Convert bytes back to AccountId.
 #[allow(dead_code)]
-fn bytes_to_account(bytes: [u8; 16]) -> AccountId {
-    let value = u128::from_be_bytes(bytes);
-    AccountId::new(value)
+fn bytes_to_account(bytes: [u8; 32]) -> AccountId {
+    AccountId::from_bytes(bytes)
 }
 
 /// A complete execution trace capturing all state transitions.
@@ -226,10 +222,10 @@ pub enum TraceEvent {
     /// Transaction execution started.
     TxStart {
         tx_id: [u8; 32],
-        /// Sender account ID as bytes (u128 big-endian).
-        sender: [u8; 16],
-        /// Recipient account ID as bytes (u128 big-endian).
-        recipient: [u8; 16],
+        /// Sender account ID as canonical 32 bytes.
+        sender: [u8; 32],
+        /// Recipient account ID as canonical 32 bytes.
+        recipient: [u8; 32],
         event_index: usize,
     },
 
@@ -243,10 +239,10 @@ pub enum TraceEvent {
 
     /// A call was made between accounts.
     Call {
-        /// Caller account ID as bytes (u128 big-endian).
-        from: [u8; 16],
-        /// Callee account ID as bytes (u128 big-endian).
-        to: [u8; 16],
+        /// Caller account ID as canonical 32 bytes.
+        from: [u8; 32],
+        /// Callee account ID as canonical 32 bytes.
+        to: [u8; 32],
         function_id: u64,
         data_hash: [u8; 32],
         event_index: usize,

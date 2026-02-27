@@ -30,3 +30,15 @@ define_error!(
     0x1D,
     "gas limit exceeds block limit"
 );
+
+// System/runtime lookup errors (0x50-0x5F range)
+define_error!(
+    ERR_RECIPIENT_REQUIRED,
+    0x50,
+    "recipient required (contract creation not supported yet)"
+);
+define_error!(
+    ERR_ADDRESS_ACCOUNT_CONFLICT,
+    0x5A,
+    "address/account registry conflict"
+);

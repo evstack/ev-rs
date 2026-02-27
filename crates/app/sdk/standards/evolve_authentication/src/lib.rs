@@ -42,8 +42,9 @@ impl<T: Transaction + AuthenticationPayload + Clone + Encodable + Decodable> TxV
     for AuthenticationTxValidator<T>
 {
     fn validate_tx(&self, tx: &T, env: &mut dyn Environment) -> SdkResult<()> {
+        let sender_account = tx.resolve_sender_account(env)?;
         // trigger authentication
-        auth_interface::AuthenticationInterfaceRef::new(tx.sender())
+        auth_interface::AuthenticationInterfaceRef::new(sender_account)
             .authenticate(tx.authentication_payload()?, env)
             .map_err(|e| {
                 if e == ERR_UNKNOWN_FUNCTION {

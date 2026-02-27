@@ -8,22 +8,26 @@
 //! 5. Token balances are updated correctly
 
 use alloy_consensus::{SignableTransaction, TxEip1559};
-use alloy_primitives::{Bytes, PrimitiveSignature, TxKind, U256};
+use alloy_primitives::{Address, Bytes, PrimitiveSignature, TxKind, B256, U256};
 use async_trait::async_trait;
 use evolve_core::{AccountId, ErrorCode, ReadonlyKV};
-use evolve_node::build_dev_node_with_mempool;
+use evolve_node::{build_dev_node_with_mempool, DevNodeMempoolHandles};
 use evolve_server::DevConfig;
+use evolve_simulator::{generate_signing_key, SimConfig, Simulator};
 use evolve_storage::{CommitHash, Operation};
 use evolve_testapp::{
     build_mempool_stf, default_gas_config, do_eth_genesis, install_account_codes,
+    EthGenesisAccounts, MempoolStf,
 };
 use evolve_testing::server_mocks::AccountStorageMock;
-use evolve_tx_eth::{account_id_to_address, EthGateway};
+use evolve_tx_eth::{derive_runtime_contract_address, EthGateway, TxContext};
 use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
-use rand::rngs::OsRng;
 use std::collections::BTreeMap;
 use std::sync::RwLock;
 use tiny_keccak::{Hasher, Keccak};
+
+type TestNodeHandles =
+    DevNodeMempoolHandles<MempoolStf, AsyncMockStorage, AccountStorageMock, TxContext>;
 
 // ============================================================================
 // Test Infrastructure
@@ -249,6 +253,157 @@ fn read_token_balance<S: ReadonlyKV>(
 // E2E Test
 // ============================================================================
 
+fn deterministic_signing_keys() -> (SigningKey, SigningKey) {
+    let mut simulator = Simulator::new(0xD15E_A5E5, SimConfig::default());
+    let alice_key = generate_signing_key(&mut simulator, 64).expect("alice signing key");
+    let bob_key = generate_signing_key(&mut simulator, 64).expect("bob signing key");
+    (alice_key, bob_key)
+}
+
+fn setup_genesis(
+    chain_id: u64,
+    alice_address: Address,
+    bob_address: Address,
+) -> (TestNodeHandles, EthGenesisAccounts, AccountId, AccountId) {
+    let mut codes = AccountStorageMock::new();
+    install_account_codes(&mut codes);
+
+    let init_storage = AsyncMockStorage::new();
+    let gas_config = default_gas_config();
+    let stf = build_mempool_stf(gas_config.clone(), AccountId::new(0));
+
+    let (genesis_state, genesis_accounts) = do_eth_genesis(
+        &stf,
+        &codes,
+        &init_storage,
+        alice_address.into(),
+        bob_address.into(),
+    )
+    .expect("genesis should succeed");
+
+    let genesis_changes = genesis_state.into_changes().expect("get changes");
+    init_storage.apply_changes(genesis_changes);
+
+    let stf = build_mempool_stf(gas_config, genesis_accounts.scheduler);
+    let config = DevConfig {
+        block_interval: None,
+        gas_limit: 30_000_000,
+        initial_height: 1,
+        chain_id,
+    };
+    let handles = build_dev_node_with_mempool(stf, init_storage, codes, config);
+
+    let alice_account_id =
+        evolve_tx_eth::lookup_account_id_in_storage(handles.dev.storage(), alice_address)
+            .expect("lookup alice id")
+            .expect("alice id exists");
+    let bob_account_id =
+        evolve_tx_eth::lookup_account_id_in_storage(handles.dev.storage(), bob_address)
+            .expect("lookup bob id")
+            .expect("bob id exists");
+
+    (handles, genesis_accounts, alice_account_id, bob_account_id)
+}
+
+fn build_transfer_tx(
+    alice_key: &SigningKey,
+    chain_id: u64,
+    token_address: Address,
+    bob_account_id: AccountId,
+    transfer_amount: u128,
+) -> Vec<u8> {
+    let selector = compute_selector("transfer");
+    let args = borsh::to_vec(&(bob_account_id, transfer_amount)).expect("encode args");
+    let mut calldata = Vec::with_capacity(4 + args.len());
+    calldata.extend_from_slice(&selector);
+    calldata.extend_from_slice(&args);
+
+    create_signed_tx(
+        alice_key,
+        chain_id,
+        0,
+        token_address,
+        U256::ZERO,
+        Bytes::from(calldata),
+    )
+}
+
+async fn submit_and_produce_block(handles: &TestNodeHandles, chain_id: u64, raw_tx: &[u8]) -> B256 {
+    let tx_hash = {
+        let gateway = EthGateway::new(chain_id);
+        let tx_context = gateway.decode_and_verify(raw_tx).expect("decode tx");
+        let mut pool = handles.mempool.write().await;
+        let tx_id = pool.add(tx_context).expect("add tx to mempool");
+        B256::from(tx_id)
+    };
+
+    assert_eq!(
+        handles.mempool.read().await.len(),
+        1,
+        "mempool should have 1 tx"
+    );
+
+    let block_result = handles
+        .dev
+        .produce_block_from_mempool(10)
+        .await
+        .expect("produce block");
+
+    assert_eq!(block_result.height, 1, "should be block 1");
+    assert_eq!(block_result.tx_count, 1, "should have 1 tx");
+    assert_eq!(
+        block_result.successful_txs, 1,
+        "transaction should have succeeded"
+    );
+    assert_eq!(
+        block_result.failed_txs, 0,
+        "no transactions should have failed"
+    );
+    assert!(
+        handles.mempool.read().await.is_empty(),
+        "mempool should be empty after block"
+    );
+
+    tx_hash
+}
+
+fn assert_post_block_state(
+    handles: &TestNodeHandles,
+    genesis_accounts: &EthGenesisAccounts,
+    alice_account_id: AccountId,
+    bob_account_id: AccountId,
+    transfer_amount: u128,
+    alice_balance_before: u128,
+    bob_balance_before: u128,
+) {
+    let alice_nonce_after = read_nonce(handles.dev.storage(), alice_account_id);
+    let alice_balance_after = read_token_balance(
+        handles.dev.storage(),
+        genesis_accounts.evolve,
+        alice_account_id,
+    );
+    let bob_balance_after = read_token_balance(
+        handles.dev.storage(),
+        genesis_accounts.evolve,
+        bob_account_id,
+    );
+
+    assert_eq!(
+        alice_nonce_after, 1,
+        "alice nonce should increment after tx"
+    );
+    assert_eq!(
+        alice_balance_after,
+        alice_balance_before - transfer_amount,
+        "alice balance should decrease by transfer amount"
+    );
+    assert_eq!(
+        bob_balance_after,
+        bob_balance_before + transfer_amount,
+        "bob balance should increase by transfer amount"
+    );
+}
+
 /// End-to-end test of token transfer via Ethereum transaction.
 ///
 /// This test verifies:
@@ -260,192 +415,49 @@ fn read_token_balance<S: ReadonlyKV>(
 #[tokio::test]
 async fn test_token_transfer_e2e() {
     let chain_id = 1337u64;
+    let transfer_amount = 100u128;
 
-    // Create signing keys for Alice and Bob
-    let alice_key = SigningKey::random(&mut OsRng);
-    let bob_key = SigningKey::random(&mut OsRng);
+    let (alice_key, bob_key) = deterministic_signing_keys();
     let alice_address = get_address(&alice_key);
     let bob_address = get_address(&bob_key);
 
-    // Set up account codes
-    let mut codes = AccountStorageMock::new();
-    install_account_codes(&mut codes);
-
-    // Derive account IDs from Ethereum addresses
-    let alice_account_id = evolve_tx_eth::address_to_account_id(alice_address);
-    let bob_account_id = evolve_tx_eth::address_to_account_id(bob_address);
-
-    // Create initial storage and pre-populate ETH EOA account data
-    let init_storage = AsyncMockStorage::new();
-
-    // Register account code identifiers (global storage)
-    init_storage.register_account_code(alice_account_id, "EthEoaAccount");
-    init_storage.register_account_code(bob_account_id, "EthEoaAccount");
-
-    // Initialize account storage (nonce, eth_address)
-    init_storage.init_eth_eoa_storage(alice_account_id, alice_address.into());
-    init_storage.init_eth_eoa_storage(bob_account_id, bob_address.into());
-
-    // Build STF for TxContext
-    let gas_config = default_gas_config();
-    let stf = build_mempool_stf(gas_config.clone(), AccountId::new(0));
-
-    // Run genesis to create token and scheduler
-    let (genesis_state, genesis_accounts) = do_eth_genesis(
-        &stf,
-        &codes,
-        &init_storage,
-        alice_address.into(),
-        bob_address.into(),
-    )
-    .expect("genesis should succeed");
-
-    // Apply genesis state changes to existing storage
-    let genesis_changes = genesis_state.into_changes().expect("get changes");
-    init_storage.apply_changes(genesis_changes);
-    let storage = init_storage;
-
-    // Rebuild STF with correct scheduler ID
-    let stf = build_mempool_stf(gas_config, genesis_accounts.scheduler);
-
-    let config = DevConfig {
-        block_interval: None, // Manual block production
-        gas_limit: 30_000_000,
-        initial_height: 1,
-        chain_id,
-    };
-    let handles = build_dev_node_with_mempool(stf, storage, codes, config);
-    let dev = handles.dev;
-    let mempool = handles.mempool;
+    let (handles, genesis_accounts, alice_account_id, bob_account_id) =
+        setup_genesis(chain_id, alice_address, bob_address);
 
     // Read initial state
-    let alice_nonce_before = read_nonce(dev.storage(), alice_account_id);
-    let alice_balance_before =
-        read_token_balance(dev.storage(), genesis_accounts.evolve, alice_account_id);
-    let bob_balance_before =
-        read_token_balance(dev.storage(), genesis_accounts.evolve, bob_account_id);
-
-    println!("Initial state:");
-    println!("  Alice nonce: {}", alice_nonce_before);
-    println!("  Alice token balance: {}", alice_balance_before);
-    println!("  Bob token balance: {}", bob_balance_before);
+    let alice_nonce_before = read_nonce(handles.dev.storage(), alice_account_id);
+    let alice_balance_before = read_token_balance(
+        handles.dev.storage(),
+        genesis_accounts.evolve,
+        alice_account_id,
+    );
+    let bob_balance_before = read_token_balance(
+        handles.dev.storage(),
+        genesis_accounts.evolve,
+        bob_account_id,
+    );
 
     assert_eq!(alice_nonce_before, 0);
-    assert_eq!(alice_balance_before, 1000); // From genesis
-    assert_eq!(bob_balance_before, 2000); // From genesis
+    assert_eq!(alice_balance_before, 1000);
+    assert_eq!(bob_balance_before, 2000);
 
-    // Build the transfer call
-    // Function: transfer(to: AccountId, amount: u128)
-    // Selector: keccak256("transfer")[0..4]
-    let transfer_amount = 100u128;
-    let selector = compute_selector("transfer");
-
-    // Borsh-encode the arguments: (AccountId, u128)
-    // AccountId is u128 (16 bytes), amount is u128 (16 bytes)
-    let args = borsh::to_vec(&(bob_account_id, transfer_amount)).expect("encode args");
-
-    // Calldata = selector + args
-    let mut calldata = Vec::with_capacity(4 + args.len());
-    calldata.extend_from_slice(&selector);
-    calldata.extend_from_slice(&args);
-
-    // Get token's Ethereum address
-    let token_address = account_id_to_address(genesis_accounts.evolve);
-
-    println!("\nTransaction details:");
-    println!("  Token account: {:?}", genesis_accounts.evolve);
-    println!("  Token address: {:?}", token_address);
-    println!("  Selector: 0x{}", hex::encode(selector));
-    println!("  Transfer amount: {}", transfer_amount);
-
-    // Create and sign transaction from Alice to Token
-    let raw_tx = create_signed_tx(
+    let token_address = derive_runtime_contract_address(genesis_accounts.evolve);
+    let raw_tx = build_transfer_tx(
         &alice_key,
         chain_id,
-        0, // nonce
         token_address,
-        U256::ZERO,
-        Bytes::from(calldata),
+        bob_account_id,
+        transfer_amount,
     );
 
-    // Submit transaction to mempool
-    let tx_hash = {
-        let gateway = EthGateway::new(chain_id);
-        let tx_context = gateway.decode_and_verify(&raw_tx).expect("decode tx");
-        let mut pool = mempool.write().await;
-        let tx_id = pool.add(tx_context).expect("add tx to mempool");
-        alloy_primitives::B256::from(tx_id)
-    };
-    println!("\nSubmitted transaction: {:?}", tx_hash);
-
-    // Verify transaction is in mempool
-    assert_eq!(mempool.read().await.len(), 1, "mempool should have 1 tx");
-
-    // Produce a block from mempool
-    let block_result = dev
-        .produce_block_from_mempool(10)
-        .await
-        .expect("produce block");
-
-    println!("\nBlock produced at height {}", block_result.height);
-    println!("  Transactions: {}", block_result.tx_count);
-    println!("  Successful: {}", block_result.successful_txs);
-    println!("  Failed: {}", block_result.failed_txs);
-
-    // Verify block was produced
-    assert_eq!(block_result.height, 1, "should be block 1");
-    assert_eq!(block_result.tx_count, 1, "should have 1 tx");
-    assert_eq!(
-        block_result.successful_txs, 1,
-        "transaction should have succeeded"
-    );
-    assert_eq!(
-        block_result.failed_txs, 0,
-        "no transactions should have failed"
-    );
-
-    // Mempool should be empty after block production
-    assert!(
-        mempool.read().await.is_empty(),
-        "mempool should be empty after block"
-    );
-
-    // Verify state changes
-    let alice_nonce_after = read_nonce(dev.storage(), alice_account_id);
-    let alice_balance_after =
-        read_token_balance(dev.storage(), genesis_accounts.evolve, alice_account_id);
-    let bob_balance_after =
-        read_token_balance(dev.storage(), genesis_accounts.evolve, bob_account_id);
-
-    println!("\nFinal state:");
-    println!("  Alice nonce: {}", alice_nonce_after);
-    println!("  Alice token balance: {}", alice_balance_after);
-    println!("  Bob token balance: {}", bob_balance_after);
-
-    // Verify nonce was incremented
-    assert_eq!(
-        alice_nonce_after, 1,
-        "alice nonce should increment after tx"
-    );
-
-    // Verify token balances changed correctly
-    assert_eq!(
-        alice_balance_after,
-        alice_balance_before - transfer_amount,
-        "alice balance should decrease by transfer amount"
-    );
-    assert_eq!(
-        bob_balance_after,
-        bob_balance_before + transfer_amount,
-        "bob balance should increase by transfer amount"
-    );
-
-    println!("\n✓ Token transfer e2e test passed!");
-    println!("  - Transaction submitted to mempool");
-    println!("  - DevConsensus produced block from mempool");
-    println!("  - Authentication succeeded (nonce incremented)");
-    println!(
-        "  - Token transfer executed ({} tokens from Alice to Bob)",
-        transfer_amount
+    let _tx_hash = submit_and_produce_block(&handles, chain_id, &raw_tx).await;
+    assert_post_block_state(
+        &handles,
+        &genesis_accounts,
+        alice_account_id,
+        bob_account_id,
+        transfer_amount,
+        alice_balance_before,
+        bob_balance_before,
     );
 }
