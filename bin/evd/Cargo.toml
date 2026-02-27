@@ -24,7 +24,6 @@ evolve_evnode = { workspace = true, features = ["testapp"] }
 evolve_testapp.workspace = true
 evolve_token.workspace = true
 evolve_scheduler.workspace = true
-evolve_fungible_asset.workspace = true
 evolve_testing.workspace = true
 evolve_tx_eth.workspace = true
 evolve_chain_index.workspace = true
@@ -42,8 +41,6 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 borsh.workspace = true
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
 
 [lints]
 workspace = true

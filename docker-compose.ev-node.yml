@@ -1,0 +1,7 @@
+services:
+  ev-node:
+    image: ghcr.io/evstack/ev-node-grpc:latest
+    depends_on:
+      - evd
+    environment:
+      EVD_GRPC_ENDPOINT: evd:50051
