@@ -287,7 +287,8 @@ fn build_on_block_executed(
     callback_max_gas: u64,
     callback_indexing_enabled: bool,
 ) -> (OnBlockExecuted, Arc<AtomicU64>) {
-    let parent_hash = Arc::new(std::sync::RwLock::new(B256::ZERO));
+    let initial_parent_hash = resolve_initial_parent_hash(chain_index.as_ref(), initial_height);
+    let parent_hash = Arc::new(std::sync::RwLock::new(initial_parent_hash));
     let current_height = Arc::new(AtomicU64::new(initial_height));
     let parent_hash_for_callback = Arc::clone(&parent_hash);
     let current_height_for_callback = Arc::clone(&current_height);
@@ -343,6 +344,72 @@ fn build_on_block_executed(
     });
 
     (on_block_executed, current_height)
+}
+
+fn resolve_initial_parent_hash(
+    chain_index: Option<&SharedChainIndex>,
+    initial_height: u64,
+) -> B256 {
+    let Some(index) = chain_index else {
+        return B256::ZERO;
+    };
+
+    match index.get_block(initial_height) {
+        Ok(Some(block)) => {
+            tracing::info!("Seeding parent hash from indexed block {}", initial_height);
+            return block.hash;
+        }
+        Ok(None) => {}
+        Err(err) => {
+            tracing::warn!(
+                "Failed to read indexed block {} while seeding parent hash: {:?}",
+                initial_height,
+                err
+            );
+        }
+    }
+
+    let latest_indexed = match index.latest_block_number() {
+        Ok(latest) => latest,
+        Err(err) => {
+            tracing::warn!(
+                "Failed to read latest indexed block while seeding parent hash: {:?}",
+                err
+            );
+            return B256::ZERO;
+        }
+    };
+
+    let Some(latest_height) = latest_indexed else {
+        return B256::ZERO;
+    };
+
+    if latest_height != initial_height {
+        tracing::warn!(
+            "Chain state height {} does not match indexed head {}; seeding parent hash from indexed head",
+            initial_height,
+            latest_height
+        );
+    }
+
+    match index.get_block(latest_height) {
+        Ok(Some(block)) => block.hash,
+        Ok(None) => {
+            tracing::warn!(
+                "Indexed head {} missing block payload while seeding parent hash",
+                latest_height
+            );
+            B256::ZERO
+        }
+        Err(err) => {
+            tracing::warn!(
+                "Failed to read indexed head block {} while seeding parent hash: {:?}",
+                latest_height,
+                err
+            );
+            B256::ZERO
+        }
+    }
 }
 
 fn log_server_configuration(config: &NodeConfig, initial_height: u64) {
@@ -689,30 +756,34 @@ mod tests {
     static ENV_VAR_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvVarGuard {
-        key: &'static str,
-        old: Option<String>,
+        entries: Vec<(&'static str, Option<String>)>,
         _guard: MutexGuard<'static, ()>,
     }
 
     impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
+        fn acquire() -> Self {
             let guard = ENV_VAR_LOCK.lock().expect("env var lock poisoned");
-            let old = std::env::var(key).ok();
-            std::env::set_var(key, value);
             Self {
-                key,
-                old,
+                entries: Vec::new(),
                 _guard: guard,
             }
+        }
+
+        fn set(&mut self, key: &'static str, value: &str) {
+            let old = std::env::var(key).ok();
+            std::env::set_var(key, value);
+            self.entries.push((key, old));
         }
     }
 
     impl Drop for EnvVarGuard {
         fn drop(&mut self) {
-            if let Some(value) = &self.old {
-                std::env::set_var(self.key, value);
-            } else {
-                std::env::remove_var(self.key);
+            for (key, old) in self.entries.iter().rev() {
+                if let Some(value) = old {
+                    std::env::set_var(key, value);
+                } else {
+                    std::env::remove_var(key);
+                }
             }
         }
     }
@@ -768,16 +839,17 @@ mod tests {
 
     #[test]
     fn default_genesis_funds_eth_mapped_sender_account() {
-        let _alice_addr = EnvVarGuard::set(
+        let mut env = EnvVarGuard::acquire();
+        env.set(
             "GENESIS_ALICE_ETH_ADDRESS",
             "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
         );
-        let _bob_addr = EnvVarGuard::set(
+        env.set(
             "GENESIS_BOB_ETH_ADDRESS",
             "0x70997970C51812dc3A010C7d01b50e0d17dc79C8",
         );
-        let _alice_bal = EnvVarGuard::set("GENESIS_ALICE_TOKEN_BALANCE", "1234");
-        let _bob_bal = EnvVarGuard::set("GENESIS_BOB_TOKEN_BALANCE", "5678");
+        env.set("GENESIS_ALICE_TOKEN_BALANCE", "1234");
+        env.set("GENESIS_BOB_TOKEN_BALANCE", "5678");
 
         let storage = MockStorage::new();
         let codes = build_codes();

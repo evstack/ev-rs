@@ -206,15 +206,17 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
     use evolve_token::account::TokenRef;
     use evolve_tx_eth::{register_runtime_contract_account, resolve_or_create_eoa_account};
 
-    let funded_accounts: Vec<([u8; 20], u128)> = config
+    let configured_accounts: Vec<([u8; 20], u128)> = config
         .accounts
         .iter()
-        .filter(|acc| acc.balance > 0)
         .map(|acc| {
             acc.parse_address()
                 .map(|addr| (addr.into_array(), acc.balance))
         })
         .collect::<Result<Vec<_>, _>>()?;
+    if configured_accounts.is_empty() {
+        return Err("custom genesis requires at least one account".into());
+    }
 
     let minter = AccountId::new(config.minter_id);
     let metadata = config.token.to_metadata();
@@ -223,7 +225,7 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
 
     let (accounts, state) = stf
         .system_exec(storage, codes, genesis_block, |env| {
-            let balances: Vec<(AccountId, u128)> = funded_accounts
+            let resolved_accounts: Vec<(AccountId, u128)> = configured_accounts
                 .iter()
                 .map(
                     |(eth_addr, balance)| -> evolve_core::SdkResult<(AccountId, u128)> {
@@ -232,6 +234,19 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
                     },
                 )
                 .collect::<evolve_core::SdkResult<Vec<_>>>()?;
+            let balances: Vec<(AccountId, u128)> = resolved_accounts
+                .iter()
+                .filter(|(_, balance)| *balance > 0)
+                .map(|(account_id, balance)| (*account_id, *balance))
+                .collect();
+            let alice_acc = resolved_accounts
+                .first()
+                .map(|(account_id, _)| *account_id)
+                .expect("configured_accounts validated as non-empty");
+            let bob_acc = resolved_accounts
+                .get(1)
+                .map(|(account_id, _)| *account_id)
+                .unwrap_or(alice_acc);
 
             let token = TokenRef::initialize(metadata.clone(), balances, Some(minter), env)?.0;
             let _token_eth_addr = register_runtime_contract_account(token.0, env)?;
@@ -241,8 +256,8 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
             scheduler_acc.update_begin_blockers(vec![], env)?;
 
             Ok(GenesisAccounts {
-                alice: token.0,
-                bob: token.0,
+                alice: alice_acc,
+                bob: bob_acc,
                 atom: token.0,
                 scheduler: scheduler_acc.0,
             })
@@ -371,6 +386,10 @@ mod tests {
             read_token_balance(&state, output.genesis_result.atom, mapped_id),
             777
         );
+        assert_eq!(output.genesis_result.alice, mapped_id);
+        assert_eq!(output.genesis_result.bob, mapped_id);
+        assert_ne!(output.genesis_result.alice, output.genesis_result.atom);
+        assert_ne!(output.genesis_result.bob, output.genesis_result.atom);
 
         assert_eq!(count_registered_code_id(&state, "EthEoaAccount"), 1);
     }
