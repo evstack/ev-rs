@@ -95,7 +95,17 @@ impl<'de> serde::Deserialize<'de> for SenderSpec {
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
             serde_json::Value::String(s) if s == "system" => Ok(SenderSpec::System),
-            serde_json::Value::String(s) => Ok(SenderSpec::Reference(s)),
+            serde_json::Value::String(s) if s.starts_with('$') => Ok(SenderSpec::Reference(s)),
+            serde_json::Value::String(s) => {
+                // Try hex-encoded account ID, fall back to reference
+                match hex::decode(s.trim_start_matches("0x")) {
+                    Ok(b) if b.len() == 32 => {
+                        let bytes: [u8; 32] = b.try_into().unwrap();
+                        Ok(SenderSpec::AccountId(AccountId::from_bytes(bytes)))
+                    }
+                    _ => Ok(SenderSpec::Reference(s)),
+                }
+            }
             serde_json::Value::Number(n) => {
                 let v = n
                     .as_u64()
@@ -138,7 +148,17 @@ impl<'de> serde::Deserialize<'de> for RecipientSpec {
         let value = serde_json::Value::deserialize(deserializer)?;
         match value {
             serde_json::Value::String(s) if s == "runtime" => Ok(RecipientSpec::Runtime),
-            serde_json::Value::String(s) => Ok(RecipientSpec::Reference(s)),
+            serde_json::Value::String(s) if s.starts_with('$') => Ok(RecipientSpec::Reference(s)),
+            serde_json::Value::String(s) => {
+                // Try hex-encoded account ID, fall back to reference
+                match hex::decode(s.trim_start_matches("0x")) {
+                    Ok(b) if b.len() == 32 => {
+                        let bytes: [u8; 32] = b.try_into().unwrap();
+                        Ok(RecipientSpec::AccountId(AccountId::from_bytes(bytes)))
+                    }
+                    _ => Ok(RecipientSpec::Reference(s)),
+                }
+            }
             serde_json::Value::Number(n) => {
                 let v = n
                     .as_u64()

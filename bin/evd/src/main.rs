@@ -655,11 +655,7 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
             (addr.into_array(), acc.balance)
         })
         .collect();
-    let minter = {
-        let mut b = [0u8; 32];
-        b[16..32].copy_from_slice(&genesis_config.minter_id.to_be_bytes());
-        AccountId::from_bytes(b)
-    };
+    let minter = AccountId::from_u64(genesis_config.minter_id);
     let metadata = genesis_config.token.to_metadata();
 
     let gas_config = default_gas_config();
