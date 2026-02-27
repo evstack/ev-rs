@@ -91,7 +91,7 @@ mod tests {
 
     #[test]
     fn test_runtime_contract_address_is_deterministic() {
-        let id = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,17,34,51]);
+        let id = AccountId::from_u64(1122867);
         let a = derive_runtime_contract_address(id);
         let b = derive_runtime_contract_address(id);
         assert_eq!(a, b);

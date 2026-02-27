@@ -1,10 +1,7 @@
 use crate::{AccountId, InvokableMessage, Message};
 use borsh::{BorshDeserialize, BorshSerialize};
 
-pub const STORAGE_ACCOUNT_ID: AccountId = AccountId::from_bytes([
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 1,
-]);
+pub const STORAGE_ACCOUNT_ID: AccountId = AccountId::from_u64(1);
 
 #[derive(BorshDeserialize, BorshSerialize, Clone)]
 pub struct StorageGetRequest {

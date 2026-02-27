@@ -58,6 +58,18 @@ impl AccountId {
         Self(bytes)
     }
 
+    /// Construct from a `u64` numeric identifier.
+    ///
+    /// Encodes `n` in the last 8 bytes (indices 24–31) in big-endian order.
+    /// Suitable for well-known system accounts and test fixtures.
+    pub const fn from_u64(n: u64) -> Self {
+        let b = n.to_be_bytes();
+        Self([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b[0], b[1],
+            b[2], b[3], b[4], b[5], b[6], b[7],
+        ])
+    }
+
     /// Return raw canonical bytes.
     pub const fn to_bytes(self) -> [u8; 32] {
         self.0
@@ -249,45 +261,24 @@ mod tests {
     #[test]
     fn test_one_coin_success() {
         let env = TestEnv {
-            whoami: AccountId::from_bytes([
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 1,
-            ]),
-            sender: AccountId::from_bytes([
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 2,
-            ]),
+            whoami: AccountId::from_u64(1),
+            sender: AccountId::from_u64(2),
             funds: vec![FungibleAsset {
-                asset_id: AccountId::from_bytes([
-                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                    0, 0, 0, 0, 0, 0, 10,
-                ]),
+                asset_id: AccountId::from_u64(10),
                 amount: 100,
             }],
         };
 
         let coin = one_coin(&env).unwrap();
-        assert_eq!(
-            coin.asset_id,
-            AccountId::from_bytes([
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 10,
-            ])
-        );
+        assert_eq!(coin.asset_id, AccountId::from_u64(10));
         assert_eq!(coin.amount, 100);
     }
 
     #[test]
     fn test_one_coin_error() {
         let env = TestEnv {
-            whoami: AccountId::from_bytes([
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 1,
-            ]),
-            sender: AccountId::from_bytes([
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 0, 0, 2,
-            ]),
+            whoami: AccountId::from_u64(1),
+            sender: AccountId::from_u64(2),
             funds: vec![],
         };
 
@@ -302,17 +293,14 @@ mod tests {
 
     #[test]
     fn test_account_id_u128_compat() {
-        let id = AccountId::from_bytes([
-            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0, 0, 0, 42,
-        ]);
+        let id = AccountId::from_u64(42);
         assert_eq!(id.as_bytes()[31], 42u8);
         assert_eq!(id.as_bytes()[0..31], [0u8; 31]);
     }
 
     #[test]
     fn test_account_id_increase() {
-        let a = AccountId::from_bytes([0u8; 32]);
+        let a = AccountId::from_u64(0);
         let b = a.increase();
         let mut expected = [0u8; 32];
         expected[31] = 1;

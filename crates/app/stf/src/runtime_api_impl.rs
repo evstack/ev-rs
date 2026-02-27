@@ -38,7 +38,7 @@ pub(crate) fn next_account_number<S: ReadonlyKV>(
     let last = storage
         .get(&key)?
         .map(|msg| msg.get())
-        .unwrap_or(Ok(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,255,255])))?;
+        .unwrap_or(Ok(AccountId::from_u64(65535)))?;
 
     // set next
     storage.set(&key, Message::new(&last.increase())?)?;

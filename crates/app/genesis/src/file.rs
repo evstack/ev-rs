@@ -40,7 +40,7 @@ pub struct GenesisTxJson {
     pub id: Option<String>,
 
     /// Sender specification.
-    /// - "system": Use the system account (AccountId::from_bytes([0u8; 32]))
+    /// - "system": Use the system account (AccountId::from_u64(0))
     /// - "$ref": Reference a previously created account
     /// - number: Use a specific account ID
     #[serde(default = "default_sender")]
@@ -200,31 +200,30 @@ impl GenesisFile {
         let mut txs = Vec::with_capacity(self.transactions.len());
         let mut id_to_account: HashMap<String, AccountId> = HashMap::new();
         // Start from 1, 0 is system
-        let mut next_account_id = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]);
+        let mut next_account_id = AccountId::from_u64(1);
 
         for (idx, tx_json) in self.transactions.iter().enumerate() {
             // Resolve sender
-            let sender =
-                match &tx_json.sender {
-                    SenderSpec::System => SYSTEM_ACCOUNT_ID,
-                    SenderSpec::Reference(r) if r.starts_with('$') => {
-                        let ref_id = &r[1..];
-                        *id_to_account.get(ref_id).ok_or_else(|| {
-                            GenesisError::InvalidReference(ref_id.to_string(), idx)
-                        })?
-                    }
-                    SenderSpec::Reference(r) => {
-                        // Treat as hex-encoded 32-byte account ID
-                        let bytes = hex::decode(r.trim_start_matches("0x"))
-                            .ok()
-                            .and_then(|b| <[u8; 32]>::try_from(b).ok())
-                            .ok_or_else(|| {
-                                GenesisError::ParseError(format!("invalid sender: {}", r))
-                            })?;
-                        AccountId::from_bytes(bytes)
-                    }
-                    SenderSpec::AccountId(id) => AccountId::from_bytes(*id),
-                };
+            let sender = match &tx_json.sender {
+                SenderSpec::System => SYSTEM_ACCOUNT_ID,
+                SenderSpec::Reference(r) if r.starts_with('$') => {
+                    let ref_id = &r[1..];
+                    *id_to_account
+                        .get(ref_id)
+                        .ok_or_else(|| GenesisError::InvalidReference(ref_id.to_string(), idx))?
+                }
+                SenderSpec::Reference(r) => {
+                    // Treat as hex-encoded 32-byte account ID
+                    let bytes = hex::decode(r.trim_start_matches("0x"))
+                        .ok()
+                        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                        .ok_or_else(|| {
+                            GenesisError::ParseError(format!("invalid sender: {}", r))
+                        })?;
+                    AccountId::from_bytes(bytes)
+                }
+                SenderSpec::AccountId(id) => AccountId::from_bytes(*id),
+            };
 
             // Resolve recipient
             let recipient = match &tx_json.recipient {
@@ -285,7 +284,9 @@ fn resolve_references_in_value(
             let account_id = id_to_account
                 .get(ref_id)
                 .ok_or_else(|| GenesisError::InvalidReference(ref_id.to_string(), 0))?;
-            Ok(serde_json::Value::String(hex::encode(account_id.as_bytes())))
+            Ok(serde_json::Value::String(hex::encode(
+                account_id.as_bytes(),
+            )))
         }
         serde_json::Value::Array(arr) => {
             let resolved: Result<Vec<_>, _> = arr
@@ -377,7 +378,7 @@ mod tests {
     #[test]
     fn test_resolve_references_in_value() {
         let mut id_to_account = HashMap::new();
-        id_to_account.insert("alice".to_string(), AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]));
+        id_to_account.insert("alice".to_string(), AccountId::from_u64(1));
 
         let value = serde_json::json!({
             "account": "$alice",
@@ -390,9 +391,18 @@ mod tests {
         let resolved = resolve_references_in_value(&value, &id_to_account).unwrap();
 
         // Account IDs are resolved as hex strings
-        assert_eq!(resolved["account"], "0000000000000000000000000000000000000000000000000000000000000001");
-        assert_eq!(resolved["nested"]["ref"], "0000000000000000000000000000000000000000000000000000000000000001");
-        assert_eq!(resolved["list"][0], "0000000000000000000000000000000000000000000000000000000000000001");
+        assert_eq!(
+            resolved["account"],
+            "0000000000000000000000000000000000000000000000000000000000000001"
+        );
+        assert_eq!(
+            resolved["nested"]["ref"],
+            "0000000000000000000000000000000000000000000000000000000000000001"
+        );
+        assert_eq!(
+            resolved["list"][0],
+            "0000000000000000000000000000000000000000000000000000000000000001"
+        );
         assert_eq!(resolved["list"][1], "literal");
     }
 
@@ -478,7 +488,10 @@ mod tests {
         let genesis = GenesisFile::parse(json).unwrap();
         assert!(matches!(
             genesis.transactions[0].sender,
-            SenderSpec::AccountId([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,123])
+            SenderSpec::AccountId([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 123
+            ])
         ));
     }
 
@@ -507,7 +520,10 @@ mod tests {
         let genesis = GenesisFile::parse(json).unwrap();
         assert!(matches!(
             genesis.transactions[0].recipient,
-            RecipientSpec::AccountId([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,200])
+            RecipientSpec::AccountId([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 1, 200
+            ])
         ));
     }
 
@@ -594,8 +610,8 @@ mod tests {
         let txs = genesis.to_transactions(&registry).unwrap();
 
         assert_eq!(txs.len(), 3);
-        assert_eq!(txs[2].sender, AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]));
-        assert_eq!(txs[2].recipient, AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]));
+        assert_eq!(txs[2].sender, AccountId::from_u64(1));
+        assert_eq!(txs[2].recipient, AccountId::from_u64(1));
     }
 
     #[test]

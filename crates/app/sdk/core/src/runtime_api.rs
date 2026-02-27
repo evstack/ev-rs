@@ -3,7 +3,7 @@ use crate::{AccountId, InvokableMessage, InvokeRequest, InvokeResponse};
 use borsh::{BorshDeserialize, BorshSerialize};
 pub const ACCOUNT_IDENTIFIER_PREFIX: u8 = 0;
 pub const ACCOUNT_IDENTIFIER_SINGLETON_PREFIX: u8 = 1;
-pub const RUNTIME_ACCOUNT_ID: AccountId = AccountId::from_bytes([0u8; 32]);
+pub const RUNTIME_ACCOUNT_ID: AccountId = AccountId::from_u64(0);
 
 /// Storage key for consensus parameters.
 /// This is a well-known key that nodes read to validate blocks during sync.

@@ -188,7 +188,7 @@ mod tests {
         initial_balance: u128,
     ) -> (Token, MockEnv) {
         // We'll make the contract's address distinct from the manager and holder
-        let contract_address = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]);
+        let contract_address = AccountId::from_u64(1);
 
         // Initialize environment such that `env.sender()` is the supply manager
         let mut env = MockEnv::new(contract_address, supply_manager);
@@ -210,12 +210,7 @@ mod tests {
 
         // Initialize the token
         token
-            .initialize(
-                metadata,
-                balances,
-                Some(supply_manager),
-                &mut env,
-            )
+            .initialize(metadata, balances, Some(supply_manager), &mut env)
             .expect("Failed to initialize token");
 
         (token, env)
@@ -224,8 +219,8 @@ mod tests {
     #[test]
     fn test_initialize_and_metadata() {
         // Supply manager = 42, initial holder = 10, balance = 1_000
-        let sm42 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,42]);
-        let h10 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]);
+        let sm42 = AccountId::from_u64(42);
+        let h10 = AccountId::from_u64(10);
         let (token, mut env) = setup_token(sm42, h10, 1000);
 
         // Check the metadata query
@@ -250,8 +245,8 @@ mod tests {
     #[test]
     fn test_mint_authorized() {
         // supply_manager = 100, initial_holder = 10, balance=500
-        let sm100 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
-        let h10 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]);
+        let sm100 = AccountId::from_u64(100);
+        let h10 = AccountId::from_u64(10);
         let (token, mut env) = setup_token(sm100, h10, 500);
 
         // We'll mint to holder 10 some extra tokens.
@@ -280,18 +275,15 @@ mod tests {
     #[test]
     fn test_mint_unauthorized() {
         // supply_manager = 100, but environment sender is changed to 999
-        let sm100 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
-        let h10 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]);
+        let sm100 = AccountId::from_u64(100);
+        let h10 = AccountId::from_u64(10);
         let (token, mut env) = setup_token(sm100, h10, 500);
 
         // Change the environment's sender to something not the supply_manager
-        let new_sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,231]);
+        let new_sender = AccountId::from_u64(999);
         env = env.with_sender(new_sender);
 
-        let before_balance = token
-            .get_balance(h10, &mut env)
-            .unwrap()
-            .unwrap();
+        let before_balance = token.get_balance(h10, &mut env).unwrap().unwrap();
         let before_supply = token.total_supply(&mut env).unwrap();
 
         // Attempt to mint
@@ -301,10 +293,7 @@ mod tests {
             "Mint should fail with ERR_UNAUTHORIZED"
         );
 
-        let after_balance = token
-            .get_balance(h10, &mut env)
-            .unwrap()
-            .unwrap();
+        let after_balance = token.get_balance(h10, &mut env).unwrap().unwrap();
         let after_supply = token.total_supply(&mut env).unwrap();
         assert_eq!(after_balance, before_balance);
         assert_eq!(after_supply, before_supply);
@@ -313,8 +302,8 @@ mod tests {
     #[test]
     fn test_burn_authorized() {
         // supply_manager = 42, initial_holder = 10, balance=1000
-        let sm42 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,42]);
-        let h10 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]);
+        let sm42 = AccountId::from_u64(42);
+        let h10 = AccountId::from_u64(10);
         let (token, mut env) = setup_token(sm42, h10, 1000);
 
         // We'll burn from holder 10
@@ -346,17 +335,14 @@ mod tests {
 
     #[test]
     fn test_burn_unauthorized() {
-        let sm42 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,42]);
-        let h10 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]);
+        let sm42 = AccountId::from_u64(42);
+        let h10 = AccountId::from_u64(10);
         let (token, mut env) = setup_token(sm42, h10, 500);
 
         // Change environment's sender to 999
-        env = env.with_sender(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,231]));
+        env = env.with_sender(AccountId::from_u64(999));
 
-        let before_balance = token
-            .get_balance(h10, &mut env)
-            .unwrap()
-            .unwrap();
+        let before_balance = token.get_balance(h10, &mut env).unwrap().unwrap();
         let before_supply = token.total_supply(&mut env).unwrap();
 
         // Attempt to burn
@@ -366,10 +352,7 @@ mod tests {
             "Burn should fail with ERR_UNAUTHORIZED"
         );
 
-        let after_balance = token
-            .get_balance(h10, &mut env)
-            .unwrap()
-            .unwrap();
+        let after_balance = token.get_balance(h10, &mut env).unwrap().unwrap();
         let after_supply = token.total_supply(&mut env).unwrap();
         assert_eq!(after_balance, before_balance);
         assert_eq!(after_supply, before_supply);
@@ -378,8 +361,8 @@ mod tests {
     #[test]
     fn test_transfer_sufficient_balance() {
         // supply_manager=1, just ignore it for now. initial_holder=50, balance=1000
-        let sm1 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]);
-        let h50 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,50]);
+        let sm1 = AccountId::from_u64(1);
+        let h50 = AccountId::from_u64(50);
         let (token, mut env) = setup_token(sm1, h50, 1000);
 
         // For transfer, the environment's sender is the one transferring.
@@ -388,7 +371,7 @@ mod tests {
         env = env.with_sender(h50);
 
         // Transfer 300 tokens from 50 -> 60
-        let recipient = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,60]);
+        let recipient = AccountId::from_u64(60);
         let supply_before = token.total_supply(&mut env).unwrap();
         let result = token.transfer(recipient, 300, &mut env);
         assert!(
@@ -396,10 +379,7 @@ mod tests {
             "Transfer should succeed with enough balance"
         );
 
-        let from_balance = token
-            .get_balance(h50, &mut env)
-            .unwrap()
-            .unwrap();
+        let from_balance = token.get_balance(h50, &mut env).unwrap().unwrap();
         assert_eq!(
             from_balance, 700,
             "Should have subtracted 300 tokens from sender"
@@ -416,19 +396,14 @@ mod tests {
 
     #[test]
     fn test_transfer_insufficient_balance() {
-        let sm1 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]);
-        let h50 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,50]);
-        let h60 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,60]);
+        let sm1 = AccountId::from_u64(1);
+        let h50 = AccountId::from_u64(50);
+        let h60 = AccountId::from_u64(60);
         let (token, mut env) = setup_token(sm1, h50, 100);
 
         env = env.with_sender(h50);
-        let before_from = token
-            .get_balance(h50, &mut env)
-            .unwrap()
-            .unwrap();
-        let before_to = token
-            .get_balance(h60, &mut env)
-            .unwrap_or(None);
+        let before_from = token.get_balance(h50, &mut env).unwrap().unwrap();
+        let before_to = token.get_balance(h60, &mut env).unwrap_or(None);
         let before_supply = token.total_supply(&mut env).unwrap();
 
         // Attempt to transfer 999, but user only has 100
@@ -438,13 +413,8 @@ mod tests {
             "Should fail with ERR_NOT_ENOUGH_BALANCE"
         );
 
-        let after_from = token
-            .get_balance(h50, &mut env)
-            .unwrap()
-            .unwrap();
-        let after_to = token
-            .get_balance(h60, &mut env)
-            .unwrap_or(None);
+        let after_from = token.get_balance(h50, &mut env).unwrap().unwrap();
+        let after_to = token.get_balance(h60, &mut env).unwrap_or(None);
         let after_supply = token.total_supply(&mut env).unwrap();
         assert_eq!(after_from, before_from);
         assert_eq!(after_to, before_to);
@@ -453,8 +423,8 @@ mod tests {
 
     #[test]
     fn test_burn_underflow_preserves_state() {
-        let sm42 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,42]);
-        let h10 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]);
+        let sm42 = AccountId::from_u64(42);
+        let h10 = AccountId::from_u64(10);
         let (token, mut env) = setup_token(sm42, h10, 50);
 
         let holder = h10;
@@ -473,13 +443,13 @@ mod tests {
     #[test]
     fn test_get_balance_not_set_yet() {
         // supply_manager=2, initial_holder=10, initial_balance=100
-        let sm2 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2]);
-        let h10 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]);
+        let sm2 = AccountId::from_u64(2);
+        let h10 = AccountId::from_u64(10);
         let (token, mut env) = setup_token(sm2, h10, 100);
 
         // Query an account that wasn't given an initial balance
         let balance = token
-            .get_balance(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,231]), &mut env)
+            .get_balance(AccountId::from_u64(999), &mut env)
             .expect("call failed");
         assert_eq!(balance, None, "Account 999 should not have a balance yet");
     }

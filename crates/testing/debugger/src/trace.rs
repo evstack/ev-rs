@@ -520,7 +520,7 @@ mod tests {
         let mut builder = TraceBuilder::new(42, StateSnapshot::empty());
 
         builder.block_start(0, 1000);
-        builder.tx_start([1; 32], AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]), AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2]));
+        builder.tx_start([1; 32], AccountId::from_u64(1), AccountId::from_u64(2));
         builder.state_change(b"key".to_vec(), None, Some(b"value".to_vec()));
         builder.tx_end([1; 32], true, 100);
         builder.block_end(0, [0; 32]);

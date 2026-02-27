@@ -125,7 +125,7 @@ mod tests {
     impl AuthEnv {
         fn new(sender: AccountId, auth_result: Result<(), ErrorCode>) -> Self {
             Self {
-                whoami: AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,231]),
+                whoami: AccountId::from_u64(999),
                 sender,
                 auth_result,
                 last_exec_to: None,
@@ -184,7 +184,7 @@ mod tests {
     fn make_tx(sender: AccountId) -> DummyTx {
         DummyTx {
             sender,
-            recipient: AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,200]),
+            recipient: AccountId::from_u64(200),
             request: InvokeRequest::new(&DummyInvoke { value: 1 }).expect("request should encode"),
             payload: Message::new(&DummyInvoke { value: 42 }).expect("payload should encode"),
         }
@@ -192,7 +192,7 @@ mod tests {
 
     #[test]
     fn validate_tx_dispatches_auth_to_sender_account() {
-        let sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
+        let sender = AccountId::from_u64(100);
         let tx = make_tx(sender);
         let validator = AuthenticationTxValidator::<DummyTx>::new();
         let mut env = AuthEnv::new(sender, Ok(()));
@@ -207,7 +207,7 @@ mod tests {
 
     #[test]
     fn validate_tx_maps_unknown_function_to_not_eoa() {
-        let sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
+        let sender = AccountId::from_u64(100);
         let tx = make_tx(sender);
         let validator = AuthenticationTxValidator::<DummyTx>::new();
         let mut env = AuthEnv::new(sender, Err(ERR_UNKNOWN_FUNCTION));
@@ -221,7 +221,7 @@ mod tests {
 
     #[test]
     fn validate_tx_preserves_non_unknown_errors() {
-        let sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
+        let sender = AccountId::from_u64(100);
         let tx = make_tx(sender);
         let validator = AuthenticationTxValidator::<DummyTx>::new();
         let mut env = AuthEnv::new(sender, Err(evolve_core::ERR_UNAUTHORIZED));

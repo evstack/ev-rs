@@ -134,7 +134,7 @@ mod tests {
 
     fn setup_scheduler() -> (Scheduler, MockEnv) {
         let scheduler = Scheduler::default();
-        let contract_address = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]);
+        let contract_address = AccountId::from_u64(1);
         let mut env = MockEnv::new(contract_address, RUNTIME_ACCOUNT_ID);
 
         scheduler
@@ -147,9 +147,9 @@ mod tests {
     #[test]
     fn update_begin_blockers_requires_runtime_sender() {
         let (scheduler, mut env) = setup_scheduler();
-        env = env.with_sender(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,231]));
+        env = env.with_sender(AccountId::from_u64(999));
 
-        let result = scheduler.update_begin_blockers(vec![AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10])], &mut env);
+        let result = scheduler.update_begin_blockers(vec![AccountId::from_u64(10)], &mut env);
         assert!(matches!(result, Err(e) if e == ERR_UNAUTHORIZED));
 
         let stored = scheduler
@@ -163,9 +163,9 @@ mod tests {
     #[test]
     fn update_end_blockers_requires_runtime_sender() {
         let (scheduler, mut env) = setup_scheduler();
-        env = env.with_sender(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,231]));
+        env = env.with_sender(AccountId::from_u64(999));
 
-        let result = scheduler.update_end_blockers(vec![AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,20])], &mut env);
+        let result = scheduler.update_end_blockers(vec![AccountId::from_u64(20)], &mut env);
         assert!(matches!(result, Err(e) if e == ERR_UNAUTHORIZED));
 
         let stored = scheduler
@@ -181,13 +181,13 @@ mod tests {
         let (scheduler, mut env) = setup_scheduler();
 
         scheduler
-            .update_begin_blockers(vec![
-                AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]),
-                AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11]),
-            ], &mut env)
+            .update_begin_blockers(
+                vec![AccountId::from_u64(10), AccountId::from_u64(11)],
+                &mut env,
+            )
             .unwrap();
         scheduler
-            .update_end_blockers(vec![AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,20])], &mut env)
+            .update_end_blockers(vec![AccountId::from_u64(20)], &mut env)
             .unwrap();
 
         let begin = scheduler
@@ -207,7 +207,7 @@ mod tests {
     #[test]
     fn schedule_methods_require_runtime_sender() {
         let (scheduler, mut env) = setup_scheduler();
-        env = env.with_sender(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,231]));
+        env = env.with_sender(AccountId::from_u64(999));
 
         let begin_result = scheduler.schedule_begin_block(&mut env);
         assert!(matches!(begin_result, Err(e) if e == ERR_UNAUTHORIZED));

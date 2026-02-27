@@ -17,7 +17,7 @@ use evolve_token::account::{Token, TokenRef};
 use evolve_tx_eth::TxContext;
 use evolve_tx_eth::{register_runtime_contract_account, resolve_or_create_eoa_account};
 
-pub const MINTER: AccountId = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,134,162]);
+pub const MINTER: AccountId = AccountId::from_u64(100002);
 
 pub struct MempoolNoOpPostTx;
 
@@ -42,7 +42,7 @@ pub type MempoolStf = Stf<
     MempoolNoOpPostTx,
 >;
 
-pub const PLACEHOLDER_ACCOUNT: AccountId = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255]);
+pub const PLACEHOLDER_ACCOUNT: AccountId = AccountId::from_u64(u64::MAX);
 
 /// Default gas configuration for the test application.
 pub fn default_gas_config() -> StorageGasConfig {

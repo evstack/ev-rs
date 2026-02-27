@@ -48,8 +48,8 @@ mod tests {
     impl TestEnv {
         fn new() -> Self {
             Self {
-                whoami: AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]),
-                sender: AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2]),
+                whoami: AccountId::from_u64(1),
+                sender: AccountId::from_u64(2),
                 last_query: None,
                 last_exec: None,
             }
@@ -116,7 +116,7 @@ mod tests {
     #[test]
     fn interface_ref_queries_decode_expected_types() {
         let mut env = TestEnv::new();
-        let account = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]);
+        let account = AccountId::from_u64(10);
         let fa = FungibleAssetInterfaceRef::new(account);
 
         let metadata = fa
@@ -127,7 +127,7 @@ mod tests {
         assert_eq!(metadata.decimals, 6);
 
         let balance = fa
-            .get_balance(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,231]), &mut env)
+            .get_balance(AccountId::from_u64(999), &mut env)
             .expect("balance query should succeed");
         assert_eq!(balance, Some(123));
 
@@ -141,10 +141,10 @@ mod tests {
     #[test]
     fn interface_ref_transfer_dispatches_exec_call() {
         let mut env = TestEnv::new();
-        let account = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]);
+        let account = AccountId::from_u64(10);
         let fa = FungibleAssetInterfaceRef::new(account);
 
-        fa.transfer(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11]), 55, &mut env)
+        fa.transfer(AccountId::from_u64(11), 55, &mut env)
             .expect("transfer should succeed");
 
         assert_eq!(env.last_exec.as_deref(), Some("transfer"));
