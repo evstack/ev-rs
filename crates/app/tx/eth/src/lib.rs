@@ -35,6 +35,7 @@
 
 pub mod decoder;
 pub mod envelope;
+pub mod eoa_registry;
 pub mod error;
 pub mod ethereum;
 pub mod gateway;
@@ -45,9 +46,18 @@ pub mod verifier;
 // Re-export main types
 pub use decoder::TypedTxDecoder;
 pub use envelope::{tx_type, TxEnvelope};
+pub use eoa_registry::{
+    lookup_account_id_in_env, lookup_account_id_in_storage, lookup_address_in_env,
+    lookup_address_in_storage, lookup_contract_account_id_in_env,
+    lookup_contract_account_id_in_storage, register_runtime_contract_account,
+    resolve_or_create_eoa_account,
+};
 pub use error::*;
 pub use ethereum::{SignedEip1559Tx, SignedLegacyTx};
 pub use gateway::{EthGateway, GatewayError};
 pub use mempool::TxContext;
-pub use traits::{account_id_to_address, address_to_account_id, TypedTransaction};
+pub use traits::{
+    derive_eth_eoa_account_id, derive_runtime_contract_account_id, derive_runtime_contract_address,
+    derive_system_account_id, TypedTransaction,
+};
 pub use verifier::{EcdsaVerifier, SignatureVerifierRegistry};

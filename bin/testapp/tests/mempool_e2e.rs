@@ -18,7 +18,7 @@ use evolve_testapp::{
     build_mempool_stf, default_gas_config, do_eth_genesis, install_account_codes,
 };
 use evolve_testing::server_mocks::AccountStorageMock;
-use evolve_tx_eth::{account_id_to_address, EthGateway};
+use evolve_tx_eth::{derive_runtime_contract_address, EthGateway};
 use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 use std::collections::BTreeMap;
@@ -271,20 +271,8 @@ async fn test_token_transfer_e2e() {
     let mut codes = AccountStorageMock::new();
     install_account_codes(&mut codes);
 
-    // Derive account IDs from Ethereum addresses
-    let alice_account_id = evolve_tx_eth::address_to_account_id(alice_address);
-    let bob_account_id = evolve_tx_eth::address_to_account_id(bob_address);
-
-    // Create initial storage and pre-populate ETH EOA account data
+    // Create initial storage
     let init_storage = AsyncMockStorage::new();
-
-    // Register account code identifiers (global storage)
-    init_storage.register_account_code(alice_account_id, "EthEoaAccount");
-    init_storage.register_account_code(bob_account_id, "EthEoaAccount");
-
-    // Initialize account storage (nonce, eth_address)
-    init_storage.init_eth_eoa_storage(alice_account_id, alice_address.into());
-    init_storage.init_eth_eoa_storage(bob_account_id, bob_address.into());
 
     // Build STF for TxContext
     let gas_config = default_gas_config();
@@ -318,6 +306,14 @@ async fn test_token_transfer_e2e() {
     let dev = handles.dev;
     let mempool = handles.mempool;
 
+    let alice_account_id =
+        evolve_tx_eth::lookup_account_id_in_storage(dev.storage(), alice_address)
+            .expect("lookup alice id")
+            .expect("alice id exists");
+    let bob_account_id = evolve_tx_eth::lookup_account_id_in_storage(dev.storage(), bob_address)
+        .expect("lookup bob id")
+        .expect("bob id exists");
+
     // Read initial state
     let alice_nonce_before = read_nonce(dev.storage(), alice_account_id);
     let alice_balance_before =
@@ -350,7 +346,7 @@ async fn test_token_transfer_e2e() {
     calldata.extend_from_slice(&args);
 
     // Get token's Ethereum address
-    let token_address = account_id_to_address(genesis_accounts.evolve);
+    let token_address = derive_runtime_contract_address(genesis_accounts.evolve);
 
     println!("\nTransaction details:");
     println!("  Token account: {:?}", genesis_accounts.evolve);

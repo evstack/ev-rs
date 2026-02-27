@@ -1,6 +1,7 @@
 use crate::encoding::{Decodable, Encodable};
 use crate::runtime_api::{
-    CreateAccountRequest, CreateAccountResponse, MigrateRequest, RUNTIME_ACCOUNT_ID,
+    CreateAccountRequest, CreateAccountResponse, MigrateRequest, RegisterAccountAtIdRequest,
+    RegisterAccountAtIdResponse, RUNTIME_ACCOUNT_ID,
 };
 use crate::{
     AccountId, Environment, EnvironmentQuery, FungibleAsset, InvokableMessage, InvokeRequest,
@@ -63,4 +64,23 @@ pub fn migrate_account<Req: InvokableMessage, Resp: Decodable>(
 
     env.do_exec(RUNTIME_ACCOUNT_ID, &invoke_request, funds)?
         .get()
+}
+
+pub fn register_account_at_id<Req: Encodable>(
+    account_id: AccountId,
+    code_id: String,
+    init_msg: &Req,
+    env: &mut dyn Environment,
+) -> SdkResult<()> {
+    let _: RegisterAccountAtIdResponse = exec_account(
+        RUNTIME_ACCOUNT_ID,
+        &RegisterAccountAtIdRequest {
+            account_id,
+            code_id,
+            init_message: Message::new(init_msg)?,
+        },
+        vec![],
+        env,
+    )?;
+    Ok(())
 }

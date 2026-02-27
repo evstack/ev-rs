@@ -192,9 +192,8 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
 ) -> Result<GenesisOutput<GenesisAccounts>, Box<dyn std::error::Error + Send + Sync>> {
     use evolve_core::{AccountId, BlockContext};
     use evolve_scheduler::scheduler_account::SchedulerRef;
-    use evolve_testapp::eth_eoa::eth_eoa_account::EthEoaAccountRef;
     use evolve_token::account::TokenRef;
-    use evolve_tx_eth::address_to_account_id;
+    use evolve_tx_eth::{register_runtime_contract_account, resolve_or_create_eoa_account};
 
     let funded_accounts: Vec<([u8; 20], u128)> = config
         .accounts
@@ -215,22 +214,21 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
 
     let (accounts, state) = stf
         .system_exec(storage, codes, genesis_block, |env| {
-            // Register funded EOA accounts through the STF environment
-            for (eth_addr, _) in &funded_accounts {
-                EthEoaAccountRef::initialize(*eth_addr, env)?;
-            }
-
             let balances: Vec<(AccountId, u128)> = funded_accounts
                 .iter()
-                .map(|(eth_addr, balance)| {
-                    let addr = alloy_primitives::Address::from(*eth_addr);
-                    (address_to_account_id(addr), *balance)
-                })
-                .collect();
+                .map(
+                    |(eth_addr, balance)| -> evolve_core::SdkResult<(AccountId, u128)> {
+                        let addr = alloy_primitives::Address::from(*eth_addr);
+                        Ok((resolve_or_create_eoa_account(addr, env)?, *balance))
+                    },
+                )
+                .collect::<evolve_core::SdkResult<Vec<_>>>()?;
 
             let token = TokenRef::initialize(metadata.clone(), balances, Some(minter), env)?.0;
+            let _token_eth_addr = register_runtime_contract_account(token.0, env)?;
 
             let scheduler_acc = SchedulerRef::initialize(vec![], vec![], env)?.0;
+            let _scheduler_eth_addr = register_runtime_contract_account(scheduler_acc.0, env)?;
             scheduler_acc.update_begin_blockers(vec![], env)?;
 
             Ok(GenesisAccounts {
@@ -258,4 +256,114 @@ async fn build_storage(
     QmdbStorage::new(context, config)
         .await
         .map_err(|e| Box::new(e) as _)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use evolve_core::encoding::Encodable;
+    use evolve_core::runtime_api::ACCOUNT_IDENTIFIER_PREFIX;
+    use evolve_core::AccountId;
+    use evolve_core::Message;
+    use evolve_storage::MockStorage;
+    use evolve_testapp::genesis_config::{AccountConfig, TokenConfig};
+    use std::collections::BTreeMap;
+
+    fn apply_changes_to_map(
+        changes: Vec<evolve_stf_traits::StateChange>,
+    ) -> BTreeMap<Vec<u8>, Vec<u8>> {
+        let mut out = BTreeMap::new();
+        for change in changes {
+            match change {
+                evolve_stf_traits::StateChange::Set { key, value } => {
+                    out.insert(key, value);
+                }
+                evolve_stf_traits::StateChange::Remove { key } => {
+                    out.remove(&key);
+                }
+            }
+        }
+        out
+    }
+
+    fn read_token_balance(
+        state: &BTreeMap<Vec<u8>, Vec<u8>>,
+        token_account_id: AccountId,
+        account_id: AccountId,
+    ) -> u128 {
+        let mut key = token_account_id.as_bytes().to_vec();
+        key.push(1u8); // Token::balances storage prefix
+        key.extend(account_id.encode().expect("encode account id"));
+
+        match state.get(&key) {
+            Some(value) => Message::from_bytes(value.clone())
+                .get::<u128>()
+                .expect("decode balance"),
+            None => 0,
+        }
+    }
+
+    fn count_registered_code_id(
+        state: &BTreeMap<Vec<u8>, Vec<u8>>,
+        expected_code_id: &str,
+    ) -> usize {
+        state
+            .iter()
+            .filter(|(key, value)| {
+                if key.len() != 33 || key[0] != ACCOUNT_IDENTIFIER_PREFIX {
+                    return false;
+                }
+                Message::from_bytes((*value).clone())
+                    .get::<String>()
+                    .map(|code_id| code_id == expected_code_id)
+                    .unwrap_or(false)
+            })
+            .count()
+    }
+
+    #[test]
+    fn custom_genesis_funds_registry_resolved_eoa_account() {
+        let stf = build_genesis_stf();
+        let codes = build_codes();
+        let storage = MockStorage::new();
+
+        let config = EvdGenesisConfig {
+            token: TokenConfig {
+                name: "evolve".to_string(),
+                symbol: "ev".to_string(),
+                decimals: 6,
+                icon_url: "https://example.com/icon.png".to_string(),
+                description: "token".to_string(),
+            },
+            minter_id: 100_002,
+            accounts: vec![AccountConfig {
+                eth_address: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266".to_string(),
+                balance: 777,
+            }],
+        };
+
+        let output = run_custom_genesis(&stf, &codes, &storage, &config).expect("custom genesis");
+        let state = apply_changes_to_map(output.changes);
+
+        let mapped_id = state
+            .iter()
+            .find_map(|(key, value)| {
+                if key.len() != 33 || key[0] != ACCOUNT_IDENTIFIER_PREFIX {
+                    return None;
+                }
+                let code_id = Message::from_bytes((*value).clone()).get::<String>().ok()?;
+                if code_id != "EthEoaAccount" {
+                    return None;
+                }
+                let id_bytes: [u8; 32] = key[1..33].try_into().ok()?;
+                Some(AccountId::from_bytes(id_bytes))
+            })
+            .expect("eoa account id");
+        assert_eq!(
+            read_token_balance(&state, output.genesis_result.atom, mapped_id),
+            777
+        );
+
+        assert_eq!(count_registered_code_id(&state, "EthEoaAccount"), 1);
+    }
 }

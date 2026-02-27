@@ -348,7 +348,7 @@ mod model_tests {
     }
 
     fn account_storage_key(account: AccountId, key: &[u8]) -> Vec<u8> {
-        let mut out = account.as_bytes();
+        let mut out = account.as_bytes().to_vec();
         out.extend_from_slice(key);
         out
     }
@@ -1266,11 +1266,31 @@ where
             storage_gas_config: gas_config,
         };
 
+        let resolved_sender = {
+            let mut resolve_ctx =
+                Invoker::new_for_begin_block(state, codes, &mut gas_counter, block);
+            let sender = match tx.resolve_sender_account(&mut resolve_ctx) {
+                Ok(sender) => sender,
+                Err(err) => {
+                    drop(resolve_ctx);
+                    let gas_used = gas_counter.gas_used();
+                    let events = state.pop_events();
+                    return TxResult {
+                        events,
+                        gas_used,
+                        response: Err(err),
+                    };
+                }
+            };
+            drop(resolve_ctx);
+            sender
+        };
+
         // Auto-register sender when transaction provides a bootstrap primitive.
         if let Some(bootstrap) = tx.sender_bootstrap() {
             let mut reg_ctx = Invoker::new_for_begin_block(state, codes, &mut gas_counter, block);
             if let Err(err) = reg_ctx.register_account_at_id(
-                tx.sender(),
+                resolved_sender,
                 bootstrap.account_code_id,
                 bootstrap.init_message,
             ) {
@@ -1313,9 +1333,22 @@ where
 
         // exec tx - transforms validation context to execution context
         // while preserving the same underlying state
-        let mut ctx = ctx.into_new_exec(tx.sender());
+        let mut ctx = ctx.into_new_exec(resolved_sender);
 
-        let response = ctx.do_exec(tx.recipient(), tx.request(), tx.funds().to_vec());
+        let recipient = match tx.resolve_recipient_account(&mut ctx) {
+            Ok(recipient) => recipient,
+            Err(err) => {
+                drop(ctx);
+                let gas_used = gas_counter.gas_used();
+                let events = state.pop_events();
+                return TxResult {
+                    events,
+                    gas_used,
+                    response: Err(err),
+                };
+            }
+        };
+        let response = ctx.do_exec(recipient, tx.request(), tx.funds().to_vec());
 
         // Run post-tx handler (e.g., for fee collection, logging, etc.)
         // The handler can observe the result and make additional state changes

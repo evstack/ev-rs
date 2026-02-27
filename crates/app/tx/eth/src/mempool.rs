@@ -13,12 +13,15 @@
 
 use alloy_primitives::{Address, B256};
 use evolve_core::encoding::{Decodable, Encodable};
-use evolve_core::{AccountId, FungibleAsset, InvokeRequest, Message, SdkResult};
+use evolve_core::{AccountId, Environment, FungibleAsset, InvokeRequest, Message, SdkResult};
 use evolve_mempool::{GasPriceOrdering, MempoolTx, SenderKey};
-use evolve_stf_traits::{AuthenticationPayload, SenderBootstrap, Transaction};
+use evolve_stf_traits::{AuthenticationPayload, Transaction};
 
 use crate::envelope::TxEnvelope;
-use crate::traits::{address_to_account_id, TypedTransaction};
+use crate::eoa_registry::{
+    lookup_account_id_in_env, lookup_contract_account_id_in_env, resolve_or_create_eoa_account,
+};
+use crate::traits::TypedTransaction;
 
 /// A verified transaction ready for mempool storage.
 ///
@@ -28,10 +31,6 @@ use crate::traits::{address_to_account_id, TypedTransaction};
 pub struct TxContext {
     /// The original Ethereum transaction envelope.
     envelope: TxEnvelope,
-    /// Sender account ID (derived from address).
-    sender_id: AccountId,
-    /// Recipient account ID (derived from address).
-    recipient_id: AccountId,
     /// The invoke request to execute (derived by evolve_tx).
     invoke_request: InvokeRequest,
     /// Gas price for ordering (effective gas price).
@@ -43,9 +42,7 @@ impl TxContext {
     ///
     /// Returns `None` if the transaction has no recipient (contract creation).
     pub fn new(envelope: TxEnvelope, base_fee: u128) -> Option<Self> {
-        let sender_id = address_to_account_id(envelope.sender());
-        let recipient = envelope.to()?;
-        let recipient_id = address_to_account_id(recipient);
+        envelope.to()?;
 
         let invoke_request = envelope.to_invoke_requests().into_iter().next()?;
 
@@ -54,8 +51,6 @@ impl TxContext {
 
         Some(Self {
             envelope,
-            sender_id,
-            recipient_id,
             invoke_request,
             effective_gas_price,
         })
@@ -114,11 +109,29 @@ impl MempoolTx for TxContext {
 
 impl Transaction for TxContext {
     fn sender(&self) -> AccountId {
-        self.sender_id
+        AccountId::invalid()
+    }
+
+    fn resolve_sender_account(&self, env: &mut dyn Environment) -> SdkResult<AccountId> {
+        resolve_or_create_eoa_account(self.sender_address(), env)
     }
 
     fn recipient(&self) -> AccountId {
-        self.recipient_id
+        AccountId::invalid()
+    }
+
+    fn resolve_recipient_account(&self, env: &mut dyn Environment) -> SdkResult<AccountId> {
+        let to = self
+            .envelope
+            .to()
+            .ok_or_else(|| evolve_core::ErrorCode::new(0x50))?;
+        if let Some(account_id) = lookup_account_id_in_env(to, env)? {
+            return Ok(account_id);
+        }
+        if let Some(account_id) = lookup_contract_account_id_in_env(to, env)? {
+            return Ok(account_id);
+        }
+        Err(evolve_core::ErrorCode::new(0x52))
     }
 
     fn request(&self) -> &InvokeRequest {
@@ -138,18 +151,19 @@ impl Transaction for TxContext {
         self.envelope.tx_hash().0
     }
 
-    fn sender_bootstrap(&self) -> Option<SenderBootstrap> {
-        let eth_address: [u8; 20] = self.sender_address().into();
-        Some(SenderBootstrap {
-            account_code_id: "EthEoaAccount",
-            init_message: Message::new(&eth_address).ok()?,
-        })
+    fn sender_eth_address(&self) -> Option<[u8; 20]> {
+        Some(self.sender_address().into())
+    }
+
+    fn recipient_eth_address(&self) -> Option<[u8; 20]> {
+        self.envelope.to().map(Into::into)
     }
 }
 
 impl AuthenticationPayload for TxContext {
     fn authentication_payload(&self) -> SdkResult<Message> {
-        Message::new(&self.sender_id)
+        let sender: [u8; 20] = self.sender_address().into();
+        Message::new(&sender)
     }
 }
 

@@ -24,8 +24,33 @@ pub trait Transaction {
     fn funds(&self) -> &[FungibleAsset];
     fn compute_identifier(&self) -> [u8; 32];
 
+    /// Resolve the canonical sender account ID in the current state context.
+    ///
+    /// Default behavior is the static sender embedded in the transaction.
+    /// ETH transactions can override this to use address->account registry lookup.
+    fn resolve_sender_account(&self, _env: &mut dyn Environment) -> SdkResult<AccountId> {
+        Ok(self.sender())
+    }
+
+    /// Resolve the canonical recipient account ID in the current state context.
+    ///
+    /// Default behavior is the static recipient embedded in the transaction.
+    fn resolve_recipient_account(&self, _env: &mut dyn Environment) -> SdkResult<AccountId> {
+        Ok(self.recipient())
+    }
+
     /// Optional sender bootstrap primitive for STF account auto-registration.
     fn sender_bootstrap(&self) -> Option<SenderBootstrap> {
+        None
+    }
+
+    /// Optional original 20-byte sender address (for ETH-compatible indexing).
+    fn sender_eth_address(&self) -> Option<[u8; 20]> {
+        None
+    }
+
+    /// Optional original 20-byte recipient address (for ETH-compatible indexing).
+    fn recipient_eth_address(&self) -> Option<[u8; 20]> {
         None
     }
 }

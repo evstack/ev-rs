@@ -364,15 +364,15 @@ fn test_registry_verifies_correct_chain() {
 
 #[test]
 fn test_address_to_account_id_preserves_uniqueness() {
-    use evolve_tx_eth::address_to_account_id;
+    use evolve_tx_eth::derive_eth_eoa_account_id;
 
     let addr1 = Address::repeat_byte(0x11);
     let addr2 = Address::repeat_byte(0x22);
     let addr3 = Address::repeat_byte(0x33);
 
-    let id1 = address_to_account_id(addr1);
-    let id2 = address_to_account_id(addr2);
-    let id3 = address_to_account_id(addr3);
+    let id1 = derive_eth_eoa_account_id(addr1);
+    let id2 = derive_eth_eoa_account_id(addr2);
+    let id3 = derive_eth_eoa_account_id(addr3);
 
     // All should be unique
     assert_ne!(id1, id2);
@@ -382,11 +382,11 @@ fn test_address_to_account_id_preserves_uniqueness() {
 
 #[test]
 fn test_sender_account_id_matches_address_conversion() {
-    use evolve_tx_eth::address_to_account_id;
+    use evolve_tx_eth::derive_eth_eoa_account_id;
 
     let signing_key = SigningKey::random(&mut OsRng);
     let sender = get_address(&signing_key);
-    let expected_id = address_to_account_id(sender);
+    let expected_id = derive_eth_eoa_account_id(sender);
 
     let tx = TxLegacy {
         chain_id: Some(1),

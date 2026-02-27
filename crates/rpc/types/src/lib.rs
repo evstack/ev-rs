@@ -22,27 +22,16 @@ pub struct ChainConfig {
     pub chain_id: u64,
 }
 
-/// Convert an evolve AccountId to an Ethereum address.
+/// Convert an internal AccountId to a deterministic compatibility address.
 ///
-/// AccountId is u128, Address is 20 bytes. We take the lower 20 bytes.
+/// This is one-way and is intended for indexing/display fallbacks only.
 pub fn account_id_to_address(account_id: evolve_core::AccountId) -> Address {
-    let bytes = account_id.as_bytes();
-    // AccountId::as_bytes() returns big-endian u128 (16 bytes)
-    // Pad to 20 bytes by prepending 4 zero bytes
-    let mut addr_bytes = [0u8; 20];
-    addr_bytes[4..].copy_from_slice(&bytes);
-    Address::from(addr_bytes)
+    evolve_tx_eth::derive_runtime_contract_address(account_id)
 }
 
-/// Convert an Ethereum address to an evolve AccountId.
-///
-/// Takes the lower 16 bytes of the address as a u128.
+/// Derive canonical ETH-EOA AccountId from an Ethereum address.
 pub fn address_to_account_id(address: Address) -> evolve_core::AccountId {
-    let bytes = address.as_slice();
-    // Take last 16 bytes (address is 20 bytes)
-    let mut id_bytes = [0u8; 16];
-    id_bytes.copy_from_slice(&bytes[4..]);
-    evolve_core::AccountId::new(u128::from_be_bytes(id_bytes))
+    evolve_tx_eth::derive_eth_eoa_account_id(address)
 }
 
 /// Sync status for eth_syncing response.
@@ -211,7 +200,7 @@ mod proptests {
     use proptest::prelude::*;
 
     fn arb_account_id() -> impl Strategy<Value = evolve_core::AccountId> {
-        any::<u128>().prop_map(evolve_core::AccountId::new)
+        any::<[u8; 32]>().prop_map(evolve_core::AccountId::from_bytes)
     }
 
     fn arb_address() -> impl Strategy<Value = Address> {
@@ -295,14 +284,14 @@ mod proptests {
     }
 
     proptest! {
-        // ==================== AccountId <-> Address conversion ====================
-        // Tests our custom conversion logic between Evolve AccountId and Ethereum Address
+        #[test]
+        fn prop_account_id_to_address_is_deterministic(id in arb_account_id()) {
+            prop_assert_eq!(account_id_to_address(id), account_id_to_address(id));
+        }
 
         #[test]
-        fn prop_account_id_to_address_roundtrip(id in arb_account_id()) {
-            let address = account_id_to_address(id);
-            let recovered = address_to_account_id(address);
-            prop_assert_eq!(id, recovered);
+        fn prop_address_to_account_id_is_deterministic(address in arb_address()) {
+            prop_assert_eq!(address_to_account_id(address), address_to_account_id(address));
         }
 
         // ==================== Custom serde implementations ====================

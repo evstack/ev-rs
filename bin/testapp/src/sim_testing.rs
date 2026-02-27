@@ -21,7 +21,9 @@ use evolve_stf::results::BlockResult;
 use evolve_stf_traits::{Block as BlockTrait, Transaction};
 use evolve_testing::server_mocks::AccountStorageMock;
 use evolve_token::account::TokenRef;
-use evolve_tx_eth::{account_id_to_address, address_to_account_id};
+use evolve_tx_eth::{
+    derive_eth_eoa_account_id, derive_runtime_contract_address, register_runtime_contract_account,
+};
 use evolve_tx_eth::{EthGateway, TxContext};
 use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
@@ -331,8 +333,8 @@ impl SimTestApp {
         let alice_address = get_address(&alice_key);
         let bob_address = get_address(&bob_key);
 
-        let alice_id = address_to_account_id(alice_address);
-        let bob_id = address_to_account_id(bob_address);
+        let alice_id = derive_eth_eoa_account_id(alice_address);
+        let bob_id = derive_eth_eoa_account_id(bob_address);
 
         register_account_code_identifier(&mut sim, alice_id, "EthEoaAccount")
             .expect("register alice code");
@@ -355,10 +357,12 @@ impl SimTestApp {
                 env,
             )?
             .0;
+            let _atom_eth_addr = register_runtime_contract_account(atom.0, env)?;
 
             let scheduler =
                 evolve_scheduler::scheduler_account::SchedulerRef::initialize(vec![], vec![], env)?
                     .0;
+            let _scheduler_eth_addr = register_runtime_contract_account(scheduler.0, env)?;
             scheduler.update_begin_blockers(vec![], env)?;
 
             Ok(GenesisAccounts {
@@ -414,7 +418,7 @@ impl SimTestApp {
         calldata.extend_from_slice(&selector);
         calldata.extend_from_slice(&args);
 
-        let to = account_id_to_address(token_account);
+        let to = derive_runtime_contract_address(token_account);
         Some(create_signed_tx(
             signing_key,
             self.chain_id,
@@ -724,7 +728,7 @@ impl SimTestApp {
 
     /// Create an EOA with a specific Ethereum address.
     pub fn create_eoa_with_address(&mut self, eth_address: [u8; 20]) -> AccountId {
-        let account_id = address_to_account_id(alloy_primitives::Address::from(eth_address));
+        let account_id = derive_eth_eoa_account_id(alloy_primitives::Address::from(eth_address));
         register_account_code_identifier(&mut self.sim, account_id, "EthEoaAccount")
             .expect("register eoa code");
         init_eth_eoa_storage(&mut self.sim, account_id, eth_address).expect("init eoa storage");
@@ -736,7 +740,7 @@ impl SimTestApp {
         let signing_key = generate_signing_key(&mut self.sim, MAX_SIGNING_KEY_ATTEMPTS)
             .expect("failed to generate signing key");
         let address = get_address(&signing_key);
-        let account_id = address_to_account_id(address);
+        let account_id = derive_eth_eoa_account_id(address);
         self.signers.insert(account_id, signing_key);
         self.nonces.entry(account_id).or_insert(0);
         account_id
@@ -747,7 +751,7 @@ impl SimTestApp {
         let signing_key = generate_signing_key(&mut self.sim, MAX_SIGNING_KEY_ATTEMPTS)
             .expect("failed to generate signing key");
         let address = get_address(&signing_key);
-        let account_id = address_to_account_id(address);
+        let account_id = derive_eth_eoa_account_id(address);
         register_account_code_identifier(&mut self.sim, account_id, code_id)
             .expect("register account code");
         self.signers.insert(account_id, signing_key);

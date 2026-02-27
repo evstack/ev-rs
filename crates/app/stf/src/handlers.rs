@@ -11,7 +11,8 @@ use crate::errors::{ERR_ACCOUNT_DOES_NOT_EXIST, ERR_CODE_NOT_FOUND, ERR_SAME_COD
 use crate::invoker::Invoker;
 use crate::runtime_api_impl;
 use evolve_core::runtime_api::{
-    CreateAccountRequest, CreateAccountResponse, MigrateRequest, RUNTIME_ACCOUNT_ID,
+    CreateAccountRequest, CreateAccountResponse, MigrateRequest, RegisterAccountAtIdRequest,
+    RegisterAccountAtIdResponse, RUNTIME_ACCOUNT_ID,
 };
 use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageRemoveResponse,
@@ -55,6 +56,11 @@ pub fn handle_system_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
                 init_response,
             };
             Ok(InvokeResponse::new(&resp)?)
+        }
+        RegisterAccountAtIdRequest::FUNCTION_IDENTIFIER => {
+            let req: RegisterAccountAtIdRequest = request.get()?;
+            invoker.register_account_at_id(req.account_id, &req.code_id, req.init_message)?;
+            Ok(InvokeResponse::new(&RegisterAccountAtIdResponse {})?)
         }
         MigrateRequest::FUNCTION_IDENTIFIER => {
             // exec on behalf of runtime the migration request, runtime has the money
@@ -114,7 +120,7 @@ pub fn handle_storage_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
         StorageSetRequest::FUNCTION_IDENTIFIER => {
             let storage_set: StorageSetRequest = request.get()?;
 
-            let mut key = invoker.whoami.as_bytes();
+            let mut key = invoker.whoami.as_bytes().to_vec();
             key.extend(storage_set.key);
 
             // increase gas costs
@@ -127,7 +133,7 @@ pub fn handle_storage_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
         }
         StorageRemoveRequest::FUNCTION_IDENTIFIER => {
             let storage_remove: StorageRemoveRequest = request.get()?;
-            let mut key = invoker.whoami.as_bytes();
+            let mut key = invoker.whoami.as_bytes().to_vec();
             key.extend(storage_remove.key);
             invoker.gas_counter.consume_remove_gas(&key)?;
             invoker.storage.remove(&key)?;
@@ -145,7 +151,7 @@ pub fn handle_storage_query<S: ReadonlyKV, A: AccountsCodeStorage>(
         StorageGetRequest::FUNCTION_IDENTIFIER => {
             let storage_get: StorageGetRequest = request.get()?;
 
-            let mut key = storage_get.account_id.as_bytes();
+            let mut key = storage_get.account_id.as_bytes().to_vec();
             key.extend(storage_get.key);
 
             let value = invoker.storage.get(&key)?;
