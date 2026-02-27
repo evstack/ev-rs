@@ -33,14 +33,9 @@ define_error!(
 
 // System/runtime lookup errors (0x50-0x5F range)
 define_error!(
-    ERR_SYSTEM_LOOKUP_MISSING,
+    ERR_RECIPIENT_REQUIRED,
     0x50,
-    "system lookup missing for recipient"
-);
-define_error!(
-    ERR_SYSTEM_RECIPIENT_NOT_FOUND,
-    0x52,
-    "recipient account not found in registry"
+    "recipient required (contract creation not supported yet)"
 );
 define_error!(
     ERR_ADDRESS_ACCOUNT_CONFLICT,
