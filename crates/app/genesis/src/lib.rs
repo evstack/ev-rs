@@ -38,7 +38,7 @@ use std::cell::RefCell;
 /// System account ID used as sender for genesis transactions.
 /// This is a sentinel value that indicates the transaction originates
 /// from the genesis process rather than a real account.
-pub const SYSTEM_ACCOUNT_ID: AccountId = AccountId::new(0);
+pub const SYSTEM_ACCOUNT_ID: AccountId = AccountId::from_bytes([0u8; 32]);
 
 /// Applies genesis transactions to initialize chain state.
 ///
@@ -441,7 +441,7 @@ mod tests {
         let mut codes = CodeStore::new();
         codes.add_code(TestAccount);
 
-        let test_account_id = AccountId::new(100);
+        let test_account_id = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
         let storage = setup_storage_with_account(test_account_id, "test_account");
         let consensus_params = ConsensusParams::default();
 
@@ -467,8 +467,8 @@ mod tests {
         let mut codes = CodeStore::new();
         codes.add_code(TestAccount);
 
-        let account1 = AccountId::new(100);
-        let account2 = AccountId::new(101);
+        let account1 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
+        let account2 = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,101]);
         let mut storage = setup_storage_with_account(account1, "test_account");
         let consensus_params = ConsensusParams::default();
         // Add second account
@@ -517,9 +517,9 @@ mod tests {
         codes.add_code(TestAccount);
         codes.add_code(FailingAccount);
 
-        let good_account = AccountId::new(100);
-        let bad_account = AccountId::new(101);
-        let after_bad = AccountId::new(102);
+        let good_account = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
+        let bad_account = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,101]);
+        let after_bad = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,102]);
         let consensus_params = ConsensusParams::default();
 
         let mut storage = setup_storage_with_account(good_account, "test_account");
@@ -585,7 +585,7 @@ mod tests {
         let mut codes = CodeStore::new();
         codes.add_code(FailingAccount);
 
-        let bad_account = AccountId::new(100);
+        let bad_account = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
         let storage = setup_storage_with_account(bad_account, "failing_account");
         let consensus_params = ConsensusParams::default();
 

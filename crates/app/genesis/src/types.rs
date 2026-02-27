@@ -47,7 +47,7 @@ pub struct GenesisTx {
     pub id: Option<String>,
 
     /// The sender account ID.
-    /// For genesis, this is typically the system account (AccountId::new(0))
+    /// For genesis, this is typically the system account (AccountId::from_bytes([0u8; 32]))
     /// or a virtual sender specified in the genesis file.
     pub sender: AccountId,
 

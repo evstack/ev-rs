@@ -233,16 +233,16 @@ mod tests {
     #[test]
     fn test_env_configuration() {
         // Create numeric account IDs:
-        let whoami = AccountId::new(1234_u128);
-        let sender = AccountId::new(5678_u128);
+        let whoami = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,210]);
+        let sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,22,46]);
 
         let funds = vec![
             FungibleAsset {
-                asset_id: AccountId::new(55000),
+                asset_id: AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,214,216]),
                 amount: 123,
             },
             FungibleAsset {
-                asset_id: AccountId::new(55100),
+                asset_id: AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,215,60]),
                 amount: 456,
             },
         ];
@@ -265,8 +265,8 @@ mod tests {
 
     #[test]
     fn test_storage_set_and_get() {
-        let whoami = AccountId::new(100_u128);
-        let sender = AccountId::new(200_u128);
+        let whoami = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
+        let sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,200]);
         let mut env = MockEnv::new(whoami, sender);
 
         // 1) Prepare a StorageSetRequest
@@ -306,8 +306,8 @@ mod tests {
 
     #[test]
     fn test_storage_remove() {
-        let whoami = AccountId::new(300_u128);
-        let sender = AccountId::new(400_u128);
+        let whoami = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,44]);
+        let sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,144]);
         let mut env = MockEnv::new(whoami, sender);
 
         // First, set something
@@ -352,8 +352,8 @@ mod tests {
 
     #[test]
     fn test_with_query_handler() {
-        let whoami = AccountId::new(700_u128);
-        let sender = AccountId::new(800_u128);
+        let whoami = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2,188]);
+        let sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,32]);
 
         // This is a custom request type with a unique FUNCTION_IDENTIFIER
         #[derive(Clone, Debug)]
@@ -418,7 +418,7 @@ mod tests {
         let invoke_req = make_invoke_request(&query).unwrap();
 
         // Perform the query
-        let result = env.do_query(AccountId::new(9999_u128), &invoke_req);
+        let result = env.do_query(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,39,15]), &invoke_req);
         assert!(result.is_ok(), "Query handler should succeed.");
 
         let response: CustomQueryResp = result.unwrap().get().expect("Decode error");
@@ -430,8 +430,8 @@ mod tests {
 
     #[test]
     fn test_with_exec_handler() {
-        let whoami = AccountId::new(900_u128);
-        let sender = AccountId::new(1000_u128);
+        let whoami = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,132]);
+        let sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,232]);
 
         // We'll reuse the same approach, but define a unique function ID
         #[derive(Clone, Debug)]
@@ -493,11 +493,15 @@ mod tests {
         let invoke_req = make_invoke_request(&custom_exec_req).unwrap();
 
         let funds = vec![FungibleAsset {
-            asset_id: AccountId::new(9999_u128),
+            asset_id: AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,39,15]),
             amount: 100,
         }];
 
-        let result = env.do_exec(AccountId::new(1111_u128), &invoke_req, funds);
+        let result = env.do_exec(
+            AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,4,87]),
+            &invoke_req,
+            funds,
+        );
         assert!(result.is_ok(), "Execution should succeed.");
         let response: CustomExecResp = result.unwrap().get().expect("Decode error");
         assert!(
@@ -529,23 +533,23 @@ mod tests {
             const FUNCTION_IDENTIFIER_NAME: &'static str = "missing_req";
         }
 
-        let whoami = AccountId::new(1);
-        let sender = AccountId::new(2);
+        let whoami = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]);
+        let sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2]);
         let mut env = MockEnv::new(whoami, sender);
         let req = make_invoke_request(&MissingReq).unwrap();
 
-        let query_result = env.do_query(AccountId::new(3), &req);
+        let query_result = env.do_query(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3]), &req);
         assert!(matches!(query_result, Err(e) if e == ERR_UNKNOWN_FUNCTION));
 
-        let exec_result = env.do_exec(AccountId::new(3), &req, Vec::new());
+        let exec_result = env.do_exec(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3]), &req, Vec::new());
         assert!(matches!(exec_result, Err(e) if e == ERR_UNKNOWN_FUNCTION));
     }
 
     #[test]
     fn test_storage_set_is_namespaced_by_whoami() {
-        let owner_a = AccountId::new(10);
-        let owner_b = AccountId::new(11);
-        let sender = AccountId::new(20);
+        let owner_a = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,10]);
+        let owner_b = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,11]);
+        let sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,20]);
         let mut env = MockEnv::new(owner_a, sender);
 
         let set_request = StorageSetRequest {
@@ -588,8 +592,8 @@ mod tests {
 
     #[test]
     fn test_unique_id_monotonic_counter_prefix() {
-        let whoami = AccountId::new(100);
-        let sender = AccountId::new(200);
+        let whoami = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
+        let sender = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,200]);
         let mut env = MockEnv::new(whoami, sender);
 
         let id1 = env.unique_id().unwrap();
