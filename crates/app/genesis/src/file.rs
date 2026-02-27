@@ -214,10 +214,14 @@ impl GenesisFile {
                         })?
                     }
                     SenderSpec::Reference(r) => {
-                        // Treat as account ID string
-                        AccountId::new(r.parse().map_err(|_| {
-                            GenesisError::ParseError(format!("invalid sender: {}", r))
-                        })?)
+                        // Treat as hex-encoded 32-byte account ID
+                        let bytes = hex::decode(r.trim_start_matches("0x"))
+                            .ok()
+                            .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                            .ok_or_else(|| {
+                                GenesisError::ParseError(format!("invalid sender: {}", r))
+                            })?;
+                        AccountId::from_bytes(bytes)
                     }
                     SenderSpec::AccountId(id) => AccountId::from_bytes(*id),
                 };
@@ -232,10 +236,14 @@ impl GenesisFile {
                         .ok_or_else(|| GenesisError::InvalidReference(ref_id.to_string(), idx))?
                 }
                 RecipientSpec::Reference(r) => {
-                    // Treat as account ID string
-                    AccountId::new(r.parse().map_err(|_| {
-                        GenesisError::ParseError(format!("invalid recipient: {}", r))
-                    })?)
+                    // Treat as hex-encoded 32-byte account ID
+                    let bytes = hex::decode(r.trim_start_matches("0x"))
+                        .ok()
+                        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                        .ok_or_else(|| {
+                            GenesisError::ParseError(format!("invalid recipient: {}", r))
+                        })?;
+                    AccountId::from_bytes(bytes)
                 }
                 RecipientSpec::AccountId(id) => AccountId::from_bytes(*id),
             };
