@@ -64,7 +64,7 @@ fn default_sender() -> SenderSpec {
 }
 
 /// Specification for the sender of a genesis transaction.
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum SenderSpec {
     /// Use the system account
     #[default]
@@ -72,7 +72,17 @@ pub enum SenderSpec {
     /// Reference a previously created account (starts with $)
     Reference(String),
     /// Use a specific account ID
-    AccountId([u8; 32]),
+    AccountId(AccountId),
+}
+
+impl Serialize for SenderSpec {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            SenderSpec::System => serializer.serialize_str("system"),
+            SenderSpec::Reference(r) => serializer.serialize_str(r),
+            SenderSpec::AccountId(id) => serializer.serialize_str(&hex::encode(id.to_bytes())),
+        }
+    }
 }
 
 impl<'de> serde::Deserialize<'de> for SenderSpec {
@@ -89,12 +99,8 @@ impl<'de> serde::Deserialize<'de> for SenderSpec {
             serde_json::Value::Number(n) => {
                 let v = n
                     .as_u64()
-                    .map(|v| v as u128)
-                    .or_else(|| n.as_i64().map(|v| v as u128))
                     .ok_or_else(|| D::Error::custom("invalid account ID number"))?;
-                let mut b = [0u8; 32];
-                b[16..32].copy_from_slice(&v.to_be_bytes());
-                Ok(SenderSpec::AccountId(b))
+                Ok(SenderSpec::AccountId(AccountId::from_u64(v)))
             }
             _ => Err(D::Error::custom("expected string or number for sender")),
         }
@@ -102,14 +108,24 @@ impl<'de> serde::Deserialize<'de> for SenderSpec {
 }
 
 /// Specification for the recipient of a genesis transaction.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RecipientSpec {
     /// Use the runtime account for account creation
     Runtime,
     /// Reference a previously created account (starts with $)
     Reference(String),
     /// Use a specific account ID
-    AccountId([u8; 32]),
+    AccountId(AccountId),
+}
+
+impl Serialize for RecipientSpec {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            RecipientSpec::Runtime => serializer.serialize_str("runtime"),
+            RecipientSpec::Reference(r) => serializer.serialize_str(r),
+            RecipientSpec::AccountId(id) => serializer.serialize_str(&hex::encode(id.to_bytes())),
+        }
+    }
 }
 
 impl<'de> serde::Deserialize<'de> for RecipientSpec {
@@ -126,12 +142,8 @@ impl<'de> serde::Deserialize<'de> for RecipientSpec {
             serde_json::Value::Number(n) => {
                 let v = n
                     .as_u64()
-                    .map(|v| v as u128)
-                    .or_else(|| n.as_i64().map(|v| v as u128))
                     .ok_or_else(|| D::Error::custom("invalid account ID number"))?;
-                let mut b = [0u8; 32];
-                b[16..32].copy_from_slice(&v.to_be_bytes());
-                Ok(RecipientSpec::AccountId(b))
+                Ok(RecipientSpec::AccountId(AccountId::from_u64(v)))
             }
             _ => Err(D::Error::custom("expected string or number for recipient")),
         }
@@ -222,7 +234,7 @@ impl GenesisFile {
                         })?;
                     AccountId::from_bytes(bytes)
                 }
-                SenderSpec::AccountId(id) => AccountId::from_bytes(*id),
+                SenderSpec::AccountId(id) => *id,
             };
 
             // Resolve recipient
@@ -244,7 +256,7 @@ impl GenesisFile {
                         })?;
                     AccountId::from_bytes(bytes)
                 }
-                RecipientSpec::AccountId(id) => AccountId::from_bytes(*id),
+                RecipientSpec::AccountId(id) => *id,
             };
 
             // Resolve $references in the message payload
@@ -486,13 +498,10 @@ mod tests {
             ]
         }"#;
         let genesis = GenesisFile::parse(json).unwrap();
-        assert!(matches!(
+        assert_eq!(
             genesis.transactions[0].sender,
-            SenderSpec::AccountId([
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 0, 123
-            ])
-        ));
+            SenderSpec::AccountId(AccountId::from_u64(123))
+        );
     }
 
     #[test]
@@ -518,13 +527,10 @@ mod tests {
             ]
         }"#;
         let genesis = GenesisFile::parse(json).unwrap();
-        assert!(matches!(
+        assert_eq!(
             genesis.transactions[0].recipient,
-            RecipientSpec::AccountId([
-                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-                0, 0, 1, 200
-            ])
-        ));
+            RecipientSpec::AccountId(AccountId::from_u64(456))
+        );
     }
 
     #[test]
