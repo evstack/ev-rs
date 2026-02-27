@@ -567,7 +567,7 @@ mod tests {
 
     #[test]
     fn build_transfer_calldata_has_selector_and_borsh_args() {
-        let recipient = AccountId::new(42);
+        let recipient = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,42]);
         let amount = 999_u128;
 
         let calldata = build_transfer_calldata(recipient, amount).unwrap();

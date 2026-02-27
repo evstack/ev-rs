@@ -316,13 +316,13 @@ mod tests {
         let mut builder = TraceBuilder::new(42, StateSnapshot::empty());
 
         builder.block_start(0, 1000);
-        builder.tx_start([1; 32], AccountId::new(1), AccountId::new(2));
+        builder.tx_start([1; 32], AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1]), AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2]));
         builder.state_change(b"key1".to_vec(), None, Some(b"value1".to_vec()));
         builder.tx_end([1; 32], true, 100);
         builder.block_end(0, [0; 32]);
 
         builder.block_start(1, 2000);
-        builder.tx_start([2; 32], AccountId::new(2), AccountId::new(3));
+        builder.tx_start([2; 32], AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,2]), AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3]));
         builder.state_change(b"key2".to_vec(), None, Some(b"value2".to_vec()));
         builder.tx_end([2; 32], true, 150);
         builder.block_end(1, [1; 32]);

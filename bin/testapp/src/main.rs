@@ -218,7 +218,11 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
         return Err("custom genesis requires at least one account".into());
     }
 
-    let minter = AccountId::new(config.minter_id);
+    let minter = {
+        let mut b = [0u8; 32];
+        b[16..32].copy_from_slice(&config.minter_id.to_be_bytes());
+        AccountId::from_bytes(b)
+    };
     let metadata = config.token.to_metadata();
 
     let genesis_block = BlockContext::new(0, 0);

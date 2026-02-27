@@ -270,7 +270,7 @@ fn setup_genesis(
 
     let init_storage = AsyncMockStorage::new();
     let gas_config = default_gas_config();
-    let stf = build_mempool_stf(gas_config.clone(), AccountId::new(0));
+    let stf = build_mempool_stf(gas_config.clone(), AccountId::from_bytes([0u8; 32]));
 
     let (genesis_state, genesis_accounts) = do_eth_genesis(
         &stf,

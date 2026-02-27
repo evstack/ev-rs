@@ -20,10 +20,6 @@ use evolve_evnode::{EvnodeServer, EvnodeServerConfig, ExecutorServiceConfig, Sta
 use evolve_stf_traits::{AccountsCodeStorage, StateChange, WritableAccountsCodeStorage};
 use evolve_testapp::{build_mempool_stf, default_gas_config, install_account_codes};
 
-/// Scheduler account ID as allocated by do_genesis_inner in testapp.
-/// This is the 4th account created: alice(65535), bob(65536), atom(65537), scheduler(65538)
-const SCHEDULER_ACCOUNT_ID: u128 = 65538;
-
 /// Simple in-memory storage for the example.
 struct ExampleStorageInner {
     data: RwLock<BTreeMap<Vec<u8>, Vec<u8>>>,
@@ -133,7 +129,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
 
     // 4. Build the STF
     let gas_config = default_gas_config();
-    let stf = build_mempool_stf(gas_config, AccountId::new(SCHEDULER_ACCOUNT_ID));
+    let stf = build_mempool_stf(gas_config, AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,0,2]));
 
     // 5. Configure the server
     let addr = "127.0.0.1:50051".parse()?;

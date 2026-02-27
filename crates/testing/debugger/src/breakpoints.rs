@@ -308,8 +308,8 @@ mod tests {
 
     #[test]
     fn test_on_account() {
-        let account = AccountId::new(42);
-        let other = AccountId::new(100);
+        let account = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,42]);
+        let other = AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,100]);
         let bp = Breakpoint::on_account(account);
         let state = StateSnapshot::empty();
 

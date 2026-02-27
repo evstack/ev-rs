@@ -332,7 +332,7 @@ mod tests {
     #[test]
     fn test_event_to_stored_log() {
         let event = Event {
-            source: AccountId::new(42),
+            source: AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,42]),
             name: "Transfer".to_string(),
             contents: Message::from_bytes(vec![1, 2, 3, 4]),
         };
@@ -340,7 +340,7 @@ mod tests {
         let log = event_to_stored_log(&event);
 
         // Address should be derived from AccountId
-        assert_eq!(log.address, account_id_to_address(AccountId::new(42)));
+        assert_eq!(log.address, account_id_to_address(AccountId::from_bytes([0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,42])));
         // Should have one topic (the name hash)
         assert_eq!(log.topics.len(), 1);
         // Data should match contents
