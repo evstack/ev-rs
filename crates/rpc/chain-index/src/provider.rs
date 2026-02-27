@@ -376,10 +376,11 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
     }
 
     async fn get_balance(&self, address: Address, _block: Option<u64>) -> Result<U256, RpcError> {
-        match &self.state_querier {
-            Some(q) => q.get_balance(address).await,
-            None => Ok(U256::ZERO),
-        }
+        let querier = self
+            .state_querier
+            .as_ref()
+            .ok_or_else(|| RpcError::NotImplemented("state_querier not configured".to_string()))?;
+        querier.get_balance(address).await
     }
 
     async fn get_transaction_count(
@@ -387,17 +388,19 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
         address: Address,
         _block: Option<u64>,
     ) -> Result<u64, RpcError> {
-        match &self.state_querier {
-            Some(q) => q.get_transaction_count(address).await,
-            None => Ok(0),
-        }
+        let querier = self
+            .state_querier
+            .as_ref()
+            .ok_or_else(|| RpcError::NotImplemented("state_querier not configured".to_string()))?;
+        querier.get_transaction_count(address).await
     }
 
     async fn call(&self, request: &CallRequest, _block: Option<u64>) -> Result<Bytes, RpcError> {
-        match &self.state_querier {
-            Some(q) => q.call(request).await,
-            None => Ok(Bytes::new()),
-        }
+        let querier = self
+            .state_querier
+            .as_ref()
+            .ok_or_else(|| RpcError::NotImplemented("state_querier not configured".to_string()))?;
+        querier.call(request).await
     }
 
     async fn estimate_gas(
@@ -405,10 +408,11 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
         request: &CallRequest,
         _block: Option<u64>,
     ) -> Result<u64, RpcError> {
-        match &self.state_querier {
-            Some(q) => q.estimate_gas(request).await,
-            None => Ok(21000),
-        }
+        let querier = self
+            .state_querier
+            .as_ref()
+            .ok_or_else(|| RpcError::NotImplemented("state_querier not configured".to_string()))?;
+        querier.estimate_gas(request).await
     }
 
     async fn get_logs(&self, filter: &LogFilter) -> Result<Vec<RpcLog>, RpcError> {

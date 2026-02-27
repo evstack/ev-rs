@@ -192,23 +192,8 @@ fn build_stored_transaction<Tx: Transaction>(
     transaction_index: u32,
     chain_id: u64,
 ) -> StoredTransaction {
-    let from = tx
-        .sender_eth_address()
-        .map(Address::from)
-        .unwrap_or_else(|| account_id_to_address(tx.sender()));
-    let to = {
-        if let Some(recipient) = tx.recipient_eth_address() {
-            Some(Address::from(recipient))
-        } else {
-            let recipient = tx.recipient();
-            // Check if recipient is the invalid/zero account
-            if recipient == AccountId::invalid() {
-                None
-            } else {
-                Some(account_id_to_address(recipient))
-            }
-        }
-    };
+    let from = resolve_sender_address(tx);
+    let to = resolve_recipient_address(tx);
 
     // Extract value from funds (sum of all fungible assets as a simple approach)
     let value = tx
@@ -249,22 +234,8 @@ fn build_stored_receipt<Tx: Transaction>(
     transaction_index: u32,
     cumulative_gas_used: u64,
 ) -> StoredReceipt {
-    let from = tx
-        .sender_eth_address()
-        .map(Address::from)
-        .unwrap_or_else(|| account_id_to_address(tx.sender()));
-    let to = {
-        if let Some(recipient) = tx.recipient_eth_address() {
-            Some(Address::from(recipient))
-        } else {
-            let recipient = tx.recipient();
-            if recipient == AccountId::invalid() {
-                None
-            } else {
-                Some(account_id_to_address(recipient))
-            }
-        }
-    };
+    let from = resolve_sender_address(tx);
+    let to = resolve_recipient_address(tx);
 
     // Convert events to logs
     let logs: Vec<StoredLog> = tx_result.events.iter().map(event_to_stored_log).collect();
@@ -285,6 +256,25 @@ fn build_stored_receipt<Tx: Transaction>(
         logs,
         status,
         tx_type: 0,
+    }
+}
+
+fn resolve_sender_address<Tx: Transaction>(tx: &Tx) -> Address {
+    tx.sender_eth_address()
+        .map(Address::from)
+        .unwrap_or_else(|| account_id_to_address(tx.sender()))
+}
+
+fn resolve_recipient_address<Tx: Transaction>(tx: &Tx) -> Option<Address> {
+    if let Some(recipient) = tx.recipient_eth_address() {
+        Some(Address::from(recipient))
+    } else {
+        let recipient = tx.recipient();
+        if recipient == AccountId::invalid() {
+            None
+        } else {
+            Some(account_id_to_address(recipient))
+        }
     }
 }
 

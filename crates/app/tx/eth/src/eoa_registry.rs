@@ -1,3 +1,4 @@
+use crate::error::ERR_ADDRESS_ACCOUNT_CONFLICT;
 use crate::traits::{derive_eth_eoa_account_id, derive_runtime_contract_address};
 use alloy_primitives::Address;
 use evolve_core::low_level::{exec_account, query_account, register_account_at_id};
@@ -151,12 +152,12 @@ fn set_mapping(
 ) -> SdkResult<()> {
     if let Some(existing) = lookup_account_id_in_env(address, env)? {
         if existing != account_id {
-            return Err(evolve_core::ErrorCode::new(0x5A));
+            return Err(ERR_ADDRESS_ACCOUNT_CONFLICT);
         }
     }
     if let Some(existing_addr) = lookup_address_in_env(account_id, env)? {
         if existing_addr != address {
-            return Err(evolve_core::ErrorCode::new(0x5A));
+            return Err(ERR_ADDRESS_ACCOUNT_CONFLICT);
         }
     }
 
@@ -208,7 +209,7 @@ pub fn register_runtime_contract_account(
     let address = derive_runtime_contract_address(account_id);
     if let Some(existing) = lookup_contract_account_id_in_env(address, env)? {
         if existing != account_id {
-            return Err(evolve_core::ErrorCode::new(0x5A));
+            return Err(ERR_ADDRESS_ACCOUNT_CONFLICT);
         }
     }
 
@@ -223,7 +224,7 @@ pub fn register_runtime_contract_account(
     if let Some(raw) = response.value {
         let existing = raw.get::<[u8; 20]>()?;
         if existing != address.into_array() {
-            return Err(evolve_core::ErrorCode::new(0x5A));
+            return Err(ERR_ADDRESS_ACCOUNT_CONFLICT);
         }
     }
 

@@ -61,7 +61,13 @@ fn main() {
             let config = resolve_node_config(&args.common, &args.native);
             init_node_tracing(&config.observability.log_level);
 
-            let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
+            let genesis_config = match load_genesis_config(args.custom.genesis_file.as_deref()) {
+                Ok(genesis_config) => genesis_config,
+                Err(err) => {
+                    tracing::error!("{err}");
+                    std::process::exit(2);
+                }
+            };
 
             let mut rpc_config = config.to_rpc_config();
             rpc_config.grpc_addr = Some(config.parsed_grpc_addr());
@@ -94,7 +100,13 @@ fn main() {
             let config = resolve_node_config_init(&args.common);
             init_node_tracing(&config.observability.log_level);
 
-            let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
+            let genesis_config = match load_genesis_config(args.custom.genesis_file.as_deref()) {
+                Ok(genesis_config) => genesis_config,
+                Err(err) => {
+                    tracing::error!("{err}");
+                    std::process::exit(2);
+                }
+            };
             init_dev_node(
                 &config.storage.path,
                 build_genesis_stf,
@@ -108,11 +120,12 @@ fn main() {
     }
 }
 
-fn load_genesis_config(path: Option<&str>) -> Option<EvdGenesisConfig> {
+fn load_genesis_config(path: Option<&str>) -> Result<Option<EvdGenesisConfig>, String> {
     path.map(|p| {
         tracing::info!("Loading genesis config from: {}", p);
-        EvdGenesisConfig::load(p).expect("failed to load genesis config")
+        EvdGenesisConfig::load(p)
     })
+    .transpose()
 }
 
 fn build_codes() -> AccountStorageMock {
@@ -198,12 +211,10 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
         .iter()
         .filter(|acc| acc.balance > 0)
         .map(|acc| {
-            let addr = acc
-                .parse_address()
-                .expect("invalid address in genesis config");
-            (addr.into_array(), acc.balance)
+            acc.parse_address()
+                .map(|addr| (addr.into_array(), acc.balance))
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     let minter = AccountId::new(config.minter_id);
     let metadata = config.token.to_metadata();

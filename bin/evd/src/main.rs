@@ -163,257 +163,307 @@ fn main() {
     }
 }
 
+type TokioContext = commonware_runtime::tokio::Context;
+type NodeStorage = QmdbStorage<TokioContext>;
+type SharedChainIndex = Arc<PersistentChainIndex>;
+type RpcMempool = SharedMempool<Mempool<TxContext>>;
+
+struct RpcRuntimeHandle {
+    stop_fn: Option<Box<dyn FnOnce() + Send>>,
+}
+
+impl RpcRuntimeHandle {
+    fn new(stop_fn: impl FnOnce() + Send + 'static) -> Self {
+        Self {
+            stop_fn: Some(Box::new(stop_fn)),
+        }
+    }
+
+    fn stop(mut self) {
+        if let Some(stop_fn) = self.stop_fn.take() {
+            stop_fn();
+        }
+    }
+}
+
+async fn init_storage_and_genesis(
+    context: TokioContext,
+    storage_config: StorageConfig,
+    genesis_config: Option<EvdGenesisConfig>,
+) -> (NodeStorage, EvdGenesisResult, u64) {
+    let storage = QmdbStorage::new(context, storage_config)
+        .await
+        .expect("failed to create storage");
+
+    let codes = build_codes();
+    tracing::info!("Installed account codes: {:?}", codes.list_identifiers());
+
+    match load_chain_state::<EvdGenesisResult, _>(&storage) {
+        Some(state) => {
+            tracing::info!("Resuming from existing state at height {}", state.height);
+            (storage, state.genesis_result, state.height)
+        }
+        None => {
+            tracing::info!("No existing state found, running genesis...");
+            let output = run_genesis(&storage, &codes, genesis_config.as_ref());
+            commit_genesis(&storage, output.changes, &output.genesis_result)
+                .await
+                .expect("genesis commit failed");
+            tracing::info!("Genesis complete: {:?}", output.genesis_result);
+            (storage, output.genesis_result, 1)
+        }
+    }
+}
+
+fn init_chain_index(config: &NodeConfig) -> Option<SharedChainIndex> {
+    if !config.rpc.enabled && !config.rpc.enable_block_indexing {
+        return None;
+    }
+
+    let chain_index_db_path =
+        std::path::PathBuf::from(&config.storage.path).join("chain-index.sqlite");
+    let index = Arc::new(
+        PersistentChainIndex::new(&chain_index_db_path)
+            .expect("failed to open chain index database"),
+    );
+    if let Err(err) = index.initialize() {
+        tracing::warn!("Failed to initialize chain index: {:?}", err);
+    }
+    Some(index)
+}
+
+async fn start_rpc_server(
+    config: &NodeConfig,
+    storage: NodeStorage,
+    mempool: RpcMempool,
+    chain_index: &Option<SharedChainIndex>,
+    token_account_id: AccountId,
+) -> Option<RpcRuntimeHandle> {
+    if !config.rpc.enabled {
+        return None;
+    }
+
+    let subscriptions = Arc::new(SubscriptionManager::new());
+    let codes_for_rpc = Arc::new(build_codes());
+    let state_provider_config = ChainStateProviderConfig {
+        chain_id: config.chain.chain_id,
+        protocol_version: "0x1".to_string(),
+        gas_price: U256::ZERO,
+        sync_status: SyncStatus::NotSyncing(false),
+    };
+
+    let state_querier: Arc<dyn StateQuerier> =
+        Arc::new(StorageStateQuerier::new(storage, token_account_id));
+    let state_provider = ChainStateProvider::with_mempool(
+        Arc::clone(chain_index.as_ref().expect("chain index required for RPC")),
+        state_provider_config,
+        codes_for_rpc,
+        mempool,
+    )
+    .with_state_querier(state_querier);
+
+    let rpc_addr = config.parsed_rpc_addr();
+    let server_config = RpcServerConfig {
+        http_addr: rpc_addr,
+        chain_id: config.chain.chain_id,
+    };
+
+    tracing::info!("Starting JSON-RPC server on {}", rpc_addr);
+    let handle =
+        start_server_with_subscriptions(server_config, state_provider, Arc::clone(&subscriptions))
+            .await
+            .expect("failed to start RPC server");
+
+    Some(RpcRuntimeHandle::new(move || {
+        handle.stop().expect("failed to stop RPC server");
+    }))
+}
+
+fn build_on_block_executed(
+    storage: NodeStorage,
+    chain_index: Option<SharedChainIndex>,
+    initial_height: u64,
+    callback_chain_id: u64,
+    callback_max_gas: u64,
+    callback_indexing_enabled: bool,
+) -> (OnBlockExecuted, Arc<AtomicU64>) {
+    let parent_hash = Arc::new(std::sync::RwLock::new(B256::ZERO));
+    let current_height = Arc::new(AtomicU64::new(initial_height));
+    let parent_hash_for_callback = Arc::clone(&parent_hash);
+    let current_height_for_callback = Arc::clone(&current_height);
+
+    let on_block_executed: OnBlockExecuted = Arc::new(move |info| {
+        let operations = state_changes_to_operations(info.state_changes);
+        let commit_hash = futures::executor::block_on(async {
+            storage
+                .batch(operations)
+                .await
+                .expect("storage batch failed");
+            storage.commit().await.expect("storage commit failed")
+        });
+        let state_root = B256::from_slice(commit_hash.as_bytes());
+
+        let prev_parent = *parent_hash_for_callback.read().unwrap();
+        let block_hash = compute_block_hash(info.height, info.timestamp, prev_parent);
+        let metadata = BlockMetadata::new(
+            block_hash,
+            prev_parent,
+            state_root,
+            info.timestamp,
+            callback_max_gas,
+            Address::ZERO,
+            callback_chain_id,
+        );
+
+        let block = BlockBuilder::<TxContext>::new()
+            .number(info.height)
+            .timestamp(info.timestamp)
+            .transactions(info.transactions)
+            .build();
+        let (stored_block, stored_txs, stored_receipts) =
+            build_index_data(&block, &info.block_result, &metadata);
+
+        if callback_indexing_enabled {
+            if let Some(ref index) = chain_index {
+                if let Err(err) = index.store_block(stored_block, stored_txs, stored_receipts) {
+                    tracing::warn!("Failed to index block {}: {:?}", info.height, err);
+                } else {
+                    tracing::debug!(
+                        "Indexed block {} (hash={}, state_root={})",
+                        info.height,
+                        block_hash,
+                        state_root
+                    );
+                }
+            }
+        }
+
+        *parent_hash_for_callback.write().unwrap() = block_hash;
+        current_height_for_callback.store(info.height, Ordering::SeqCst);
+    });
+
+    (on_block_executed, current_height)
+}
+
+fn log_server_configuration(config: &NodeConfig, initial_height: u64) {
+    let grpc_addr = config.parsed_grpc_addr();
+    tracing::info!("Starting gRPC server on {}", grpc_addr);
+    tracing::info!("Configuration:");
+    tracing::info!("  - Chain ID: {}", config.chain.chain_id);
+    tracing::info!("  - gRPC compression: {}", config.grpc.enable_gzip);
+    tracing::info!("  - JSON-RPC: {}", config.rpc.enabled);
+    tracing::info!("  - Block indexing: {}", config.rpc.enable_block_indexing);
+    tracing::info!("  - Initial height: {}", initial_height);
+}
+
+async fn run_server_with_shutdown<F, E>(
+    serve_future: F,
+    context_for_shutdown: TokioContext,
+    shutdown_timeout_secs: u64,
+) where
+    F: std::future::Future<Output = Result<(), E>>,
+    E: std::fmt::Display,
+{
+    tokio::pin!(serve_future);
+    tokio::select! {
+        result = &mut serve_future => {
+            if let Err(err) = result {
+                tracing::error!("gRPC server error: {}", err);
+            }
+        }
+        _ = tokio::signal::ctrl_c() => {
+            tracing::info!("Received Ctrl+C, shutting down...");
+            context_for_shutdown
+                .stop(0, Some(Duration::from_secs(shutdown_timeout_secs)))
+                .await
+                .expect("shutdown failed");
+        }
+    }
+}
+
+async fn persist_chain_state(
+    storage: &NodeStorage,
+    current_height: &Arc<AtomicU64>,
+    genesis_result: EvdGenesisResult,
+) {
+    let chain_state = ChainState {
+        height: current_height.load(Ordering::SeqCst),
+        genesis_result,
+    };
+    if let Err(err) = save_chain_state(storage, &chain_state).await {
+        tracing::error!("Failed to save chain state: {}", err);
+    }
+}
+
+fn stop_rpc_server(rpc_handle: Option<RpcRuntimeHandle>) {
+    if let Some(handle) = rpc_handle {
+        tracing::info!("Stopping JSON-RPC server...");
+        handle.stop();
+    }
+}
+
 fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
     tracing::info!("=== Evolve Node Daemon (evd) ===");
-
     std::fs::create_dir_all(&config.storage.path).expect("failed to create data directory");
 
     let storage_config = StorageConfig {
         path: config.storage.path.clone().into(),
         ..Default::default()
     };
-
     let runtime_config = TokioConfig::default()
         .with_storage_directory(&config.storage.path)
         .with_worker_threads(4);
-
     let runner = Runner::new(runtime_config);
 
-    runner.start(move |context| {
-        async move {
-            let context_for_shutdown = context.clone();
+    runner.start(move |context| async move {
+        let context_for_shutdown = context.clone();
+        let (storage, genesis_result, initial_height) =
+            init_storage_and_genesis(context, storage_config, genesis_config).await;
 
-            // Initialize QMDB storage
-            let storage = QmdbStorage::new(context, storage_config)
-                .await
-                .expect("failed to create storage");
+        let stf = build_mempool_stf(default_gas_config(), genesis_result.scheduler);
+        let mempool: RpcMempool = new_shared_mempool();
+        let chain_index = init_chain_index(&config);
+        let rpc_handle = start_rpc_server(
+            &config,
+            storage.clone(),
+            mempool.clone(),
+            &chain_index,
+            genesis_result.token,
+        )
+        .await;
 
-            // Set up account codes
-            let codes = build_codes();
-            tracing::info!("Installed account codes: {:?}", codes.list_identifiers());
+        let executor_config = ExecutorServiceConfig::default();
+        let (on_block_executed, current_height) = build_on_block_executed(
+            storage.clone(),
+            chain_index,
+            initial_height,
+            config.chain.chain_id,
+            executor_config.max_gas,
+            config.rpc.enable_block_indexing,
+        );
+        log_server_configuration(&config, initial_height);
 
-            // Load or run genesis
-            let (genesis_result, initial_height) =
-                match load_chain_state::<EvdGenesisResult, _>(&storage) {
-                    Some(state) => {
-                        tracing::info!("Resuming from existing state at height {}", state.height);
-                        (state.genesis_result, state.height)
-                    }
-                    None => {
-                        tracing::info!("No existing state found, running genesis...");
-                        let output = run_genesis(&storage, &codes, genesis_config.as_ref());
-                        commit_genesis(&storage, output.changes, &output.genesis_result)
-                            .await
-                            .expect("genesis commit failed");
-                        tracing::info!("Genesis complete: {:?}", output.genesis_result);
-                        (output.genesis_result, 1)
-                    }
-                };
+        let grpc_config = EvnodeServerConfig {
+            addr: config.parsed_grpc_addr(),
+            enable_gzip: config.grpc.enable_gzip,
+            max_message_size: config.grpc_max_message_size_usize(),
+            executor_config,
+        };
+        let server =
+            EvnodeServer::with_mempool(grpc_config, stf, storage.clone(), build_codes(), mempool)
+                .with_on_block_executed(on_block_executed);
 
-            // Build STF with scheduler from genesis
-            let gas_config = default_gas_config();
-            let stf = build_mempool_stf(gas_config, genesis_result.scheduler);
+        tracing::info!("Server ready. Press Ctrl+C to stop.");
+        run_server_with_shutdown(
+            server.serve(),
+            context_for_shutdown,
+            config.operations.shutdown_timeout_secs,
+        )
+        .await;
 
-            // Create shared mempool
-            let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
-            // Create chain index backed by SQLite (only when needed)
-            let chain_index = if config.rpc.enabled || config.rpc.enable_block_indexing {
-                let chain_index_db_path =
-                    std::path::PathBuf::from(&config.storage.path).join("chain-index.sqlite");
-                let index = Arc::new(
-                    PersistentChainIndex::new(&chain_index_db_path)
-                        .expect("failed to open chain index database"),
-                );
-                if let Err(e) = index.initialize() {
-                    tracing::warn!("Failed to initialize chain index: {:?}", e);
-                }
-                Some(index)
-            } else {
-                None
-            };
-
-            // Set up JSON-RPC server if enabled
-            let rpc_handle = if config.rpc.enabled {
-                let subscriptions = Arc::new(SubscriptionManager::new());
-                let codes_for_rpc = Arc::new(build_codes());
-
-                let state_provider_config = ChainStateProviderConfig {
-                    chain_id: config.chain.chain_id,
-                    protocol_version: "0x1".to_string(),
-                    gas_price: U256::ZERO,
-                    sync_status: SyncStatus::NotSyncing(false),
-                };
-
-                let state_querier: Arc<dyn StateQuerier> = Arc::new(StorageStateQuerier::new(
-                    storage.clone(),
-                    genesis_result.token,
-                ));
-                let state_provider = ChainStateProvider::with_mempool(
-                    Arc::clone(chain_index.as_ref().expect("chain index required for RPC")),
-                    state_provider_config,
-                    codes_for_rpc,
-                    mempool.clone(),
-                )
-                .with_state_querier(state_querier);
-
-                let rpc_addr = config.parsed_rpc_addr();
-                let server_config = RpcServerConfig {
-                    http_addr: rpc_addr,
-                    chain_id: config.chain.chain_id,
-                };
-
-                tracing::info!("Starting JSON-RPC server on {}", rpc_addr);
-                let handle = start_server_with_subscriptions(
-                    server_config,
-                    state_provider,
-                    Arc::clone(&subscriptions),
-                )
-                .await
-                .expect("failed to start RPC server");
-
-                Some(handle)
-            } else {
-                None
-            };
-
-            // Shared state for the block callback
-            let parent_hash = Arc::new(std::sync::RwLock::new(B256::ZERO));
-            let current_height = Arc::new(AtomicU64::new(initial_height));
-
-            // Build the OnBlockExecuted callback: commits state to storage + indexes blocks
-            let storage_for_callback = storage.clone();
-            let chain_index_for_callback = chain_index.clone();
-            let parent_hash_for_callback = Arc::clone(&parent_hash);
-            let current_height_for_callback = Arc::clone(&current_height);
-            let callback_chain_id = config.chain.chain_id;
-            let executor_config = ExecutorServiceConfig::default();
-            let callback_max_gas = executor_config.max_gas;
-            let callback_indexing_enabled = config.rpc.enable_block_indexing;
-
-            let on_block_executed: OnBlockExecuted = Arc::new(move |info| {
-                // 1. Commit state changes to QmdbStorage
-                let operations = state_changes_to_operations(info.state_changes);
-
-                let commit_hash = futures::executor::block_on(async {
-                    storage_for_callback
-                        .batch(operations)
-                        .await
-                        .expect("storage batch failed");
-                    storage_for_callback
-                        .commit()
-                        .await
-                        .expect("storage commit failed")
-                });
-                let state_root = B256::from_slice(commit_hash.as_bytes());
-
-                // 2. Compute block hash and build metadata
-                let prev_parent = *parent_hash_for_callback.read().unwrap();
-                let block_hash = compute_block_hash(info.height, info.timestamp, prev_parent);
-
-                let metadata = BlockMetadata::new(
-                    block_hash,
-                    prev_parent,
-                    state_root,
-                    info.timestamp,
-                    callback_max_gas,
-                    Address::ZERO,
-                    callback_chain_id,
-                );
-
-                // 3. Reconstruct block and index it
-                let block = BlockBuilder::<TxContext>::new()
-                    .number(info.height)
-                    .timestamp(info.timestamp)
-                    .transactions(info.transactions)
-                    .build();
-
-                let (stored_block, stored_txs, stored_receipts) =
-                    build_index_data(&block, &info.block_result, &metadata);
-
-                if let Some(ref chain_index) = chain_index_for_callback {
-                    if callback_indexing_enabled {
-                        if let Err(e) =
-                            chain_index.store_block(stored_block, stored_txs, stored_receipts)
-                        {
-                            tracing::warn!("Failed to index block {}: {:?}", info.height, e);
-                        } else {
-                            tracing::debug!(
-                                "Indexed block {} (hash={}, state_root={})",
-                                info.height,
-                                block_hash,
-                                state_root
-                            );
-                        }
-                    }
-                }
-
-                // 4. Update parent hash and height for next block
-                *parent_hash_for_callback.write().unwrap() = block_hash;
-                current_height_for_callback.store(info.height, Ordering::SeqCst);
-            });
-
-            // Configure gRPC server
-            let grpc_config = EvnodeServerConfig {
-                addr: config.parsed_grpc_addr(),
-                enable_gzip: config.grpc.enable_gzip,
-                max_message_size: config.grpc_max_message_size_usize(),
-                executor_config,
-            };
-
-            let grpc_addr = config.parsed_grpc_addr();
-            tracing::info!("Starting gRPC server on {}", grpc_addr);
-            tracing::info!("Configuration:");
-            tracing::info!("  - Chain ID: {}", config.chain.chain_id);
-            tracing::info!("  - gRPC compression: {}", config.grpc.enable_gzip);
-            tracing::info!("  - JSON-RPC: {}", config.rpc.enabled);
-            tracing::info!("  - Block indexing: {}", config.rpc.enable_block_indexing);
-            tracing::info!("  - Initial height: {}", initial_height);
-
-            // Create gRPC server with mempool and block callback
-            let server = EvnodeServer::with_mempool(
-                grpc_config,
-                stf,
-                storage.clone(),
-                build_codes(),
-                mempool,
-            )
-            .with_on_block_executed(on_block_executed);
-
-            tracing::info!("Server ready. Press Ctrl+C to stop.");
-
-            // Run gRPC server with shutdown handling
-            tokio::select! {
-                result = server.serve() => {
-                    if let Err(e) = result {
-                        tracing::error!("gRPC server error: {}", e);
-                    }
-                }
-                _ = tokio::signal::ctrl_c() => {
-                    tracing::info!("Received Ctrl+C, shutting down...");
-                    context_for_shutdown
-                        .stop(0, Some(Duration::from_secs(config.operations.shutdown_timeout_secs)))
-                        .await
-                        .expect("shutdown failed");
-                }
-            }
-
-            // Save chain state with actual committed height
-            let chain_state = ChainState {
-                height: current_height.load(Ordering::SeqCst),
-                genesis_result,
-            };
-            if let Err(e) = save_chain_state(&storage, &chain_state).await {
-                tracing::error!("Failed to save chain state: {}", e);
-            }
-
-            // Stop RPC server
-            if let Some(handle) = rpc_handle {
-                tracing::info!("Stopping JSON-RPC server...");
-                handle.stop().expect("failed to stop RPC server");
-            }
-
-            tracing::info!("Shutdown complete.");
-        }
+        persist_chain_state(&storage, &current_height, genesis_result).await;
+        stop_rpc_server(rpc_handle);
+        tracing::info!("Shutdown complete.");
     });
 }
 
@@ -634,17 +684,26 @@ mod tests {
     use evolve_core::Message;
     use evolve_storage::MockStorage;
     use std::collections::BTreeMap;
+    use std::sync::{Mutex, MutexGuard};
+
+    static ENV_VAR_LOCK: Mutex<()> = Mutex::new(());
 
     struct EnvVarGuard {
         key: &'static str,
         old: Option<String>,
+        _guard: MutexGuard<'static, ()>,
     }
 
     impl EnvVarGuard {
         fn set(key: &'static str, value: &str) -> Self {
+            let guard = ENV_VAR_LOCK.lock().expect("env var lock poisoned");
             let old = std::env::var(key).ok();
             std::env::set_var(key, value);
-            Self { key, old }
+            Self {
+                key,
+                old,
+                _guard: guard,
+            }
         }
     }
 

@@ -30,3 +30,20 @@ define_error!(
     0x1D,
     "gas limit exceeds block limit"
 );
+
+// System/runtime lookup errors (0x50-0x5F range)
+define_error!(
+    ERR_SYSTEM_LOOKUP_MISSING,
+    0x50,
+    "system lookup missing for recipient"
+);
+define_error!(
+    ERR_SYSTEM_RECIPIENT_NOT_FOUND,
+    0x52,
+    "recipient account not found in registry"
+);
+define_error!(
+    ERR_ADDRESS_ACCOUNT_CONFLICT,
+    0x5A,
+    "address/account registry conflict"
+);

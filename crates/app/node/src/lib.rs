@@ -441,7 +441,7 @@ pub fn run_dev_node_with_rpc<
                     state_provider_config.clone(),
                     Arc::clone(&codes_for_rpc),
                 )
-                .with_state_querier(state_querier);
+                .with_state_querier(Arc::clone(&state_querier));
 
                 // Start JSON-RPC server
                 let server_config = RpcServerConfig {
@@ -463,7 +463,8 @@ pub fn run_dev_node_with_rpc<
                         Arc::clone(&chain_index),
                         state_provider_config,
                         codes_for_rpc,
-                    );
+                    )
+                    .with_state_querier(state_querier);
                     let grpc_config = GrpcServerConfig {
                         addr: grpc_addr,
                         chain_id: rpc_config.chain_id,

@@ -1250,6 +1250,78 @@ where
         state.pop_events()
     }
 
+    fn tx_error_result<S: ReadonlyKV>(
+        state: &mut ExecutionState<'_, S>,
+        gas_counter: &GasCounter,
+        err: evolve_core::ErrorCode,
+    ) -> TxResult {
+        TxResult {
+            events: state.pop_events(),
+            gas_used: gas_counter.gas_used(),
+            response: Err(err),
+        }
+    }
+
+    fn resolve_sender_phase<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
+        &self,
+        state: &mut ExecutionState<'a, S>,
+        codes: &'a A,
+        gas_counter: &mut GasCounter,
+        tx: &Tx,
+        block: BlockContext,
+    ) -> SdkResult<AccountId> {
+        let mut resolve_ctx = Invoker::new_for_begin_block(state, codes, gas_counter, block);
+        tx.resolve_sender_account(&mut resolve_ctx)
+    }
+
+    fn bootstrap_sender_phase<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
+        &self,
+        state: &mut ExecutionState<'a, S>,
+        codes: &'a A,
+        gas_counter: &mut GasCounter,
+        tx: &Tx,
+        resolved_sender: AccountId,
+        block: BlockContext,
+    ) -> SdkResult<()> {
+        let Some(bootstrap) = tx.sender_bootstrap() else {
+            return Ok(());
+        };
+        let mut reg_ctx = Invoker::new_for_begin_block(state, codes, gas_counter, block);
+        reg_ctx.register_account_at_id(
+            resolved_sender,
+            bootstrap.account_code_id,
+            bootstrap.init_message,
+        )?;
+        drop(reg_ctx);
+        state.pop_events();
+        Ok(())
+    }
+
+    fn validate_tx_phase<'s, 'b, S: ReadonlyKV + 's, A: AccountsCodeStorage + 'b>(
+        &self,
+        tx: &Tx,
+        ctx: &mut Invoker<'s, 'b, S, A>,
+    ) -> SdkResult<()> {
+        self.tx_validator.validate_tx(tx, ctx)
+    }
+
+    fn execute_tx_phase<'s, 'b, S: ReadonlyKV + 's, A: AccountsCodeStorage + 'b>(
+        &self,
+        tx: &Tx,
+        ctx: Invoker<'s, 'b, S, A>,
+        resolved_sender: AccountId,
+    ) -> SdkResult<InvokeResponse> {
+        let mut exec_ctx = ctx.into_new_exec(resolved_sender);
+        let recipient = tx.resolve_recipient_account(&mut exec_ctx)?;
+        let response = exec_ctx.do_exec(recipient, tx.request(), tx.funds().to_vec());
+        let post_tx_result =
+            PostTx::after_tx_executed(tx, exec_ctx.gas_used(), &response, &mut exec_ctx);
+        match post_tx_result {
+            Ok(()) => response,
+            Err(post_tx_err) => Err(post_tx_err),
+        }
+    }
+
     fn apply_tx<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
         &self,
         state: &mut ExecutionState<'a, S>,
@@ -1258,117 +1330,37 @@ where
         gas_config: StorageGasConfig,
         block: BlockContext,
     ) -> TxResult {
-        // create a finite gas counter for the full tx lifecycle,
-        // including optional sender bootstrap registration.
         let mut gas_counter = GasCounter::Finite {
             gas_limit: tx.gas_limit(),
             gas_used: 0,
             storage_gas_config: gas_config,
         };
 
-        let resolved_sender = {
-            let mut resolve_ctx =
-                Invoker::new_for_begin_block(state, codes, &mut gas_counter, block);
-            let sender = match tx.resolve_sender_account(&mut resolve_ctx) {
+        let resolved_sender =
+            match self.resolve_sender_phase(state, codes, &mut gas_counter, tx, block) {
                 Ok(sender) => sender,
-                Err(err) => {
-                    drop(resolve_ctx);
-                    let gas_used = gas_counter.gas_used();
-                    let events = state.pop_events();
-                    return TxResult {
-                        events,
-                        gas_used,
-                        response: Err(err),
-                    };
-                }
+                Err(err) => return Self::tx_error_result(state, &gas_counter, err),
             };
-            drop(resolve_ctx);
-            sender
-        };
 
-        // Auto-register sender when transaction provides a bootstrap primitive.
-        if let Some(bootstrap) = tx.sender_bootstrap() {
-            let mut reg_ctx = Invoker::new_for_begin_block(state, codes, &mut gas_counter, block);
-            if let Err(err) = reg_ctx.register_account_at_id(
-                resolved_sender,
-                bootstrap.account_code_id,
-                bootstrap.init_message,
-            ) {
-                drop(reg_ctx);
-                let gas_used = gas_counter.gas_used();
-                let events = state.pop_events();
-                return TxResult {
-                    events,
-                    gas_used,
-                    response: Err(err),
-                };
-            }
-            drop(reg_ctx);
-            state.pop_events();
+        if let Err(err) =
+            self.bootstrap_sender_phase(state, codes, &mut gas_counter, tx, resolved_sender, block)
+        {
+            return Self::tx_error_result(state, &gas_counter, err);
         }
 
-        // NOTE: Transaction validation and execution are atomic - they share the same
-        // ExecutionState throughout the process. The state cannot change between
-        // validation and execution because:
-        // 1. The same ExecutionState instance is used for both phases
-        // 2. into_new_exec() preserves the storage, maintaining consistency
-        // 3. Transactions are processed sequentially, not concurrently
-
-        // create validation context
-        let mut ctx = Invoker::new_for_validate_tx(state, codes, &mut gas_counter, tx, block);
-        // do tx validation; we do not swap invoker
-        match self.tx_validator.validate_tx(tx, &mut ctx) {
-            Ok(()) => (),
-            Err(err) => {
-                drop(ctx);
-                let gas_used = gas_counter.gas_used();
-                let events = state.pop_events();
-                return TxResult {
-                    events,
-                    gas_used,
-                    response: Err(err),
-                };
-            }
+        let mut validation_ctx =
+            Invoker::new_for_validate_tx(state, codes, &mut gas_counter, tx, block);
+        if let Err(err) = self.validate_tx_phase(tx, &mut validation_ctx) {
+            drop(validation_ctx);
+            return Self::tx_error_result(state, &gas_counter, err);
         }
 
-        // exec tx - transforms validation context to execution context
-        // while preserving the same underlying state
-        let mut ctx = ctx.into_new_exec(resolved_sender);
-
-        let recipient = match tx.resolve_recipient_account(&mut ctx) {
-            Ok(recipient) => recipient,
-            Err(err) => {
-                drop(ctx);
-                let gas_used = gas_counter.gas_used();
-                let events = state.pop_events();
-                return TxResult {
-                    events,
-                    gas_used,
-                    response: Err(err),
-                };
-            }
-        };
-        let response = ctx.do_exec(recipient, tx.request(), tx.funds().to_vec());
-
-        // Run post-tx handler (e.g., for fee collection, logging, etc.)
-        // The handler can observe the result and make additional state changes
-        let post_tx_result = PostTx::after_tx_executed(tx, ctx.gas_used(), &response, &mut ctx);
-
-        drop(ctx);
-        let gas_used = gas_counter.gas_used();
-        let events = state.pop_events();
-
-        // If post-tx handler fails, the tx response becomes the error
-        // This allows the handler to reject transactions after execution
-        let final_response = match post_tx_result {
-            Ok(()) => response,
-            Err(post_tx_err) => Err(post_tx_err),
-        };
+        let response = self.execute_tx_phase(tx, validation_ctx, resolved_sender);
 
         TxResult {
-            events,
-            gas_used,
-            response: final_response,
+            events: state.pop_events(),
+            gas_used: gas_counter.gas_used(),
+            response,
         }
     }
 

@@ -11,7 +11,7 @@ use evolve_core::encoding::Encodable;
 use evolve_core::{AccountId, Message, ReadonlyKV};
 use evolve_eth_jsonrpc::error::RpcError;
 use evolve_rpc_types::CallRequest;
-use evolve_tx_eth::lookup_account_id_in_storage;
+use evolve_tx_eth::{lookup_account_id_in_storage, lookup_contract_account_id_in_storage};
 
 /// Trait for querying on-chain state (balance, nonce).
 ///
@@ -86,14 +86,23 @@ impl<S: ReadonlyKV + Send + Sync> StorageStateQuerier<S> {
             None => Ok(0),
         }
     }
+
+    fn resolve_account_id(&self, address: Address) -> Result<Option<AccountId>, RpcError> {
+        if let Some(account_id) = lookup_account_id_in_storage(&self.storage, address)
+            .map_err(|e| RpcError::InternalError(format!("lookup account id: {:?}", e)))?
+        {
+            return Ok(Some(account_id));
+        }
+
+        lookup_contract_account_id_in_storage(&self.storage, address)
+            .map_err(|e| RpcError::InternalError(format!("lookup contract account id: {:?}", e)))
+    }
 }
 
 #[async_trait]
 impl<S: ReadonlyKV + Send + Sync> StateQuerier for StorageStateQuerier<S> {
     async fn get_balance(&self, address: Address) -> Result<U256, RpcError> {
-        let Some(account_id) = lookup_account_id_in_storage(&self.storage, address)
-            .map_err(|e| RpcError::InternalError(format!("lookup account id: {:?}", e)))?
-        else {
+        let Some(account_id) = self.resolve_account_id(address)? else {
             return Ok(U256::ZERO);
         };
         let balance = self.read_balance(account_id)?;
@@ -101,9 +110,7 @@ impl<S: ReadonlyKV + Send + Sync> StateQuerier for StorageStateQuerier<S> {
     }
 
     async fn get_transaction_count(&self, address: Address) -> Result<u64, RpcError> {
-        let Some(account_id) = lookup_account_id_in_storage(&self.storage, address)
-            .map_err(|e| RpcError::InternalError(format!("lookup account id: {:?}", e)))?
-        else {
+        let Some(account_id) = self.resolve_account_id(address)? else {
             return Ok(0);
         };
         self.read_nonce(account_id)

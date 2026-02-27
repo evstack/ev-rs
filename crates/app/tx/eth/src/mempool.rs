@@ -21,6 +21,7 @@ use crate::envelope::TxEnvelope;
 use crate::eoa_registry::{
     lookup_account_id_in_env, lookup_contract_account_id_in_env, resolve_or_create_eoa_account,
 };
+use crate::error::{ERR_SYSTEM_LOOKUP_MISSING, ERR_SYSTEM_RECIPIENT_NOT_FOUND};
 use crate::traits::TypedTransaction;
 
 /// A verified transaction ready for mempool storage.
@@ -121,17 +122,14 @@ impl Transaction for TxContext {
     }
 
     fn resolve_recipient_account(&self, env: &mut dyn Environment) -> SdkResult<AccountId> {
-        let to = self
-            .envelope
-            .to()
-            .ok_or_else(|| evolve_core::ErrorCode::new(0x50))?;
+        let to = self.envelope.to().ok_or(ERR_SYSTEM_LOOKUP_MISSING)?;
         if let Some(account_id) = lookup_account_id_in_env(to, env)? {
             return Ok(account_id);
         }
         if let Some(account_id) = lookup_contract_account_id_in_env(to, env)? {
             return Ok(account_id);
         }
-        Err(evolve_core::ErrorCode::new(0x52))
+        Err(ERR_SYSTEM_RECIPIENT_NOT_FOUND)
     }
 
     fn request(&self) -> &InvokeRequest {
@@ -178,9 +176,7 @@ impl Decodable for TxContext {
         let envelope = TxEnvelope::decode(bytes)?;
         // Use base_fee of 0 for decoding - the effective gas price will be
         // recalculated if needed when the transaction is added to a mempool
-        TxContext::new(envelope, 0).ok_or_else(|| {
-            evolve_core::ErrorCode::new(0x50) // Contract creation not supported
-        })
+        TxContext::new(envelope, 0).ok_or(ERR_SYSTEM_LOOKUP_MISSING)
     }
 }
 
