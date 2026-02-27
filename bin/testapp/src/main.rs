@@ -65,7 +65,6 @@ fn main() {
 
             let mut rpc_config = config.to_rpc_config();
             rpc_config.grpc_addr = Some(config.parsed_grpc_addr());
-
             if args.custom.mock_storage {
                 run_dev_node_with_rpc_and_mempool_mock_storage(
                     &config.storage.path,
@@ -96,7 +95,6 @@ fn main() {
             init_node_tracing(&config.observability.log_level);
 
             let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
-
             init_dev_node(
                 &config.storage.path,
                 build_genesis_stf,
@@ -247,7 +245,6 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
         changes,
     })
 }
-
 async fn build_storage(
     context: commonware_runtime::tokio::Context,
     config: StorageConfig,

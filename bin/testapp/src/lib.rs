@@ -84,7 +84,6 @@ impl HasTokenAccountId for GenesisAccounts {
         self.atom
     }
 }
-
 fn parse_genesis_address_env(var: &str) -> Option<[u8; 20]> {
     use alloy_primitives::Address;
     use std::str::FromStr;

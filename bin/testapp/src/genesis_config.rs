@@ -4,6 +4,9 @@ use evolve_core::AccountId;
 use evolve_fungible_asset::FungibleAssetMetadata;
 use evolve_node::HasTokenAccountId;
 use serde::Deserialize;
+use std::collections::BTreeSet;
+
+pub type FundedAccount = ([u8; 20], u128);
 
 /// Evd genesis configuration loaded from JSON.
 #[derive(Deserialize)]
@@ -56,12 +59,41 @@ impl EvdGenesisConfig {
         if self.accounts.is_empty() {
             return Err("genesis config must have at least one account".into());
         }
+        let mut seen = BTreeSet::new();
         for (i, acc) in self.accounts.iter().enumerate() {
-            acc.parse_address()
+            let addr = acc
+                .parse_address()
                 .map_err(|e| format!("account[{}]: {}", i, e))?;
+            if !seen.insert(addr.into_array()) {
+                return Err(format!(
+                    "account[{i}]: duplicate eth address '{}'",
+                    acc.eth_address
+                ));
+            }
         }
         Ok(())
     }
+
+    /// Return funded accounts as (eth_address, balance) tuples for genesis execution.
+    pub fn funded_accounts(&self) -> Result<Vec<FundedAccount>, String> {
+        self.accounts
+            .iter()
+            .filter(|acc| acc.balance > 0)
+            .map(|acc| {
+                let addr = acc.parse_address()?;
+                Ok((addr.into_array(), acc.balance))
+            })
+            .collect()
+    }
+}
+
+/// Load an optional genesis config and validate it.
+pub fn load_genesis_config(path: Option<&str>) -> Result<Option<EvdGenesisConfig>, String> {
+    path.map(|p| {
+        tracing::info!("Loading genesis config from: {}", p);
+        EvdGenesisConfig::load(p)
+    })
+    .transpose()
 }
 
 impl TokenConfig {
@@ -183,6 +215,38 @@ mod tests {
         assert_eq!(cfg.minter_id, 100);
         assert_eq!(cfg.accounts.len(), 1);
         assert_eq!(cfg.accounts[0].balance, 1000);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn load_fails_for_duplicate_account_address() {
+        let path = temp_genesis_file(
+            r#"{
+                "token": {
+                    "name": "Evolve",
+                    "symbol": "EV",
+                    "decimals": 6,
+                    "icon_url": "https://example.com/icon.png",
+                    "description": "token"
+                },
+                "minter_id": 100,
+                "accounts": [
+                    {
+                        "eth_address": "0x0000000000000000000000000000000000000001",
+                        "balance": 1000
+                    },
+                    {
+                        "eth_address": "0x0000000000000000000000000000000000000001",
+                        "balance": 2000
+                    }
+                ]
+            }"#,
+        );
+
+        let err = EvdGenesisConfig::load(path.to_str().unwrap())
+            .err()
+            .expect("duplicate address must fail");
+        assert!(err.contains("duplicate eth address"));
         let _ = std::fs::remove_file(path);
     }
 

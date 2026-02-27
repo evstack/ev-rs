@@ -89,7 +89,7 @@ use evolve_server::{
 };
 use evolve_stf_traits::{AccountsCodeStorage, StateChange};
 use evolve_storage::{Operation, QmdbStorage, Storage, StorageConfig};
-use evolve_testapp::genesis_config::{EvdGenesisConfig, EvdGenesisResult};
+use evolve_testapp::genesis_config::{load_genesis_config, EvdGenesisConfig, EvdGenesisResult};
 use evolve_testapp::{
     build_mempool_stf, default_gas_config, do_eth_genesis_inner, install_account_codes,
     PLACEHOLDER_ACCOUNT,
@@ -98,7 +98,6 @@ use evolve_testing::server_mocks::AccountStorageMock;
 use evolve_token::account::TokenRef;
 use evolve_tx_eth::TxContext;
 use evolve_tx_eth::{register_runtime_contract_account, resolve_or_create_eoa_account};
-
 #[derive(Parser)]
 #[command(name = "evd")]
 #[command(about = "Evolve node daemon with gRPC execution layer")]
@@ -140,23 +139,28 @@ fn main() {
         Commands::Run(args) => {
             let config = resolve_node_config(&args.common, &args.native);
             init_node_tracing(&config.observability.log_level);
-            let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
+            let genesis_config = match load_genesis_config(args.custom.genesis_file.as_deref()) {
+                Ok(genesis_config) => genesis_config,
+                Err(err) => {
+                    tracing::error!("{err}");
+                    std::process::exit(2);
+                }
+            };
             run_node(config, genesis_config);
         }
         Commands::Init(args) => {
             let config = resolve_node_config_init(&args.common);
             init_node_tracing(&config.observability.log_level);
-            let genesis_config = load_genesis_config(args.custom.genesis_file.as_deref());
+            let genesis_config = match load_genesis_config(args.custom.genesis_file.as_deref()) {
+                Ok(genesis_config) => genesis_config,
+                Err(err) => {
+                    tracing::error!("{err}");
+                    std::process::exit(2);
+                }
+            };
             init_genesis(&config.storage.path, genesis_config);
         }
     }
-}
-
-fn load_genesis_config(path: Option<&str>) -> Option<EvdGenesisConfig> {
-    path.map(|p| {
-        tracing::info!("Loading genesis config from: {}", p);
-        EvdGenesisConfig::load(p).expect("failed to load genesis config")
-    })
 }
 
 fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
@@ -534,7 +538,6 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
             (addr.into_array(), acc.balance)
         })
         .collect();
-
     let minter = AccountId::new(genesis_config.minter_id);
     let metadata = genesis_config.token.to_metadata();
 
