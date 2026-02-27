@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion};
 use evolve_debugger::ExecutionTrace;
 use evolve_simulator::SimConfig;

@@ -6,6 +6,7 @@
 
 // Genesis processing is deterministic per-file; HashMap order doesn't affect output.
 #![allow(clippy::disallowed_types)]
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 use crate::error::GenesisError;
 use evolve_core::InvokeRequest;

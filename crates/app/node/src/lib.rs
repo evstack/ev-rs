@@ -1,3 +1,6 @@
+#![allow(clippy::expect_used, clippy::unwrap_used)]
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
+
 //! Reusable dev-node runner for Evolve applications.
 //!
 //! This module provides a complete dev-node implementation that includes:
@@ -12,6 +15,7 @@ pub mod config;
 use std::fmt::Debug;
 use std::net::SocketAddr;
 use std::path::Path;
+
 use std::sync::Arc;
 use std::time::Duration;
 

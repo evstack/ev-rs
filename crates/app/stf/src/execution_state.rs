@@ -449,7 +449,9 @@ impl<S: ReadonlyKV> ExecutionState<'_, S> {
         }
 
         while self.undo_log.len() > checkpoint.undo_log_index {
-            let change = self.undo_log.pop().expect("undo log has elements");
+            let Some(change) = self.undo_log.pop() else {
+                return Err(ERR_INVALID_CHECKPOINT);
+            };
             change.revert(&mut self.overlay);
         }
 

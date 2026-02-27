@@ -1,3 +1,5 @@
+#![allow(clippy::indexing_slicing)]
+
 use evolve_stf::ERR_OUT_OF_GAS;
 use evolve_testapp::sim_testing::SimTestApp;
 

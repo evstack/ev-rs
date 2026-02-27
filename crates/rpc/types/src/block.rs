@@ -1,4 +1,5 @@
 //! Ethereum-compatible block types.
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 use alloy_primitives::{Address, Bytes, B256, B64, U256, U64};
 use serde::{Deserialize, Serialize};

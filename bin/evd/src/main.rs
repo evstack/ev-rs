@@ -40,6 +40,7 @@
 //! # Initialize genesis only
 //! evd init
 //! ```
+#![allow(clippy::expect_used)]
 //!
 //! ## Custom Genesis JSON Format
 //!
@@ -303,7 +304,9 @@ fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
                 let state_root = B256::from_slice(commit_hash.as_bytes());
 
                 // 2. Compute block hash and build metadata
-                let prev_parent = *parent_hash_for_callback.read().unwrap();
+                let prev_parent = *parent_hash_for_callback
+                    .read()
+                    .unwrap_or_else(|e| panic!("parent hash read lock poisoned: {e}"));
                 let block_hash = compute_block_hash(info.height, info.timestamp, prev_parent);
 
                 let metadata = BlockMetadata::new(
@@ -344,7 +347,10 @@ fn run_node(config: NodeConfig, genesis_config: Option<EvdGenesisConfig>) {
                 }
 
                 // 4. Update parent hash and height for next block
-                *parent_hash_for_callback.write().unwrap() = block_hash;
+                *parent_hash_for_callback
+                    .write()
+                    .unwrap_or_else(|e| panic!("parent hash write lock poisoned: {e}")) =
+                    block_hash;
                 current_height_for_callback.store(info.height, Ordering::SeqCst);
             });
 
@@ -486,13 +492,11 @@ fn run_default_genesis<S: ReadonlyKV + Storage>(
     let alice_eth_address = std::env::var("GENESIS_ALICE_ETH_ADDRESS")
         .ok()
         .and_then(|s| Address::from_str(s.trim()).ok())
-        .map(Into::into)
-        .unwrap_or([0xAA; 20]);
+        .map_or([0xAA; 20], Into::into);
     let bob_eth_address = std::env::var("GENESIS_BOB_ETH_ADDRESS")
         .ok()
         .and_then(|s| Address::from_str(s.trim()).ok())
-        .map(Into::into)
-        .unwrap_or([0xBB; 20]);
+        .map_or([0xBB; 20], Into::into);
 
     let (accounts, state) = stf
         .system_exec(storage, codes, genesis_block, |env| {
@@ -624,6 +628,7 @@ fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use evolve_core::encoding::Encodable;

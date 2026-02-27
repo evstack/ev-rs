@@ -105,9 +105,9 @@ impl AccountId {
     /// Increment account ID bytes in big-endian order (wraps on overflow).
     pub fn increase(&self) -> Self {
         let mut out = self.0;
-        for i in (0..32).rev() {
-            let (next, carry) = out[i].overflowing_add(1);
-            out[i] = next;
+        for byte in out.iter_mut().rev() {
+            let (next, carry) = byte.overflowing_add(1);
+            *byte = next;
             if !carry {
                 break;
             }
@@ -202,9 +202,10 @@ macro_rules! ensure {
 pub fn one_coin(env: &dyn EnvironmentQuery) -> SdkResult<FungibleAsset> {
     let funds = env.funds();
     ensure!(funds.len() == 1, ERR_ONE_COIN);
+    let coin = funds.first().ok_or(ERR_ONE_COIN)?;
     Ok(FungibleAsset {
-        asset_id: funds[0].asset_id,
-        amount: funds[0].amount,
+        asset_id: coin.asset_id,
+        amount: coin.amount,
     })
 }
 

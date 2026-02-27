@@ -38,7 +38,10 @@ impl ExampleStorageInner {
 
     /// Apply state changes to the storage.
     fn apply_changes(&self, changes: &[StateChange]) {
-        let mut data = self.data.write().unwrap();
+        let mut data = self
+            .data
+            .write()
+            .unwrap_or_else(|e| panic!("example storage write lock poisoned: {e}"));
         for change in changes {
             match change {
                 StateChange::Set { key, value } => {
@@ -54,7 +57,12 @@ impl ExampleStorageInner {
 
 impl ReadonlyKV for ExampleStorageInner {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
-        Ok(self.data.read().unwrap().get(key).cloned())
+        Ok(self
+            .data
+            .read()
+            .unwrap_or_else(|e| panic!("example storage read lock poisoned: {e}"))
+            .get(key)
+            .cloned())
     }
 }
 

@@ -30,7 +30,7 @@ pub struct EvnodeServerConfig {
 impl Default for EvnodeServerConfig {
     fn default() -> Self {
         Self {
-            addr: "127.0.0.1:50051".parse().unwrap(),
+            addr: SocketAddr::from(([127, 0, 0, 1], 50051)),
             enable_gzip: true,
             max_message_size: 4 * 1024 * 1024, // 4MB
             executor_config: ExecutorServiceConfig::default(),

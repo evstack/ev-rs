@@ -2,6 +2,8 @@
 //!
 //! These tests use real Ethereum transaction data to verify correct behavior.
 
+#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
 use alloy_consensus::{SignableTransaction, TxEip1559, TxLegacy};
 use alloy_primitives::{Address, Bytes, PrimitiveSignature, B256, U256};
 use evolve_stf_traits::TxDecoder;

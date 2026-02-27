@@ -1,4 +1,5 @@
 //! Conversion between internal RPC types and protobuf types.
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 use alloy_primitives::{Address, Bytes, B256, U256, U64};
 use evolve_rpc_types::{

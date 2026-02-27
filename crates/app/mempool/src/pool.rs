@@ -142,7 +142,7 @@ impl<T: MempoolTx> Mempool<T> {
         let next = self.by_sender_seq.entry(*sender).or_insert(0);
         let current = *next;
         debug_assert!(current != u64::MAX, "sender sequence overflow");
-        *next = next.checked_add(1).expect("sender sequence overflow");
+        *next = next.saturating_add(1);
         current
     }
 
@@ -393,6 +393,7 @@ pub fn shared_mempool_from<M>(mempool: M) -> SharedMempool<M> {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     // TODO(test-hardening): Add property/state-machine tests over add/propose/finalize
     // to prove invariants across long operation sequences and randomized schedules.

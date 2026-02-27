@@ -38,7 +38,7 @@ pub struct RpcServerConfig {
 impl Default for RpcServerConfig {
     fn default() -> Self {
         Self {
-            http_addr: "127.0.0.1:8545".parse().unwrap(),
+            http_addr: SocketAddr::from(([127, 0, 0, 1], 8545)),
             chain_id: 1,
         }
     }
@@ -673,7 +673,9 @@ impl<S: StateProvider> EthRpcServer<S> {
                 result = rx.recv() => {
                     match result {
                         Ok(block) => {
-                            let msg = SubscriptionMessage::from_json(&*block).unwrap();
+                            let Ok(msg) = SubscriptionMessage::from_json(&*block) else {
+                                continue;
+                            };
                             if sink.send(msg).await.is_err() {
                                 break;
                             }
@@ -710,7 +712,9 @@ impl<S: StateProvider> EthRpcServer<S> {
                             if !SubscriptionManager::log_matches_filter(&log, &filter) {
                                 continue;
                             }
-                            let msg = SubscriptionMessage::from_json(&*log).unwrap();
+                            let Ok(msg) = SubscriptionMessage::from_json(&*log) else {
+                                continue;
+                            };
                             if sink.send(msg).await.is_err() {
                                 break;
                             }
@@ -742,7 +746,9 @@ impl<S: StateProvider> EthRpcServer<S> {
                 result = rx.recv() => {
                     match result {
                         Ok(hash) => {
-                            let msg = SubscriptionMessage::from_json(&hash).unwrap();
+                            let Ok(msg) = SubscriptionMessage::from_json(&hash) else {
+                                continue;
+                            };
                             if sink.send(msg).await.is_err() {
                                 break;
                             }
@@ -771,7 +777,9 @@ impl<S: StateProvider> EthRpcServer<S> {
                 result = rx.recv() => {
                     match result {
                         Ok(status) => {
-                            let msg = SubscriptionMessage::from_json(&status).unwrap();
+                            let Ok(msg) = SubscriptionMessage::from_json(&status) else {
+                                continue;
+                            };
                             if sink.send(msg).await.is_err() {
                                 break;
                             }

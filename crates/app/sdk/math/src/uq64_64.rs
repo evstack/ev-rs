@@ -104,13 +104,17 @@ impl UQ64x64 {
     /// Create a UQ64.64 from a percentage value (divides by 100)
     /// For example, percentage(50) creates 0.5 (50%)
     pub fn percentage(value: u64) -> Self {
-        Self::from_fraction(value, 100).unwrap()
+        let num = FixedU128::<U64>::from_num(value);
+        let den = FixedU128::<U64>::from_num(100u64);
+        Self(num / den)
     }
 
     /// Create a UQ64.64 from basis points (divides by 10000)
     /// For example, bps(50) creates 0.005 (0.5%)
     pub fn bps(value: u64) -> Self {
-        Self::from_fraction(value, 10000).unwrap()
+        let num = FixedU128::<U64>::from_num(value);
+        let den = FixedU128::<U64>::from_num(10_000u64);
+        Self(num / den)
     }
 }
 

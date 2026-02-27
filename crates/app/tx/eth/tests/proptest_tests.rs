@@ -1,5 +1,7 @@
 //! Property-based tests for transaction encoding/decoding roundtrips.
 
+#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
 use alloy_consensus::{SignableTransaction, TxEip1559, TxLegacy};
 use alloy_primitives::{Address, Bytes, PrimitiveSignature, B256, U256};
 use evolve_tx_eth::{tx_type, TxEnvelope, TypedTransaction};

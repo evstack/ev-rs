@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used, clippy::indexing_slicing)]
+
 use crate::{
     build_mempool_stf, default_gas_config, install_account_codes, GenesisAccounts, MINTER,
     PLACEHOLDER_ACCOUNT,
@@ -66,8 +68,9 @@ fn get_address(signing_key: &SigningKey) -> alloy_primitives::Address {
 }
 
 fn sign_hash(signing_key: &SigningKey, hash: alloy_primitives::B256) -> PrimitiveSignature {
-    let (sig, recovery_id): (k256::ecdsa::Signature, k256::ecdsa::RecoveryId) =
-        signing_key.sign_prehash(hash.as_ref()).unwrap();
+    let (sig, recovery_id): (k256::ecdsa::Signature, k256::ecdsa::RecoveryId) = signing_key
+        .sign_prehash(hash.as_ref())
+        .unwrap_or_else(|e| panic!("failed to sign prehash: {e}"));
     let r = U256::from_be_slice(sig.r().to_bytes().as_slice());
     let s = U256::from_be_slice(sig.s().to_bytes().as_slice());
     let v = recovery_id.is_y_odd();
@@ -699,15 +702,17 @@ impl SimTestApp {
 
     pub fn mint_atom(&mut self, recipient: AccountId, amount: u128) -> FungibleAsset {
         let atom_id = self.accounts.atom;
-        self.system_exec_as(MINTER, |env| {
+        match self.system_exec_as(MINTER, |env| {
             let atom_token = TokenRef::from(atom_id);
             atom_token.mint(recipient, amount, env)?;
             Ok(FungibleAsset {
                 asset_id: atom_token.0,
                 amount,
             })
-        })
-        .unwrap()
+        }) {
+            Ok(asset) => asset,
+            Err(e) => panic!("mint_atom failed: {e:?}"),
+        }
     }
 
     pub fn go_to_height(&mut self, height: u64) {

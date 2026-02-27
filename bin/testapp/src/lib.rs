@@ -66,9 +66,15 @@ pub fn build_mempool_stf(gas_config: StorageGasConfig, scheduler_id: AccountId) 
 
 /// List of accounts installed.
 pub fn install_account_codes(codes: &mut impl WritableAccountsCodeStorage) {
-    codes.add_code(Token::new()).unwrap();
-    codes.add_code(Scheduler::new()).unwrap();
-    codes.add_code(EthEoaAccount::new()).unwrap();
+    codes
+        .add_code(Token::new())
+        .unwrap_or_else(|e| panic!("failed to install Token code: {e:?}"));
+    codes
+        .add_code(Scheduler::new())
+        .unwrap_or_else(|e| panic!("failed to install Scheduler code: {e:?}"));
+    codes
+        .add_code(EthEoaAccount::new())
+        .unwrap_or_else(|e| panic!("failed to install EthEoaAccount code: {e:?}"));
 }
 
 #[derive(Clone, Copy, Debug, borsh::BorshSerialize, borsh::BorshDeserialize)]

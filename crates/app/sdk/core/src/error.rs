@@ -151,6 +151,7 @@ macro_rules! define_error {
 
 pub const fn crate_namespace() -> u8 {
     // Use FNV-1a hash algorithm for better distribution
+    #[allow(clippy::indexing_slicing)]
     const fn fnv1a_hash(bytes: &[u8]) -> u8 {
         const FNV_PRIME: u64 = 0x100000001b3;
         const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;

@@ -6,6 +6,7 @@
 //! - `Storage` for state queries (balance, nonce, code)
 //! - `Stf` for call/estimateGas execution
 //! - `EthGateway` + `Mempool` for transaction submission (optional)
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -626,12 +627,14 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
                                         break;
                                     }
                                     let topic_matches = match tf {
-                                        evolve_rpc_types::FilterTopic::Single(t) => {
-                                            stored_log.topics[i] == *t
-                                        }
-                                        evolve_rpc_types::FilterTopic::Multiple(ts) => {
-                                            ts.contains(&stored_log.topics[i])
-                                        }
+                                        evolve_rpc_types::FilterTopic::Single(t) => stored_log
+                                            .topics
+                                            .get(i)
+                                            .is_some_and(|topic| *topic == *t),
+                                        evolve_rpc_types::FilterTopic::Multiple(ts) => stored_log
+                                            .topics
+                                            .get(i)
+                                            .is_some_and(|topic| ts.contains(topic)),
                                     };
                                     if !topic_matches {
                                         matches = false;
@@ -865,7 +868,11 @@ mod tests {
         assert_eq!(input.len() % 2, 0, "hex input must have even length");
         let mut out = Vec::with_capacity(input.len() / 2);
         for pair in input.as_bytes().chunks_exact(2) {
-            out.push((nibble(pair[0]) << 4) | nibble(pair[1]));
+            if let (Some(first), Some(second)) = (pair.first(), pair.get(1)) {
+                out.push((nibble(*first) << 4) | nibble(*second));
+            } else {
+                unreachable!("chunks_exact(2) always yields pairs");
+            }
         }
         out
     }

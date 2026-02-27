@@ -26,8 +26,10 @@ pub fn recover_sender_from_signature_hash(
         .recover_ecdsa(&msg, &recoverable)
         .map_err(|_| ERR_SIGNATURE_RECOVERY)?;
     let uncompressed = pubkey.serialize_uncompressed();
-    let hash = keccak256(&uncompressed[1..]);
-    Ok(Address::from_slice(&hash[12..]))
+    let pubkey_payload = uncompressed.get(1..).ok_or(ERR_SIGNATURE_RECOVERY)?;
+    let hash = keccak256(pubkey_payload);
+    let address_bytes = hash.as_slice().get(12..).ok_or(ERR_SIGNATURE_RECOVERY)?;
+    Ok(Address::from_slice(address_bytes))
 }
 
 fn secp() -> &'static Secp256k1<All> {
@@ -36,6 +38,7 @@ fn secp() -> &'static Secp256k1<All> {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing, clippy::unwrap_used)]
 mod tests {
     use super::*;
     use alloy_primitives::U256;

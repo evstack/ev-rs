@@ -194,8 +194,7 @@ fn build_stored_transaction<Tx: Transaction>(
 ) -> StoredTransaction {
     let from = tx
         .sender_eth_address()
-        .map(Address::from)
-        .unwrap_or_else(|| account_id_to_address(tx.sender()));
+        .map_or_else(|| account_id_to_address(tx.sender()), Address::from);
     let to = {
         if let Some(recipient) = tx.recipient_eth_address() {
             Some(Address::from(recipient))
@@ -251,8 +250,7 @@ fn build_stored_receipt<Tx: Transaction>(
 ) -> StoredReceipt {
     let from = tx
         .sender_eth_address()
-        .map(Address::from)
-        .unwrap_or_else(|| account_id_to_address(tx.sender()));
+        .map_or_else(|| account_id_to_address(tx.sender()), Address::from);
     let to = {
         if let Some(recipient) = tx.recipient_eth_address() {
             Some(Address::from(recipient))

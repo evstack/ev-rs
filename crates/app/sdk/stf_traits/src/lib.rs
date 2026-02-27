@@ -249,6 +249,7 @@ pub fn filter_valid_signatures<Tx>(
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
 

@@ -1,4 +1,5 @@
 //! Simulation tests that verify system invariants across multiple blocks.
+#![allow(clippy::indexing_slicing)]
 
 use evolve_fungible_asset::{GetBalanceMsg, TotalSupplyMsg};
 use evolve_simulator::SimConfig;

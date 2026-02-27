@@ -100,6 +100,15 @@ rusqlite = { version = "0.38", features = ["bundled"] }
 [workspace.lints.clippy]
 # Determinism lints - catch common sources of non-determinism
 disallowed_types = "warn"
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+indexing_slicing = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+map_unwrap_or = "deny"
 
 [workspace.lints.rustdoc]
 # broken_intra_doc_links = "deny"

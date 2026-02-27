@@ -3,6 +3,7 @@
 //! The `ChainIndex` trait defines operations for storing and retrieving chain data.
 //! `PersistentChainIndex` implements this trait using a SQLite database with a
 //! connection pool (r2d2) for concurrent reads and a dedicated writer connection.
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 use std::sync::Mutex;
 
@@ -156,7 +157,10 @@ impl PersistentChainIndex {
     }
 
     fn init_schema(&self) -> ChainIndexResult<()> {
-        let conn = self.writer.lock().unwrap();
+        let conn = self
+            .writer
+            .lock()
+            .map_err(|e| ChainIndexError::Sqlite(e.to_string()))?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS blocks (
                  number INTEGER PRIMARY KEY,
@@ -542,7 +546,10 @@ impl ChainIndex for PersistentChainIndex {
         let block_number = block.number;
         let block_hash = block.hash;
 
-        let mut conn = self.writer.lock().unwrap();
+        let mut conn = self
+            .writer
+            .lock()
+            .map_err(|e| ChainIndexError::Sqlite(e.to_string()))?;
         let tx = conn.transaction()?;
 
         // Delete existing data for this block number (handles re-indexing the same block)
@@ -1042,8 +1049,7 @@ mod model_tests {
 
             self.latest_block = Some(
                 self.latest_block
-                    .map(|l| l.max(block_number))
-                    .unwrap_or(block_number),
+                    .map_or(block_number, |l| l.max(block_number)),
             );
         }
 

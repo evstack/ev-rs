@@ -6,6 +6,12 @@
 //! 3. DevConsensus produces a block
 //! 4. Transaction is authenticated and executed
 //! 5. Token balances are updated correctly
+#![allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::print_stdout
+)]
 
 use alloy_consensus::{SignableTransaction, TxEip1559};
 use alloy_primitives::{Bytes, PrimitiveSignature, TxKind, U256};

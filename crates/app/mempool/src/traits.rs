@@ -32,7 +32,8 @@ impl SenderKey {
         }
         let len = u8::try_from(bytes.len()).ok()?;
         let mut key_bytes = [0u8; MAX_SENDER_KEY_LEN];
-        key_bytes[..bytes.len()].copy_from_slice(bytes);
+        let dst = key_bytes.get_mut(..bytes.len())?;
+        dst.copy_from_slice(bytes);
         Some(Self {
             len,
             bytes: key_bytes,
@@ -42,7 +43,11 @@ impl SenderKey {
     /// Borrow the sender key bytes.
     #[inline]
     pub fn as_slice(&self) -> &[u8] {
-        &self.bytes[..self.len as usize]
+        if let Some(slice) = self.bytes.get(..usize::from(self.len)) {
+            slice
+        } else {
+            &[]
+        }
     }
 }
 

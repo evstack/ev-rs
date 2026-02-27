@@ -19,6 +19,7 @@
 #![allow(clippy::disallowed_types)]
 // Test module is in middle of file for logical grouping with model-based tests.
 #![allow(clippy::items_after_test_module)]
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 pub mod errors;
 mod execution_scope;

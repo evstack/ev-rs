@@ -78,7 +78,7 @@ impl TxEnvelope {
         }
 
         let input = *bytes;
-        let first_byte = input[0];
+        let first_byte = *input.first().ok_or(ERR_EMPTY_INPUT)?;
 
         // Check if this is a legacy transaction (RLP list prefix)
         // RLP list prefixes start at 0xc0
@@ -89,9 +89,9 @@ impl TxEnvelope {
                     .map_err(|_| ERR_TX_DECODE)?;
 
             let consumed = input.len().saturating_sub(cursor.len());
-            let raw_bytes = &input[..consumed];
+            let raw_bytes = input.get(..consumed).ok_or(ERR_TX_DECODE)?;
             let tx = SignedLegacyTx::from_alloy_with_bytes(signed, raw_bytes)?;
-            *bytes = &input[consumed..];
+            *bytes = input.get(consumed..).ok_or(ERR_TX_DECODE)?;
             return Ok(TxEnvelope::Legacy(tx));
         }
 
@@ -99,16 +99,16 @@ impl TxEnvelope {
         match first_byte {
             tx_type::LEGACY => Err(ERR_UNSUPPORTED_TX_TYPE.with_arg(tx_type::LEGACY as u16)),
             tx_type::EIP1559 => {
-                let payload = &input[1..];
+                let payload = input.get(1..).ok_or(ERR_TX_DECODE)?;
                 let mut cursor = payload;
                 let signed =
                     alloy_consensus::Signed::<alloy_consensus::TxEip1559>::rlp_decode(&mut cursor)
                         .map_err(|_| ERR_TX_DECODE)?;
 
                 let consumed = payload.len().saturating_sub(cursor.len());
-                let raw_rlp = &payload[..consumed];
+                let raw_rlp = payload.get(..consumed).ok_or(ERR_TX_DECODE)?;
                 let tx = SignedEip1559Tx::from_alloy_with_bytes(signed, raw_rlp)?;
-                *bytes = &input[1 + consumed..];
+                *bytes = input.get(1 + consumed..).ok_or(ERR_TX_DECODE)?;
                 Ok(TxEnvelope::Eip1559(tx))
             }
             // EIP-2930 and EIP-4844 can be added later

@@ -4,7 +4,8 @@ use evolve_core::account_impl;
 pub mod account {
     use evolve_collections::{item::Item, map::Map};
     use evolve_core::{
-        define_error, AccountId, Environment, EnvironmentQuery, SdkResult, ERR_UNAUTHORIZED,
+        define_error, AccountId, Environment, EnvironmentQuery, SdkResult, ERR_ACCOUNT_NOT_INIT,
+        ERR_UNAUTHORIZED,
     };
     use evolve_fungible_asset::{FungibleAssetInterface, FungibleAssetMetadata};
     use evolve_macros::{exec, init, query};
@@ -150,7 +151,7 @@ pub mod account {
 
         #[query]
         fn metadata(&self, env: &mut dyn EnvironmentQuery) -> SdkResult<FungibleAssetMetadata> {
-            Ok(self.metadata.may_get(env)?.unwrap())
+            self.metadata.may_get(env)?.ok_or(ERR_ACCOUNT_NOT_INIT)
         }
 
         #[query]

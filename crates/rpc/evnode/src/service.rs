@@ -289,7 +289,7 @@ where
 
     /// Convert a protobuf timestamp to Unix seconds.
     fn timestamp_to_unix(ts: Option<&Timestamp>) -> u64 {
-        ts.map(|t| t.seconds as u64).unwrap_or(0)
+        ts.map_or(0, |t| t.seconds as u64)
     }
 
     /// Decode a raw transaction into a TxContext.
@@ -603,6 +603,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
     use evolve_core::{InvokeResponse, Message};

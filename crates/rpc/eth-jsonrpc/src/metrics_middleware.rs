@@ -105,15 +105,15 @@ where
                     r#"{"healthy":false,"error":"serialization failed"}"#.to_string()
                 });
 
-                let response = Response::builder()
-                    .status(if status.healthy {
-                        StatusCode::OK
-                    } else {
-                        StatusCode::SERVICE_UNAVAILABLE
-                    })
-                    .header("Content-Type", "application/json")
-                    .body(Full::new(Bytes::from(body)))
-                    .unwrap();
+                let mut response = Response::new(Full::new(Bytes::from(body)));
+                *response.status_mut() = if status.healthy {
+                    StatusCode::OK
+                } else {
+                    StatusCode::SERVICE_UNAVAILABLE
+                };
+                if let Ok(content_type) = "application/json".parse() {
+                    response.headers_mut().insert("Content-Type", content_type);
+                }
 
                 Ok(response)
             });
@@ -127,26 +127,25 @@ where
                     Some(reg) => {
                         let mut buffer = String::new();
                         if encode(&mut buffer, &reg).is_err() {
-                            let response = Response::builder()
-                                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                                .body(Full::new(Bytes::from("Failed to encode metrics")))
-                                .unwrap();
+                            let mut response =
+                                Response::new(Full::new(Bytes::from("Failed to encode metrics")));
+                            *response.status_mut() = StatusCode::INTERNAL_SERVER_ERROR;
                             return Ok(response);
                         }
 
-                        let response = Response::builder()
-                            .status(StatusCode::OK)
-                            .header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-                            .body(Full::new(Bytes::from(buffer)))
-                            .unwrap();
+                        let mut response = Response::new(Full::new(Bytes::from(buffer)));
+                        *response.status_mut() = StatusCode::OK;
+                        if let Ok(content_type) = "text/plain; version=0.0.4; charset=utf-8".parse()
+                        {
+                            response.headers_mut().insert("Content-Type", content_type);
+                        }
 
                         Ok(response)
                     }
                     None => {
-                        let response = Response::builder()
-                            .status(StatusCode::NOT_FOUND)
-                            .body(Full::new(Bytes::from("Metrics not enabled")))
-                            .unwrap();
+                        let mut response =
+                            Response::new(Full::new(Bytes::from("Metrics not enabled")));
+                        *response.status_mut() = StatusCode::NOT_FOUND;
                         Ok(response)
                     }
                 }

@@ -14,9 +14,7 @@ impl SchedulerBeginBlocker {
 }
 impl<B> BeginBlocker<B> for SchedulerBeginBlocker {
     fn begin_block(&self, _block: &B, env: &mut dyn Environment) {
-        must_get_scheduler(self.scheduler_id, env)
-            .schedule_begin_block(env)
-            .unwrap()
+        let _ = must_get_scheduler(self.scheduler_id, env).schedule_begin_block(env);
     }
 }
 
@@ -33,9 +31,7 @@ impl SchedulerEndBlocker {
 
 impl EndBlocker for SchedulerEndBlocker {
     fn end_block(&self, env: &mut dyn Environment) {
-        must_get_scheduler(self.scheduler_id, env)
-            .schedule_end_block(env)
-            .unwrap()
+        let _ = must_get_scheduler(self.scheduler_id, env).schedule_end_block(env);
     }
 }
 fn must_get_scheduler(scheduler_id: AccountId, _env: &mut dyn EnvironmentQuery) -> SchedulerRef {

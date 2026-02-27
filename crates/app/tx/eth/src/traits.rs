@@ -29,7 +29,11 @@ pub fn derive_runtime_contract_address(account_id: AccountId) -> Address {
     input.extend_from_slice(DOMAIN_CONTRACT_ADDR_RUNTIME_V1);
     input.extend_from_slice(&account_id.as_bytes());
     let digest = keccak256(&input);
-    Address::from_slice(&digest.as_slice()[12..32])
+    if let Some(address_bytes) = digest.as_slice().get(12..32) {
+        Address::from_slice(address_bytes)
+    } else {
+        Address::ZERO
+    }
 }
 
 fn derive_account_id(domain_tag: &[u8], payload: &[u8]) -> AccountId {

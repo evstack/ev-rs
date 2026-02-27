@@ -1,4 +1,7 @@
+#![allow(clippy::expect_used)]
+
 use std::error::Error;
+
 use std::net::SocketAddr;
 use std::path::Path;
 

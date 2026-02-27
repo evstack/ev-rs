@@ -1,4 +1,5 @@
 //! StreamingService implementation providing server-streaming RPC methods.
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 use std::pin::Pin;
 

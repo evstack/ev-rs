@@ -18,8 +18,15 @@ use evolve_core::{InvokeRequest, Message};
 /// Remaining bytes are treated as a Borsh-encoded payload.
 pub(crate) fn invoke_request_from_input(input: &[u8]) -> InvokeRequest {
     let (function_id, args) = if input.len() >= 4 {
-        let selector = u32::from_be_bytes([input[0], input[1], input[2], input[3]]) as u64;
-        (selector, &input[4..])
+        if let (Some(head), Some(args)) = (input.get(..4), input.get(4..)) {
+            if let Ok(head) = <[u8; 4]>::try_from(head) {
+                (u32::from_be_bytes(head) as u64, args)
+            } else {
+                (0u64, input)
+            }
+        } else {
+            (0u64, input)
+        }
     } else {
         (0u64, input)
     };
@@ -32,6 +39,7 @@ pub(crate) fn invoke_request_from_input(input: &[u8]) -> InvokeRequest {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     #[test]
     fn test_selector_extraction() {

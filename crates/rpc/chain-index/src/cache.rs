@@ -57,19 +57,23 @@ pub struct ChainCache {
 impl ChainCache {
     /// Create a new cache with the given configuration.
     pub fn new(config: CacheConfig) -> Self {
+        let block_cap = std::cmp::max(1, config.block_cache_size);
+        let tx_cap = std::cmp::max(1, config.tx_cache_size);
+        let receipt_cap = std::cmp::max(1, config.receipt_cache_size);
+        let Some(block_nz) = NonZeroUsize::new(block_cap) else {
+            unreachable!("block cache cap is bounded to >= 1");
+        };
+        let Some(tx_nz) = NonZeroUsize::new(tx_cap) else {
+            unreachable!("tx cache cap is bounded to >= 1");
+        };
+        let Some(receipt_nz) = NonZeroUsize::new(receipt_cap) else {
+            unreachable!("receipt cache cap is bounded to >= 1");
+        };
         Self {
-            blocks_by_number: RwLock::new(LruCache::new(
-                NonZeroUsize::new(config.block_cache_size).unwrap(),
-            )),
-            block_number_by_hash: RwLock::new(LruCache::new(
-                NonZeroUsize::new(config.block_cache_size).unwrap(),
-            )),
-            transactions: RwLock::new(LruCache::new(
-                NonZeroUsize::new(config.tx_cache_size).unwrap(),
-            )),
-            receipts: RwLock::new(LruCache::new(
-                NonZeroUsize::new(config.receipt_cache_size).unwrap(),
-            )),
+            blocks_by_number: RwLock::new(LruCache::new(block_nz)),
+            block_number_by_hash: RwLock::new(LruCache::new(block_nz)),
+            transactions: RwLock::new(LruCache::new(tx_nz)),
+            receipts: RwLock::new(LruCache::new(receipt_nz)),
             latest_block: RwLock::new(None),
         }
     }

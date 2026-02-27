@@ -28,7 +28,7 @@ pub struct GrpcServerConfig {
 impl Default for GrpcServerConfig {
     fn default() -> Self {
         Self {
-            addr: "127.0.0.1:9545".parse().unwrap(),
+            addr: SocketAddr::from(([127, 0, 0, 1], 9545)),
             chain_id: 1,
             enable_gzip: true,
             max_message_size: 4 * 1024 * 1024, // 4MB

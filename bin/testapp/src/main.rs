@@ -113,7 +113,8 @@ fn main() {
 fn load_genesis_config(path: Option<&str>) -> Option<EvdGenesisConfig> {
     path.map(|p| {
         tracing::info!("Loading genesis config from: {}", p);
-        EvdGenesisConfig::load(p).expect("failed to load genesis config")
+        EvdGenesisConfig::load(p)
+            .unwrap_or_else(|e| panic!("failed to load genesis config '{p}': {e}"))
     })
 }
 
@@ -156,13 +157,11 @@ fn run_default_genesis<S: ReadonlyKV + Storage>(
     let alice_eth_address = std::env::var("GENESIS_ALICE_ETH_ADDRESS")
         .ok()
         .and_then(|s| Address::from_str(s.trim()).ok())
-        .map(Into::into)
-        .unwrap_or([0xAA; 20]);
+        .map_or([0xAA; 20], Into::into);
     let bob_eth_address = std::env::var("GENESIS_BOB_ETH_ADDRESS")
         .ok()
         .and_then(|s| Address::from_str(s.trim()).ok())
-        .map(Into::into)
-        .unwrap_or([0xBB; 20]);
+        .map_or([0xBB; 20], Into::into);
 
     let (accounts, state) = stf
         .system_exec(storage, codes, genesis_block, |env| {
@@ -202,7 +201,7 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
         .map(|acc| {
             let addr = acc
                 .parse_address()
-                .expect("invalid address in genesis config");
+                .unwrap_or_else(|e| panic!("invalid address in genesis config: {e}"));
             (addr.into_array(), acc.balance)
         })
         .collect();
@@ -259,6 +258,7 @@ async fn build_storage(
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::indexing_slicing, clippy::map_unwrap_or)]
 mod tests {
     use super::*;
     use evolve_core::encoding::Encodable;

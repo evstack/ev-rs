@@ -11,3 +11,10 @@ disallowed-types = [
     { path = "std::time::Instant", reason = "Non-deterministic. Use BlockInfo module for time-based logic." },
     { path = "std::time::SystemTime", reason = "Non-deterministic. Use BlockInfo module for time-based logic." },
 ]
+
+# Keep strong unwrap/expect guard rails in production paths while avoiding
+# noise from test scaffolding and doctests.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-unwrap-in-consts = false
+allow-expect-in-consts = false

@@ -1,4 +1,5 @@
 //! Ethereum-compatible log/event types.
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 use alloy_primitives::{Address, Bytes, B256, U64};
 use serde::{Deserialize, Serialize};

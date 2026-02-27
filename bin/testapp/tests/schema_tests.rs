@@ -2,6 +2,7 @@
 
 // Testing code - determinism requirements do not apply.
 #![allow(clippy::disallowed_types)]
+#![allow(clippy::indexing_slicing)]
 
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -14,6 +14,7 @@
 //!
 //! This ensures genesis state is created through the same code paths as
 //! runtime state transitions.
+#![cfg_attr(test, allow(clippy::indexing_slicing))]
 
 pub mod error;
 pub mod file;

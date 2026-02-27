@@ -96,9 +96,8 @@ impl<S: ReadonlyKV, A: AccountsCodeStorage> Environment for Invoker<'_, '_, S, A
         // Helper closure to restore checkpoint on error.
         let restore_checkpoint = |storage: &mut ExecutionState<'_, S>| {
             if let Err(restore_err) = storage.restore(checkpoint) {
-                eprintln!("CRITICAL: Failed to restore checkpoint: {restore_err:?}");
                 panic!(
-                    "CRITICAL: Failed to restore checkpoint after error - blockchain state is corrupted and cannot continue safely"
+                    "CRITICAL: Failed to restore checkpoint after error ({restore_err:?}) - blockchain state is corrupted and cannot continue safely"
                 );
             }
         };
