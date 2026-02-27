@@ -19,9 +19,12 @@ use alloy_primitives::U256;
 use borsh::{BorshDeserialize, BorshSerialize};
 use commonware_runtime::tokio::{Config as TokioConfig, Context as TokioContext, Runner};
 use commonware_runtime::{Runner as RunnerTrait, Spawner};
-use evolve_chain_index::{ChainStateProvider, ChainStateProviderConfig, PersistentChainIndex};
+use evolve_chain_index::{
+    ChainStateProvider, ChainStateProviderConfig, PersistentChainIndex, StateQuerier,
+    StorageStateQuerier,
+};
 use evolve_core::encoding::Encodable;
-use evolve_core::ReadonlyKV;
+use evolve_core::{AccountId, ReadonlyKV};
 use evolve_eth_jsonrpc::{start_server_with_subscriptions, RpcServerConfig, SubscriptionManager};
 use evolve_grpc::{GrpcServer, GrpcServerConfig};
 use evolve_mempool::{new_shared_mempool, Mempool, MempoolTx, SharedMempool};
@@ -176,6 +179,14 @@ pub struct GenesisOutput<G> {
     pub changes: Vec<StateChange>,
 }
 
+/// Trait for extracting the token account ID from a genesis result.
+///
+/// Implementing this trait on your genesis result type enables
+/// `eth_getBalance` queries via the RPC server.
+pub trait HasTokenAccountId {
+    fn token_account_id(&self) -> AccountId;
+}
+
 type RuntimeContext = TokioContext;
 
 /// Build the block archive callback.
@@ -244,7 +255,14 @@ pub fn run_dev_node<
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
-    G: BorshSerialize + BorshDeserialize + Clone + Debug + Send + Sync + 'static,
+    G: BorshSerialize
+        + BorshDeserialize
+        + Clone
+        + Debug
+        + HasTokenAccountId
+        + Send
+        + Sync
+        + 'static,
     BuildGenesisStf: Fn() -> Stf + Send + Sync + 'static,
     BuildStf: Fn(&G) -> Stf + Send + Sync + 'static,
     BuildCodes: Fn() -> Codes + Clone + Send + Sync + 'static,
@@ -293,7 +311,14 @@ pub fn run_dev_node_with_rpc<
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
-    G: BorshSerialize + BorshDeserialize + Clone + Debug + Send + Sync + 'static,
+    G: BorshSerialize
+        + BorshDeserialize
+        + Clone
+        + Debug
+        + HasTokenAccountId
+        + Send
+        + Sync
+        + 'static,
     BuildGenesisStf: Fn() -> Stf + Send + Sync + 'static,
     BuildStf: Fn(&G) -> Stf + Send + Sync + 'static,
     BuildCodes: Fn() -> Codes + Clone + Send + Sync + 'static,
@@ -407,11 +432,16 @@ pub fn run_dev_node_with_rpc<
                     gas_price: U256::ZERO,
                     sync_status: SyncStatus::NotSyncing(false),
                 };
+                let state_querier: Arc<dyn StateQuerier> = Arc::new(StorageStateQuerier::new(
+                    storage.clone(),
+                    genesis_result.token_account_id(),
+                ));
                 let state_provider = ChainStateProvider::with_account_codes(
                     Arc::clone(&chain_index),
                     state_provider_config,
                     codes_for_rpc,
-                );
+                )
+                .with_state_querier(state_querier);
 
                 // Start JSON-RPC server
                 let server_config = RpcServerConfig {
@@ -729,7 +759,14 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<TxContext, S, Codes> + Send + Sync + 'static,
-    G: BorshSerialize + BorshDeserialize + Clone + Debug + Send + Sync + 'static,
+    G: BorshSerialize
+        + BorshDeserialize
+        + Clone
+        + Debug
+        + HasTokenAccountId
+        + Send
+        + Sync
+        + 'static,
     BuildGenesisStf: Fn() -> Stf + Send + Sync + 'static,
     BuildStf: Fn(&G) -> Stf + Send + Sync + 'static,
     BuildCodes: Fn() -> Codes + Clone + Send + Sync + 'static,
@@ -837,12 +874,22 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                     gas_price: U256::ZERO,
                     sync_status: SyncStatus::NotSyncing(false),
                 };
+
+                // Create state querier for balance/nonce reads
+                let state_querier: Arc<dyn crate::StateQuerier> = Arc::new(
+                    StorageStateQuerier::new(
+                        storage.clone(),
+                        genesis_result.token_account_id(),
+                    ),
+                );
+
                 let state_provider = ChainStateProvider::with_mempool(
                     Arc::clone(&chain_index),
                     state_provider_config.clone(),
                     Arc::clone(&codes_for_rpc),
                     mempool.clone(),
-                );
+                )
+                .with_state_querier(Arc::clone(&state_querier));
 
                 let server_config = RpcServerConfig {
                     http_addr: rpc_config.http_addr,
@@ -865,7 +912,8 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                         state_provider_config,
                         codes_for_rpc,
                         mempool.clone(),
-                    );
+                    )
+                    .with_state_querier(state_querier);
                     let grpc_config = GrpcServerConfig {
                         addr: grpc_addr,
                         chain_id: rpc_config.chain_id,
@@ -1004,7 +1052,14 @@ pub fn run_dev_node_with_rpc_and_mempool_mock_storage<
 ) where
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     Stf: StfExecutor<TxContext, MockStorage, Codes> + Send + Sync + 'static,
-    G: BorshSerialize + BorshDeserialize + Clone + Debug + Send + Sync + 'static,
+    G: BorshSerialize
+        + BorshDeserialize
+        + Clone
+        + Debug
+        + HasTokenAccountId
+        + Send
+        + Sync
+        + 'static,
     BuildGenesisStf: Fn() -> Stf + Send + Sync + 'static,
     BuildStf: Fn(&G) -> Stf + Send + Sync + 'static,
     BuildCodes: Fn() -> Codes + Clone + Send + Sync + 'static,

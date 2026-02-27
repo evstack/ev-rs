@@ -18,6 +18,7 @@ use tokio::time::timeout;
 
 use crate::error::ChainIndexError;
 use crate::index::ChainIndex;
+use crate::querier::StateQuerier;
 use evolve_core::schema::AccountSchema;
 use evolve_core::AccountCode;
 use evolve_eth_jsonrpc::error::RpcError;
@@ -131,6 +132,8 @@ pub struct ChainStateProvider<
     mempool: Option<SharedMempool<Mempool<TxContext>>>,
     /// Optional ingress verifier for transaction decode/verify.
     verifier: Option<Arc<IngressVerifier>>,
+    /// Optional state querier for balance/nonce/call queries.
+    state_querier: Option<Arc<dyn StateQuerier>>,
     /// Cached module identifiers for schema introspection endpoints.
     module_ids_cache: parking_lot::RwLock<Option<Vec<String>>>,
     /// Cached per-module schema lookups.
@@ -165,6 +168,7 @@ impl<I: ChainIndex> ChainStateProvider<I, NoopAccountCodes> {
             account_codes: Arc::new(NoopAccountCodes),
             mempool: None,
             verifier: None,
+            state_querier: None,
             module_ids_cache: parking_lot::RwLock::new(None),
             module_schema_cache: parking_lot::RwLock::new(BTreeMap::new()),
             all_schemas_cache: parking_lot::RwLock::new(None),
@@ -185,6 +189,7 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
             account_codes,
             mempool: None,
             verifier: None,
+            state_querier: None,
             module_ids_cache: parking_lot::RwLock::new(None),
             module_schema_cache: parking_lot::RwLock::new(BTreeMap::new()),
             all_schemas_cache: parking_lot::RwLock::new(None),
@@ -238,6 +243,7 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
             account_codes,
             mempool: Some(mempool),
             verifier: Some(verifier),
+            state_querier: None,
             module_ids_cache: parking_lot::RwLock::new(None),
             module_schema_cache: parking_lot::RwLock::new(BTreeMap::new()),
             all_schemas_cache: parking_lot::RwLock::new(None),
@@ -262,6 +268,12 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
     /// Get the mempool, if present.
     pub fn mempool(&self) -> Option<&SharedMempool<Mempool<TxContext>>> {
         self.mempool.as_ref()
+    }
+
+    /// Attach a state querier for balance/nonce/call queries.
+    pub fn with_state_querier(mut self, querier: Arc<dyn StateQuerier>) -> Self {
+        self.state_querier = Some(querier);
+        self
     }
 }
 
@@ -363,36 +375,40 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
         }
     }
 
-    async fn get_balance(&self, _address: Address, _block: Option<u64>) -> Result<U256, RpcError> {
-        // TODO: Implement state queries via Storage + STF
-        // For now, return zero
-        Ok(U256::ZERO)
+    async fn get_balance(&self, address: Address, _block: Option<u64>) -> Result<U256, RpcError> {
+        match &self.state_querier {
+            Some(q) => q.get_balance(address).await,
+            None => Ok(U256::ZERO),
+        }
     }
 
     async fn get_transaction_count(
         &self,
-        _address: Address,
+        address: Address,
         _block: Option<u64>,
     ) -> Result<u64, RpcError> {
-        // TODO: Implement nonce queries via Storage + STF
-        // For now, return zero
-        Ok(0)
+        match &self.state_querier {
+            Some(q) => q.get_transaction_count(address).await,
+            None => Ok(0),
+        }
     }
 
-    async fn call(&self, _request: &CallRequest, _block: Option<u64>) -> Result<Bytes, RpcError> {
-        // TODO: Implement via STF::query()
-        // For now, return empty
-        Ok(Bytes::new())
+    async fn call(&self, request: &CallRequest, _block: Option<u64>) -> Result<Bytes, RpcError> {
+        match &self.state_querier {
+            Some(q) => q.call(request).await,
+            None => Ok(Bytes::new()),
+        }
     }
 
     async fn estimate_gas(
         &self,
-        _request: &CallRequest,
+        request: &CallRequest,
         _block: Option<u64>,
     ) -> Result<u64, RpcError> {
-        // TODO: Implement via STF with gas tracking
-        // For now, return default gas
-        Ok(21000)
+        match &self.state_querier {
+            Some(q) => q.estimate_gas(request).await,
+            None => Ok(21000),
+        }
     }
 
     async fn get_logs(&self, filter: &LogFilter) -> Result<Vec<RpcLog>, RpcError> {

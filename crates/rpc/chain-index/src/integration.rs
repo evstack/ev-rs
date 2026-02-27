@@ -192,14 +192,21 @@ fn build_stored_transaction<Tx: Transaction>(
     transaction_index: u32,
     chain_id: u64,
 ) -> StoredTransaction {
-    let from = account_id_to_address(tx.sender());
+    let from = tx
+        .sender_eth_address()
+        .map(Address::from)
+        .unwrap_or_else(|| account_id_to_address(tx.sender()));
     let to = {
-        let recipient = tx.recipient();
-        // Check if recipient is the invalid/zero account
-        if recipient == AccountId::invalid() {
-            None
+        if let Some(recipient) = tx.recipient_eth_address() {
+            Some(Address::from(recipient))
         } else {
-            Some(account_id_to_address(recipient))
+            let recipient = tx.recipient();
+            // Check if recipient is the invalid/zero account
+            if recipient == AccountId::invalid() {
+                None
+            } else {
+                Some(account_id_to_address(recipient))
+            }
         }
     };
 
@@ -242,13 +249,20 @@ fn build_stored_receipt<Tx: Transaction>(
     transaction_index: u32,
     cumulative_gas_used: u64,
 ) -> StoredReceipt {
-    let from = account_id_to_address(tx.sender());
+    let from = tx
+        .sender_eth_address()
+        .map(Address::from)
+        .unwrap_or_else(|| account_id_to_address(tx.sender()));
     let to = {
-        let recipient = tx.recipient();
-        if recipient == AccountId::invalid() {
-            None
+        if let Some(recipient) = tx.recipient_eth_address() {
+            Some(Address::from(recipient))
         } else {
-            Some(account_id_to_address(recipient))
+            let recipient = tx.recipient();
+            if recipient == AccountId::invalid() {
+                None
+            } else {
+                Some(account_id_to_address(recipient))
+            }
         }
     };
 
