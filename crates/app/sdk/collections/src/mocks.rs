@@ -30,8 +30,16 @@ impl MockEnvironment {
 impl MockEnvironment {
     pub fn new(account_id: u128, sender_id: u128) -> Self {
         Self {
-            account_id: AccountId::new(account_id),
-            sender_id: AccountId::new(sender_id),
+            account_id: AccountId::from_bytes({
+                let mut b = [0u8; 32];
+                b[16..].copy_from_slice(&account_id.to_be_bytes());
+                b
+            }),
+            sender_id: AccountId::from_bytes({
+                let mut b = [0u8; 32];
+                b[16..].copy_from_slice(&sender_id.to_be_bytes());
+                b
+            }),
             storage: HashMap::new(),
             should_fail: false,
             unique_counter: 0,

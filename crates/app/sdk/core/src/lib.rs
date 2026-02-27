@@ -285,24 +285,45 @@ mod tests {
     #[test]
     fn test_one_coin_success() {
         let env = TestEnv {
-            whoami: AccountId::new(1),
-            sender: AccountId::new(2),
+            whoami: AccountId::from_bytes([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 1,
+            ]),
+            sender: AccountId::from_bytes([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 2,
+            ]),
             funds: vec![FungibleAsset {
-                asset_id: AccountId::new(10),
+                asset_id: AccountId::from_bytes([
+                    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                    0, 0, 0, 0, 0, 0, 10,
+                ]),
                 amount: 100,
             }],
         };
 
         let coin = one_coin(&env).unwrap();
-        assert_eq!(coin.asset_id, AccountId::new(10));
+        assert_eq!(
+            coin.asset_id,
+            AccountId::from_bytes([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 10,
+            ])
+        );
         assert_eq!(coin.amount, 100);
     }
 
     #[test]
     fn test_one_coin_error() {
         let env = TestEnv {
-            whoami: AccountId::new(1),
-            sender: AccountId::new(2),
+            whoami: AccountId::from_bytes([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 1,
+            ]),
+            sender: AccountId::from_bytes([
+                0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                0, 0, 0, 0, 0, 2,
+            ]),
             funds: vec![],
         };
 
@@ -317,12 +338,12 @@ mod tests {
 
     #[test]
     fn test_account_id_u128_compat() {
-        let id = AccountId::new(42u128);
-        assert_eq!(id.inner(), 42u128);
-
-        let mut expected = [0u8; 32];
-        expected[31] = 42;
-        assert_eq!(id.as_bytes(), expected);
+        let id = AccountId::from_bytes([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+            0, 0, 0, 42,
+        ]);
+        assert_eq!(id.as_bytes()[31], 42u8);
+        assert_eq!(id.as_bytes()[0..31], [0u8; 31]);
     }
 
     #[test]
