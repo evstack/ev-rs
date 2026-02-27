@@ -71,6 +71,8 @@ impl AccountId {
     /// Backward-compatible constructor from `u128`.
     ///
     /// Encodes into the lower 16 bytes in big-endian order.
+    // TODO(account-id-cleanup): remove numeric AccountId compatibility (`new`/`inner`)
+    // after migrating genesis/tooling/docs to canonical 32-byte account IDs end-to-end.
     pub const fn new(u: u128) -> Self {
         let mut out = [0u8; 32];
         let bytes = u.to_be_bytes();
