@@ -157,7 +157,7 @@ mod tests {
     #[test]
     fn test_event_to_log_maps_source_name_and_contents() {
         let event = Event {
-            source: AccountId::new(42),
+            source: AccountId::from_u64(42),
             name: "Transfer".to_string(),
             contents: Message::from_bytes(vec![0xAB, 0xCD]),
         };

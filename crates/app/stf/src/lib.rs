@@ -107,8 +107,8 @@ mod model_tests {
     const DEFAULT_CASES: u32 = 32;
     const CI_CASES: u32 = 8;
     const MAX_TXS: usize = 16;
-    const TEST_ACCOUNT_ID: AccountId = AccountId::new(100);
-    const DEFAULT_SENDER_ID: AccountId = AccountId::new(200);
+    const TEST_ACCOUNT_ID: AccountId = AccountId::from_u64(100);
+    const DEFAULT_SENDER_ID: AccountId = AccountId::from_u64(200);
 
     fn proptest_cases() -> u32 {
         if let Ok(value) = std::env::var("EVOLVE_PROPTEST_CASES") {
@@ -448,8 +448,8 @@ mod model_tests {
                 0..=MAX_TXS
             )
         ) {
-            let test_account = AccountId::new(100);
-            let sender = AccountId::new(200);
+            let test_account = AccountId::from_u64(100);
+            let sender = AccountId::from_u64(200);
 
             let mut storage = InMemoryStorage::default();
             let mut codes = CodeStore::new();
@@ -558,8 +558,8 @@ mod model_tests {
                 1..=8
             )
         ) {
-            let test_account = AccountId::new(100);
-            let sender = AccountId::new(200);
+            let test_account = AccountId::from_u64(100);
+            let sender = AccountId::from_u64(200);
 
             // Setup storage with account code
             let mut storage1 = InMemoryStorage::default();
@@ -649,8 +649,8 @@ mod model_tests {
     fn test_call_depth_exhaustion() {
         use crate::errors::ERR_CALL_DEPTH_EXCEEDED;
 
-        let recursive_account = AccountId::new(100);
-        let sender = AccountId::new(200);
+        let recursive_account = AccountId::from_u64(100);
+        let sender = AccountId::from_u64(200);
 
         let mut storage = InMemoryStorage::default();
         let gas_config = StorageGasConfig {
@@ -766,7 +766,7 @@ mod model_tests {
             ) -> SdkResult<()> {
                 // Reject successful txs where sender has a specific pattern
                 // (Using sender ID as a marker for simplicity)
-                if tx_result.is_ok() && tx.sender == AccountId::new(201) {
+                if tx_result.is_ok() && tx.sender == AccountId::from_u64(201) {
                     return Err(ERR_REJECTED_BY_POST_TX);
                 }
                 Ok(())
@@ -790,7 +790,7 @@ mod model_tests {
 
         // Tx from sender 200 should succeed
         let tx_normal = TestTx {
-            sender: AccountId::new(200),
+            sender: AccountId::from_u64(200),
             recipient: TEST_ACCOUNT_ID,
             request: InvokeRequest::new(&msg).unwrap(),
             gas_limit: 10000,
@@ -800,7 +800,7 @@ mod model_tests {
 
         // Tx from sender 201 should be rejected by post-tx handler
         let tx_marked = TestTx {
-            sender: AccountId::new(201),
+            sender: AccountId::from_u64(201),
             recipient: TEST_ACCOUNT_ID,
             request: InvokeRequest::new(&msg).unwrap(),
             gas_limit: 10000,

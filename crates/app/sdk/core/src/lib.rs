@@ -58,6 +58,18 @@ impl AccountId {
         Self(bytes)
     }
 
+    /// Construct from a `u64` numeric identifier.
+    ///
+    /// Encodes `n` in the last 8 bytes (indices 24–31) in big-endian order.
+    /// Suitable for well-known system accounts and test fixtures.
+    pub const fn from_u64(n: u64) -> Self {
+        let b = n.to_be_bytes();
+        Self([
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, b[0], b[1],
+            b[2], b[3], b[4], b[5], b[6], b[7],
+        ])
+    }
+
     /// Return raw canonical bytes.
     pub const fn to_bytes(self) -> [u8; 32] {
         self.0
@@ -66,42 +78,6 @@ impl AccountId {
     /// Borrow raw canonical bytes.
     pub const fn as_bytes(&self) -> [u8; 32] {
         self.0
-    }
-
-    /// Backward-compatible constructor from `u128`.
-    ///
-    /// Encodes into the lower 16 bytes in big-endian order.
-    // TODO(account-id-cleanup): remove numeric AccountId compatibility (`new`/`inner`)
-    // after migrating genesis/tooling/docs to canonical 32-byte account IDs end-to-end.
-    pub const fn new(u: u128) -> Self {
-        let mut out = [0u8; 32];
-        let bytes = u.to_be_bytes();
-        out[16] = bytes[0];
-        out[17] = bytes[1];
-        out[18] = bytes[2];
-        out[19] = bytes[3];
-        out[20] = bytes[4];
-        out[21] = bytes[5];
-        out[22] = bytes[6];
-        out[23] = bytes[7];
-        out[24] = bytes[8];
-        out[25] = bytes[9];
-        out[26] = bytes[10];
-        out[27] = bytes[11];
-        out[28] = bytes[12];
-        out[29] = bytes[13];
-        out[30] = bytes[14];
-        out[31] = bytes[15];
-        Self(out)
-    }
-
-    /// Legacy extractor for compatibility where a numeric ID is still required.
-    pub const fn inner(&self) -> u128 {
-        u128::from_be_bytes([
-            self.0[16], self.0[17], self.0[18], self.0[19], self.0[20], self.0[21], self.0[22],
-            self.0[23], self.0[24], self.0[25], self.0[26], self.0[27], self.0[28], self.0[29],
-            self.0[30], self.0[31],
-        ])
     }
 
     /// Increment account ID bytes in big-endian order (wraps on overflow).
@@ -285,24 +261,24 @@ mod tests {
     #[test]
     fn test_one_coin_success() {
         let env = TestEnv {
-            whoami: AccountId::new(1),
-            sender: AccountId::new(2),
+            whoami: AccountId::from_u64(1),
+            sender: AccountId::from_u64(2),
             funds: vec![FungibleAsset {
-                asset_id: AccountId::new(10),
+                asset_id: AccountId::from_u64(10),
                 amount: 100,
             }],
         };
 
         let coin = one_coin(&env).unwrap();
-        assert_eq!(coin.asset_id, AccountId::new(10));
+        assert_eq!(coin.asset_id, AccountId::from_u64(10));
         assert_eq!(coin.amount, 100);
     }
 
     #[test]
     fn test_one_coin_error() {
         let env = TestEnv {
-            whoami: AccountId::new(1),
-            sender: AccountId::new(2),
+            whoami: AccountId::from_u64(1),
+            sender: AccountId::from_u64(2),
             funds: vec![],
         };
 
@@ -317,17 +293,14 @@ mod tests {
 
     #[test]
     fn test_account_id_u128_compat() {
-        let id = AccountId::new(42u128);
-        assert_eq!(id.inner(), 42u128);
-
-        let mut expected = [0u8; 32];
-        expected[31] = 42;
-        assert_eq!(id.as_bytes(), expected);
+        let id = AccountId::from_u64(42);
+        assert_eq!(id.as_bytes()[31], 42u8);
+        assert_eq!(id.as_bytes()[0..31], [0u8; 31]);
     }
 
     #[test]
     fn test_account_id_increase() {
-        let a = AccountId::from_bytes([0u8; 32]);
+        let a = AccountId::from_u64(0);
         let b = a.increase();
         let mut expected = [0u8; 32];
         expected[31] = 1;

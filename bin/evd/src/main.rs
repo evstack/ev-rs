@@ -655,7 +655,7 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
             (addr.into_array(), acc.balance)
         })
         .collect();
-    let minter = AccountId::new(genesis_config.minter_id);
+    let minter = AccountId::from_u64(genesis_config.minter_id);
     let metadata = genesis_config.token.to_metadata();
 
     let gas_config = default_gas_config();

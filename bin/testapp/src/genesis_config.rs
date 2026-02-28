@@ -12,7 +12,7 @@ pub type FundedAccount = ([u8; 20], u128);
 #[derive(Deserialize)]
 pub struct EvdGenesisConfig {
     pub token: TokenConfig,
-    pub minter_id: u128,
+    pub minter_id: u64,
     pub accounts: Vec<AccountConfig>,
 }
 

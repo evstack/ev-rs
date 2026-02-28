@@ -28,10 +28,10 @@ impl MockEnvironment {
 }
 
 impl MockEnvironment {
-    pub fn new(account_id: u128, sender_id: u128) -> Self {
+    pub fn new(account_id: u64, sender_id: u64) -> Self {
         Self {
-            account_id: AccountId::new(account_id),
-            sender_id: AccountId::new(sender_id),
+            account_id: AccountId::from_u64(account_id),
+            sender_id: AccountId::from_u64(sender_id),
             storage: HashMap::new(),
             should_fail: false,
             unique_counter: 0,

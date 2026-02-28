@@ -218,7 +218,7 @@ fn run_custom_genesis<S: ReadonlyKV + Storage>(
         return Err("custom genesis requires at least one account".into());
     }
 
-    let minter = AccountId::new(config.minter_id);
+    let minter = AccountId::from_u64(config.minter_id);
     let metadata = config.token.to_metadata();
 
     let genesis_block = BlockContext::new(0, 0);

@@ -53,14 +53,20 @@ impl FungibleAsset {
 mod tests {
     use super::*;
 
+    const ID_1234: AccountId = AccountId::from_u64(1234);
+    const ID_1111: AccountId = AccountId::from_u64(1111);
+    const ID_2222: AccountId = AccountId::from_u64(2222);
+    const ID_1: AccountId = AccountId::from_u64(1);
+    const ID_9999: AccountId = AccountId::from_u64(9999);
+
     #[test]
     fn test_increase_same_id() {
         let mut asset1 = FungibleAsset {
-            asset_id: AccountId::new(1234),
+            asset_id: ID_1234,
             amount: 100,
         };
         let asset2 = FungibleAsset {
-            asset_id: AccountId::new(1234),
+            asset_id: ID_1234,
             amount: 50,
         };
         let result = asset1.increase(asset2);
@@ -72,11 +78,11 @@ mod tests {
     #[test]
     fn test_decrease_same_id() {
         let mut asset1 = FungibleAsset {
-            asset_id: AccountId::new(1234),
+            asset_id: ID_1234,
             amount: 100,
         };
         let asset2 = FungibleAsset {
-            asset_id: AccountId::new(1234),
+            asset_id: ID_1234,
             amount: 80,
         };
         let result = asset1.decrease(asset2);
@@ -88,11 +94,11 @@ mod tests {
     #[test]
     fn test_increase_different_id() {
         let mut asset1 = FungibleAsset {
-            asset_id: AccountId::new(1111),
+            asset_id: ID_1111,
             amount: 100,
         };
         let asset2 = FungibleAsset {
-            asset_id: AccountId::new(2222),
+            asset_id: ID_2222,
             amount: 50,
         };
         let result = asset1.increase(asset2);
@@ -104,11 +110,11 @@ mod tests {
     #[test]
     fn test_decrease_different_id() {
         let mut asset1 = FungibleAsset {
-            asset_id: AccountId::new(1111),
+            asset_id: ID_1111,
             amount: 100,
         };
         let asset2 = FungibleAsset {
-            asset_id: AccountId::new(2222),
+            asset_id: ID_2222,
             amount: 50,
         };
         let result = asset1.decrease(asset2);
@@ -120,11 +126,11 @@ mod tests {
     #[test]
     fn test_increase_overflow() {
         let mut asset1 = FungibleAsset {
-            asset_id: AccountId::new(1),
+            asset_id: ID_1,
             amount: u128::MAX,
         };
         let asset2 = FungibleAsset {
-            asset_id: AccountId::new(1),
+            asset_id: ID_1,
             amount: 1,
         };
         let result = asset1.increase(asset2);
@@ -136,11 +142,11 @@ mod tests {
     #[test]
     fn test_decrease_insufficient_balance() {
         let mut asset1 = FungibleAsset {
-            asset_id: AccountId::new(9999),
+            asset_id: ID_9999,
             amount: 100,
         };
         let asset2 = FungibleAsset {
-            asset_id: AccountId::new(9999),
+            asset_id: ID_9999,
             amount: 200,
         };
         let result = asset1.decrease(asset2);
