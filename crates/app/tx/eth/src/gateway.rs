@@ -5,13 +5,16 @@
 //! 2. Verifying signatures and chain ID
 //! 3. Producing verified `TxContext` ready for mempool insertion
 
+use evolve_core::encoding::Decodable;
 use evolve_stf_traits::TxDecoder;
 
 use crate::decoder::TypedTxDecoder;
 use crate::envelope::TxEnvelope;
 use crate::mempool::TxContext;
+use crate::payload::TxPayload;
+use crate::sender_type;
 use crate::traits::TypedTransaction;
-use crate::verifier::SignatureVerifierRegistry;
+use crate::verifier::{SignatureVerifierDyn, SignatureVerifierRegistry};
 
 /// Error type for gateway operations.
 #[derive(Debug, Clone)]
@@ -101,10 +104,30 @@ impl EthGateway {
         self.base_fee = base_fee;
     }
 
+    /// Register a payload verifier for a sender type.
+    pub fn register_payload_verifier(
+        &mut self,
+        sender_type: u16,
+        verifier: impl SignatureVerifierDyn + 'static,
+    ) {
+        self.verifier.register_dyn(sender_type, verifier);
+    }
+
+    /// Check whether a sender type is supported by ingress verification.
+    pub fn supports_sender_type(&self, sender_type: u16) -> bool {
+        self.verifier.supports(sender_type)
+    }
+
     /// Decode and verify a raw transaction.
     ///
     /// Returns a verified `TxContext` ready for mempool insertion.
     pub fn decode_and_verify(&self, raw: &[u8]) -> Result<TxContext, GatewayError> {
+        if TxContext::is_wire_encoded(raw) {
+            let context = TxContext::decode(raw)
+                .map_err(|e| GatewayError::DecodeFailed(format!("{:?}", e)))?;
+            return self.verify_context(context);
+        }
+
         // Decode the transaction with type filtering
         let mut input = raw;
         let envelope = self
@@ -119,11 +142,31 @@ impl EthGateway {
         self.verify_envelope(envelope)
     }
 
+    /// Verify sender-type payload for a decoded context.
+    pub fn verify_context(&self, context: TxContext) -> Result<TxContext, GatewayError> {
+        if let Some(id) = context.chain_id() {
+            if id != self.chain_id {
+                return Err(GatewayError::InvalidChainId {
+                    expected: self.chain_id,
+                    actual: Some(id),
+                });
+            }
+        }
+
+        self.verifier
+            .verify_payload(context.sender_type(), context.payload())
+            .map_err(|_| GatewayError::InvalidSignature)?;
+
+        Ok(context)
+    }
+
     /// Verify an already-decoded envelope and create a TxContext.
     pub fn verify_envelope(&self, envelope: TxEnvelope) -> Result<TxContext, GatewayError> {
+        let payload = TxPayload::Eoa(Box::new(envelope.clone()));
+
         // Verify chain ID and signature
         self.verifier
-            .verify(&envelope)
+            .verify_payload(sender_type::EOA_SECP256K1, &payload)
             .map_err(|_| match envelope.chain_id() {
                 Some(id) if id != self.chain_id => GatewayError::InvalidChainId {
                     expected: self.chain_id,

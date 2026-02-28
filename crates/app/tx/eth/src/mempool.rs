@@ -1,93 +1,289 @@
-//! Mempool transaction wrapper for Ethereum transactions.
-//!
-//! Wraps an Ethereum `TxEnvelope` and implements the `MempoolTx` trait
-//! for use with the generic mempool.
+//! Mempool transaction context for Ethereum and custom sender payloads.
 //!
 //! # Function Routing
 //!
-//! Routing is defined by `evolve_tx_eth` and derived from Ethereum calldata.
-//! See `TxEnvelope::to_invoke_requests()` for the canonical mapping.
-//!
-//! Example: A CLOB account can expose `place_order`, `cancel_order`, etc., each with
-//! their own Ethereum selector computed as `keccak256(signature)[0..4]`.
+//! Routing for Ethereum EOAs is derived from calldata via
+//! `TxEnvelope::to_invoke_requests()`.
 
-use alloy_primitives::{Address, B256};
+use alloy_primitives::{keccak256, Address, B256};
+use borsh::{BorshDeserialize, BorshSerialize};
 use evolve_core::encoding::{Decodable, Encodable};
 use evolve_core::{AccountId, Environment, FungibleAsset, InvokeRequest, Message, SdkResult};
 use evolve_mempool::{GasPriceOrdering, MempoolTx, SenderKey};
-use evolve_stf_traits::{AuthenticationPayload, Transaction};
+use evolve_stf_traits::{AuthenticationPayload, SenderBootstrap, Transaction};
 
 use crate::envelope::TxEnvelope;
 use crate::eoa_registry::{
-    lookup_account_id_in_env, lookup_contract_account_id_in_env, resolve_or_create_eoa_account,
+    ensure_eoa_mapping, lookup_account_id_in_env, lookup_contract_account_id_in_env,
+    resolve_or_create_eoa_account, ETH_EOA_CODE_ID,
 };
-use crate::error::ERR_RECIPIENT_REQUIRED;
-use crate::traits::TypedTransaction;
+use crate::error::{ERR_RECIPIENT_REQUIRED, ERR_TX_DECODE};
+use crate::payload::{EthIntentPayload, TxPayload};
+use crate::sender_type;
+use crate::traits::{derive_eth_eoa_account_id, TypedTransaction};
+
+const TX_CONTEXT_WIRE_MAGIC: [u8; 4] = *b"ctx1";
+
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
+enum TxPayloadWire {
+    Eoa(Vec<u8>),
+    Custom(Vec<u8>),
+}
+
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
+struct TxContextWireV1 {
+    sender_type: u16,
+    payload: TxPayloadWire,
+    tx_hash: [u8; 32],
+    gas_limit: u64,
+    nonce: u64,
+    chain_id: Option<u64>,
+    effective_gas_price: u128,
+    invoke_request: InvokeRequest,
+    funds: Vec<FungibleAsset>,
+    sender_account: AccountId,
+    recipient_account: Option<AccountId>,
+    sender_key: Vec<u8>,
+    authentication_payload: Message,
+    sender_eth_address: Option<[u8; 20]>,
+    recipient_eth_address: Option<[u8; 20]>,
+}
+
+#[derive(Clone, Debug)]
+enum SenderResolution {
+    EoaAddress(Address),
+    Account(AccountId),
+}
+
+#[derive(Clone, Debug)]
+enum RecipientResolution {
+    EoaAddress(Address),
+    Account(AccountId),
+    None,
+}
+
+/// Metadata required to construct a context from a non-EOA payload.
+#[derive(Clone, Debug)]
+pub struct TxContextMeta {
+    pub tx_hash: B256,
+    pub gas_limit: u64,
+    pub nonce: u64,
+    pub chain_id: Option<u64>,
+    pub effective_gas_price: u128,
+    pub invoke_request: InvokeRequest,
+    pub funds: Vec<FungibleAsset>,
+    pub sender_account: AccountId,
+    pub recipient_account: Option<AccountId>,
+    pub sender_key: Vec<u8>,
+    pub authentication_payload: Message,
+    pub sender_eth_address: Option<[u8; 20]>,
+    pub recipient_eth_address: Option<[u8; 20]>,
+}
 
 /// A verified transaction ready for mempool storage.
-///
-/// Wraps an Ethereum `TxEnvelope` and caches derived values for efficient
-/// access during block production.
 #[derive(Clone, Debug)]
 pub struct TxContext {
-    /// The original Ethereum transaction envelope.
-    envelope: TxEnvelope,
-    /// The invoke request to execute (derived by evolve_tx).
+    payload: TxPayload,
+    sender_type: u16,
     invoke_request: InvokeRequest,
-    /// Gas price for ordering (effective gas price).
     effective_gas_price: u128,
+    tx_hash: B256,
+    gas_limit: u64,
+    nonce: u64,
+    chain_id: Option<u64>,
+    sender_resolution: SenderResolution,
+    recipient_resolution: RecipientResolution,
+    sender_key: Vec<u8>,
+    authentication_payload: Message,
+    sender_eth_address: Option<[u8; 20]>,
+    recipient_eth_address: Option<[u8; 20]>,
+    funds: Vec<FungibleAsset>,
 }
 
 impl TxContext {
-    /// Create a new mempool transaction from an Ethereum envelope.
+    /// Create a new context from an Ethereum EOA envelope.
     ///
-    /// Returns `None` if the transaction has no recipient (contract creation).
+    /// Returns `None` for contract creation transactions (`to == None`).
     pub fn new(envelope: TxEnvelope, base_fee: u128) -> Option<Self> {
-        // TODO(vm): when EVM contract creation is supported, allow `to == None`
-        // and route create-transactions through deployment execution instead of
-        // rejecting them at mempool decode time.
-        envelope.to()?;
-
+        let to = envelope.to()?;
+        let sender = envelope.sender();
         let invoke_request = envelope.to_invoke_requests().into_iter().next()?;
-
-        // Calculate effective gas price for ordering
-        let effective_gas_price = calculate_effective_gas_price(&envelope, base_fee);
+        let authentication_payload = Message::new(&sender.into_array()).ok()?;
 
         Some(Self {
-            envelope,
+            sender_type: sender_type::EOA_SECP256K1,
+            payload: TxPayload::Eoa(Box::new(envelope.clone())),
             invoke_request,
-            effective_gas_price,
+            effective_gas_price: calculate_effective_gas_price(&envelope, base_fee),
+            tx_hash: envelope.tx_hash(),
+            gas_limit: envelope.gas_limit(),
+            nonce: envelope.nonce(),
+            chain_id: envelope.chain_id(),
+            sender_resolution: SenderResolution::EoaAddress(sender),
+            recipient_resolution: RecipientResolution::EoaAddress(to),
+            sender_key: sender.as_slice().to_vec(),
+            authentication_payload,
+            sender_eth_address: Some(sender.into()),
+            recipient_eth_address: Some(to.into()),
+            funds: Vec::new(),
         })
+    }
+
+    /// Create a context from an arbitrary payload and explicit metadata.
+    pub fn from_payload(payload: TxPayload, sender_type: u16, meta: TxContextMeta) -> Option<Self> {
+        let sender_resolution = if sender_type == sender_type::EOA_SECP256K1 {
+            let addr = Address::from(meta.sender_eth_address?);
+            SenderResolution::EoaAddress(addr)
+        } else {
+            SenderResolution::Account(meta.sender_account)
+        };
+
+        let recipient_resolution = if let Some(account) = meta.recipient_account {
+            RecipientResolution::Account(account)
+        } else if let Some(addr) = meta.recipient_eth_address {
+            RecipientResolution::EoaAddress(Address::from(addr))
+        } else {
+            RecipientResolution::None
+        };
+
+        let sender_key = if meta.sender_key.is_empty() {
+            match sender_resolution {
+                SenderResolution::EoaAddress(addr) => addr.as_slice().to_vec(),
+                SenderResolution::Account(account) => account.as_bytes().to_vec(),
+            }
+        } else {
+            meta.sender_key
+        };
+
+        let _ = SenderKey::new(&sender_key)?;
+
+        Some(Self {
+            payload,
+            sender_type,
+            invoke_request: meta.invoke_request,
+            effective_gas_price: meta.effective_gas_price,
+            tx_hash: meta.tx_hash,
+            gas_limit: meta.gas_limit,
+            nonce: meta.nonce,
+            chain_id: meta.chain_id,
+            sender_resolution,
+            recipient_resolution,
+            sender_key,
+            authentication_payload: meta.authentication_payload,
+            sender_eth_address: meta.sender_eth_address,
+            recipient_eth_address: meta.recipient_eth_address,
+            funds: meta.funds,
+        })
+    }
+
+    /// Create a custom-sender context that reuses Ethereum transaction fields.
+    ///
+    /// The `intent` envelope provides Ethereum execution semantics (`to`, calldata,
+    /// nonce, gas, and chain id), while authentication is delegated to `sender_type`
+    /// via `auth_proof` and `authentication_payload`.
+    pub fn from_eth_intent(
+        sender_type: u16,
+        intent: EthIntentPayload,
+        sender_account: AccountId,
+        sender_key: Vec<u8>,
+        authentication_payload: Message,
+        base_fee: u128,
+    ) -> Option<Self> {
+        let envelope = intent.decode_envelope().ok()?;
+        let to = envelope.to()?;
+        let invoke_request = envelope.to_invoke_requests().into_iter().next()?;
+        let payload_bytes = borsh::to_vec(&intent).ok()?;
+        let tx_hash = B256::from(keccak256(&payload_bytes));
+
+        Self::from_payload(
+            TxPayload::Custom(payload_bytes),
+            sender_type,
+            TxContextMeta {
+                tx_hash,
+                gas_limit: envelope.gas_limit(),
+                nonce: envelope.nonce(),
+                chain_id: envelope.chain_id(),
+                effective_gas_price: calculate_effective_gas_price(&envelope, base_fee),
+                invoke_request,
+                funds: Vec::new(),
+                sender_account,
+                recipient_account: None,
+                sender_key,
+                authentication_payload,
+                sender_eth_address: None,
+                recipient_eth_address: Some(to.into()),
+            },
+        )
+    }
+
+    /// Returns true when bytes are encoded with the custom `TxContext` wire format.
+    pub fn is_wire_encoded(bytes: &[u8]) -> bool {
+        bytes.len() >= TX_CONTEXT_WIRE_MAGIC.len()
+            && bytes[..TX_CONTEXT_WIRE_MAGIC.len()] == TX_CONTEXT_WIRE_MAGIC
     }
 
     /// Get the transaction hash.
     pub fn hash(&self) -> B256 {
-        self.envelope.tx_hash()
+        self.tx_hash
     }
 
-    /// Get the sender address.
+    /// Get sender type.
+    pub fn sender_type(&self) -> u16 {
+        self.sender_type
+    }
+
+    /// Get sender address for EOA payloads.
     pub fn sender_address(&self) -> Address {
-        self.envelope.sender()
+        match self.sender_resolution {
+            SenderResolution::EoaAddress(address) => address,
+            SenderResolution::Account(_) => {
+                panic!("sender_address() is only available for EOA sender types")
+            }
+        }
     }
 
-    /// Get the nonce.
+    /// Get sender address when available.
+    pub fn sender_address_opt(&self) -> Option<Address> {
+        match self.sender_resolution {
+            SenderResolution::EoaAddress(address) => Some(address),
+            SenderResolution::Account(_) => None,
+        }
+    }
+
+    /// Get nonce.
     pub fn nonce(&self) -> u64 {
-        self.envelope.nonce()
+        self.nonce
     }
 
-    /// Get the effective gas price for ordering.
+    /// Get effective gas price.
     pub fn effective_gas_price(&self) -> u128 {
         self.effective_gas_price
     }
 
-    /// Get the underlying envelope.
-    pub fn envelope(&self) -> &TxEnvelope {
-        &self.envelope
+    /// Get payload.
+    pub fn payload(&self) -> &TxPayload {
+        &self.payload
     }
 
-    /// Get the chain ID.
+    /// Get envelope for EOA payloads.
+    pub fn envelope(&self) -> &TxEnvelope {
+        match &self.payload {
+            TxPayload::Eoa(envelope) => envelope.as_ref(),
+            TxPayload::Custom(_) => panic!("envelope() is only available for EOA payloads"),
+        }
+    }
+
+    /// Get envelope when available.
+    pub fn envelope_opt(&self) -> Option<&TxEnvelope> {
+        match &self.payload {
+            TxPayload::Eoa(envelope) => Some(envelope.as_ref()),
+            TxPayload::Custom(_) => None,
+        }
+    }
+
+    /// Get chain ID.
     pub fn chain_id(&self) -> Option<u64> {
-        self.envelope.chain_id()
+        self.chain_id
     }
 }
 
@@ -95,47 +291,64 @@ impl MempoolTx for TxContext {
     type OrderingKey = GasPriceOrdering;
 
     fn tx_id(&self) -> [u8; 32] {
-        self.envelope.tx_hash().0
+        self.tx_hash.0
     }
 
     fn ordering_key(&self) -> Self::OrderingKey {
-        GasPriceOrdering::new(self.effective_gas_price, self.nonce())
+        GasPriceOrdering::new(self.effective_gas_price, self.nonce)
     }
 
     fn sender_key(&self) -> Option<SenderKey> {
-        SenderKey::new(&self.envelope.sender().0 .0)
+        SenderKey::new(&self.sender_key)
     }
 
     fn gas_limit(&self) -> u64 {
-        self.envelope.gas_limit()
+        self.gas_limit
     }
 }
 
 impl Transaction for TxContext {
     fn sender(&self) -> AccountId {
-        AccountId::invalid()
+        match self.sender_resolution {
+            SenderResolution::Account(account) => account,
+            SenderResolution::EoaAddress(address) => derive_eth_eoa_account_id(address),
+        }
     }
 
     fn resolve_sender_account(&self, env: &mut dyn Environment) -> SdkResult<AccountId> {
-        resolve_or_create_eoa_account(self.sender_address(), env)
+        match self.sender_resolution {
+            SenderResolution::Account(account) => Ok(account),
+            SenderResolution::EoaAddress(address) => {
+                if let Some(account_id) = lookup_account_id_in_env(address, env)? {
+                    return Ok(account_id);
+                }
+                Ok(derive_eth_eoa_account_id(address))
+            }
+        }
     }
 
     fn recipient(&self) -> AccountId {
-        AccountId::invalid()
+        match self.recipient_resolution {
+            RecipientResolution::Account(account) => account,
+            RecipientResolution::EoaAddress(address) => derive_eth_eoa_account_id(address),
+            RecipientResolution::None => AccountId::invalid(),
+        }
     }
 
     fn resolve_recipient_account(&self, env: &mut dyn Environment) -> SdkResult<AccountId> {
-        // TODO(vm): contract creation currently has no recipient and is rejected.
-        // Once VM deployment is supported, this branch should route to creation
-        // logic instead of returning recipient-required.
-        let to = self.envelope.to().ok_or(ERR_RECIPIENT_REQUIRED)?;
-        if let Some(account_id) = lookup_account_id_in_env(to, env)? {
-            return Ok(account_id);
+        match self.recipient_resolution {
+            RecipientResolution::Account(account) => Ok(account),
+            RecipientResolution::EoaAddress(to) => {
+                if let Some(account_id) = lookup_account_id_in_env(to, env)? {
+                    return Ok(account_id);
+                }
+                if let Some(account_id) = lookup_contract_account_id_in_env(to, env)? {
+                    return Ok(account_id);
+                }
+                resolve_or_create_eoa_account(to, env)
+            }
+            RecipientResolution::None => Err(ERR_RECIPIENT_REQUIRED),
         }
-        if let Some(account_id) = lookup_contract_account_id_in_env(to, env)? {
-            return Ok(account_id);
-        }
-        resolve_or_create_eoa_account(to, env)
     }
 
     fn request(&self) -> &InvokeRequest {
@@ -143,45 +356,147 @@ impl Transaction for TxContext {
     }
 
     fn gas_limit(&self) -> u64 {
-        self.envelope.gas_limit()
+        self.gas_limit
     }
 
     fn funds(&self) -> &[FungibleAsset] {
-        // TODO: Convert value transfer to FungibleAsset when native token is defined
-        &[]
+        &self.funds
     }
 
     fn compute_identifier(&self) -> [u8; 32] {
-        self.envelope.tx_hash().0
+        self.tx_hash.0
+    }
+
+    fn sender_bootstrap(&self) -> Option<SenderBootstrap> {
+        if self.sender_type != sender_type::EOA_SECP256K1 {
+            return None;
+        }
+        let address = self.sender_address_opt()?;
+        let init_message = Message::new(&address.into_array()).ok()?;
+        Some(SenderBootstrap {
+            account_code_id: ETH_EOA_CODE_ID,
+            init_message,
+        })
+    }
+
+    fn after_sender_bootstrap(
+        &self,
+        resolved_sender: AccountId,
+        env: &mut dyn Environment,
+    ) -> SdkResult<()> {
+        if self.sender_type != sender_type::EOA_SECP256K1 {
+            return Ok(());
+        }
+        let Some(address) = self.sender_address_opt() else {
+            return Err(ERR_TX_DECODE);
+        };
+        ensure_eoa_mapping(address, resolved_sender, env)
     }
 
     fn sender_eth_address(&self) -> Option<[u8; 20]> {
-        Some(self.sender_address().into())
+        self.sender_eth_address
     }
 
     fn recipient_eth_address(&self) -> Option<[u8; 20]> {
-        self.envelope.to().map(Into::into)
+        self.recipient_eth_address
     }
 }
 
 impl AuthenticationPayload for TxContext {
     fn authentication_payload(&self) -> SdkResult<Message> {
-        let sender: [u8; 20] = self.sender_address().into();
-        Message::new(&sender)
+        Ok(self.authentication_payload.clone())
     }
 }
 
 impl Encodable for TxContext {
     fn encode(&self) -> SdkResult<Vec<u8>> {
-        Ok(self.envelope.encode())
+        if let TxPayload::Eoa(envelope) = &self.payload {
+            return Ok(envelope.encode());
+        }
+
+        let sender_account = self.sender();
+        let recipient_account = match self.recipient_resolution {
+            RecipientResolution::Account(account) => Some(account),
+            RecipientResolution::EoaAddress(_) | RecipientResolution::None => None,
+        };
+        let payload = match &self.payload {
+            TxPayload::Eoa(envelope) => TxPayloadWire::Eoa(envelope.encode()),
+            TxPayload::Custom(bytes) => TxPayloadWire::Custom(bytes.clone()),
+        };
+        let wire = TxContextWireV1 {
+            sender_type: self.sender_type,
+            payload,
+            tx_hash: self.tx_hash.0,
+            gas_limit: self.gas_limit,
+            nonce: self.nonce,
+            chain_id: self.chain_id,
+            effective_gas_price: self.effective_gas_price,
+            invoke_request: self.invoke_request.clone(),
+            funds: self.funds.clone(),
+            sender_account,
+            recipient_account,
+            sender_key: self.sender_key.clone(),
+            authentication_payload: self.authentication_payload.clone(),
+            sender_eth_address: self.sender_eth_address,
+            recipient_eth_address: self.recipient_eth_address,
+        };
+
+        let mut encoded = TX_CONTEXT_WIRE_MAGIC.to_vec();
+        encoded.extend(borsh::to_vec(&wire).map_err(|_| ERR_TX_DECODE)?);
+        Ok(encoded)
     }
 }
 
 impl Decodable for TxContext {
     fn decode(bytes: &[u8]) -> SdkResult<Self> {
+        if Self::is_wire_encoded(bytes) {
+            let wire: TxContextWireV1 = borsh::from_slice(&bytes[TX_CONTEXT_WIRE_MAGIC.len()..])
+                .map_err(|_| ERR_TX_DECODE)?;
+
+            if SenderKey::new(&wire.sender_key).is_none() {
+                return Err(ERR_TX_DECODE);
+            }
+
+            let payload = match wire.payload {
+                TxPayloadWire::Eoa(raw) => TxPayload::Eoa(Box::new(TxEnvelope::decode(&raw)?)),
+                TxPayloadWire::Custom(raw) => TxPayload::Custom(raw),
+            };
+
+            let sender_resolution = if wire.sender_type == sender_type::EOA_SECP256K1 {
+                let address = wire.sender_eth_address.ok_or(ERR_TX_DECODE)?;
+                SenderResolution::EoaAddress(Address::from(address))
+            } else {
+                SenderResolution::Account(wire.sender_account)
+            };
+
+            let recipient_resolution = if let Some(account) = wire.recipient_account {
+                RecipientResolution::Account(account)
+            } else if let Some(address) = wire.recipient_eth_address {
+                RecipientResolution::EoaAddress(Address::from(address))
+            } else {
+                RecipientResolution::None
+            };
+
+            return Ok(Self {
+                payload,
+                sender_type: wire.sender_type,
+                invoke_request: wire.invoke_request,
+                effective_gas_price: wire.effective_gas_price,
+                tx_hash: B256::from(wire.tx_hash),
+                gas_limit: wire.gas_limit,
+                nonce: wire.nonce,
+                chain_id: wire.chain_id,
+                sender_resolution,
+                recipient_resolution,
+                sender_key: wire.sender_key,
+                authentication_payload: wire.authentication_payload,
+                sender_eth_address: wire.sender_eth_address,
+                recipient_eth_address: wire.recipient_eth_address,
+                funds: wire.funds,
+            });
+        }
+
         let envelope = TxEnvelope::decode(bytes)?;
-        // Use base_fee of 0 for decoding - the effective gas price will be
-        // recalculated if needed when the transaction is added to a mempool
         TxContext::new(envelope, 0).ok_or(ERR_RECIPIENT_REQUIRED)
     }
 }
@@ -192,14 +507,10 @@ impl Decodable for TxContext {
 /// - EIP-1559: min(max_fee_per_gas, base_fee + max_priority_fee_per_gas)
 fn calculate_effective_gas_price(envelope: &TxEnvelope, base_fee: u128) -> u128 {
     match envelope {
-        TxEnvelope::Legacy(tx) => {
-            // Legacy transactions have a fixed gas price
-            tx.tx().gas_price
-        }
+        TxEnvelope::Legacy(tx) => tx.tx().gas_price,
         TxEnvelope::Eip1559(tx) => {
             let max_fee = tx.max_fee_per_gas();
             let priority_fee = tx.max_priority_fee_per_gas();
-            // Effective = min(max_fee, base_fee + priority_fee)
             max_fee.min(base_fee.saturating_add(priority_fee))
         }
     }
@@ -221,8 +532,7 @@ mod tests {
         STORAGE_ACCOUNT_ID,
     };
     use evolve_core::{
-        BlockContext, EnvironmentQuery, FungibleAsset, InvokableMessage, InvokeResponse,
-        ERR_UNKNOWN_FUNCTION,
+        BlockContext, EnvironmentQuery, InvokableMessage, InvokeResponse, ERR_UNKNOWN_FUNCTION,
     };
     use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
     use rand::rngs::OsRng;
@@ -378,5 +688,38 @@ mod tests {
             .resolve_recipient_account(&mut env)
             .expect("resolve recipient");
         assert_eq!(resolved, contract_id);
+    }
+
+    #[test]
+    fn roundtrip_custom_payload_context() {
+        let request =
+            InvokeRequest::new_from_message("custom.execute", 7, Message::new(&42u64).unwrap());
+        let context = TxContext::from_payload(
+            TxPayload::Custom(vec![1, 2, 3, 4]),
+            sender_type::CUSTOM,
+            TxContextMeta {
+                tx_hash: B256::from([9u8; 32]),
+                gas_limit: 120_000,
+                nonce: 11,
+                chain_id: None,
+                effective_gas_price: 33,
+                invoke_request: request,
+                funds: vec![],
+                sender_account: AccountId::from_u64(77),
+                recipient_account: Some(AccountId::from_u64(88)),
+                sender_key: vec![0xCC; 32],
+                authentication_payload: Message::new(&AccountId::from_u64(77)).unwrap(),
+                sender_eth_address: None,
+                recipient_eth_address: None,
+            },
+        )
+        .expect("construct custom context");
+
+        let encoded = context.encode().expect("encode custom context");
+        let decoded = TxContext::decode(&encoded).expect("decode custom context");
+        assert_eq!(decoded.sender_type(), sender_type::CUSTOM);
+        assert!(matches!(decoded.payload(), TxPayload::Custom(data) if data == &vec![1, 2, 3, 4]));
+        assert_eq!(decoded.nonce(), 11);
+        assert_eq!(MempoolTx::gas_limit(&decoded), 120_000);
     }
 }

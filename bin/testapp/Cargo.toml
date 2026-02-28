@@ -58,6 +58,7 @@ alloy-primitives = { workspace = true }
 async-trait = { workspace = true }
 evolve_mempool = { workspace = true }
 evolve_tx_eth = { workspace = true }
+ed25519-consensus = "2.1.0"
 hex = "0.4"
 
 [[bench]]

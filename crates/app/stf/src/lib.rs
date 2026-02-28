@@ -1292,6 +1292,7 @@ where
             bootstrap.account_code_id,
             bootstrap.init_message,
         )?;
+        tx.after_sender_bootstrap(resolved_sender, &mut reg_ctx)?;
         drop(reg_ctx);
         state.pop_events();
         Ok(())
