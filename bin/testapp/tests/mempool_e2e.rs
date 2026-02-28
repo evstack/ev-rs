@@ -10,17 +10,26 @@
 use alloy_consensus::{SignableTransaction, TxEip1559};
 use alloy_primitives::{Address, Bytes, PrimitiveSignature, TxKind, B256, U256};
 use async_trait::async_trait;
-use evolve_core::{AccountId, ErrorCode, ReadonlyKV};
+use borsh::{BorshDeserialize, BorshSerialize};
+use ed25519_consensus::{SigningKey as Ed25519SigningKey, VerificationKey};
+use evolve_core::encoding::Encodable;
+use evolve_core::{AccountId, ErrorCode, Message, ReadonlyKV, SdkResult};
+use evolve_mempool::MempoolTx;
 use evolve_node::{build_dev_node_with_mempool, DevNodeMempoolHandles};
 use evolve_server::DevConfig;
 use evolve_simulator::{generate_signing_key, SimConfig, Simulator};
+use evolve_stf_traits::WritableAccountsCodeStorage;
 use evolve_storage::{CommitHash, Operation};
 use evolve_testapp::{
     build_mempool_stf, default_gas_config, do_eth_genesis, install_account_codes,
     EthGenesisAccounts, MempoolStf,
 };
 use evolve_testing::server_mocks::AccountStorageMock;
-use evolve_tx_eth::{derive_runtime_contract_address, EthGateway, TxContext};
+use evolve_tx_eth::{
+    derive_runtime_contract_address, sender_types, EthGateway, EthIntentPayload,
+    SignatureVerifierDyn, SignatureVerifierRegistry, TxContext, TxEnvelope, TxPayload,
+    TypedTransaction,
+};
 use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
 use std::sync::RwLock;
@@ -28,6 +37,130 @@ use tiny_keccak::{Hasher, Keccak};
 
 type TestNodeHandles =
     DevNodeMempoolHandles<MempoolStf, AsyncMockStorage, AccountStorageMock, TxContext>;
+
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+struct Ed25519AuthPayload {
+    nonce: u64,
+    message_digest: [u8; 32],
+    signature: [u8; 64],
+}
+
+#[derive(Clone, BorshSerialize, BorshDeserialize)]
+struct Ed25519EthIntentProof {
+    public_key: [u8; 32],
+    signature: [u8; 64],
+}
+
+struct Ed25519PayloadVerifier;
+
+impl SignatureVerifierDyn for Ed25519PayloadVerifier {
+    fn verify(&self, payload: &TxPayload) -> SdkResult<()> {
+        let TxPayload::Custom(bytes) = payload else {
+            return Err(ErrorCode::new(0x75));
+        };
+        let intent: EthIntentPayload =
+            borsh::from_slice(bytes).map_err(|_| ErrorCode::new(0x75))?;
+        let decoded: Ed25519EthIntentProof =
+            borsh::from_slice(&intent.auth_proof).map_err(|_| ErrorCode::new(0x75))?;
+        let envelope = intent.decode_envelope().map_err(|_| ErrorCode::new(0x75))?;
+        let invoke_request = envelope
+            .to_invoke_requests()
+            .into_iter()
+            .next()
+            .ok_or_else(|| ErrorCode::new(0x75))?;
+        let request_digest = keccak256(&invoke_request.encode().map_err(|_| ErrorCode::new(0x75))?);
+        let public_key =
+            VerificationKey::try_from(decoded.public_key).map_err(|_| ErrorCode::new(0x76))?;
+        let signature = ed25519_consensus::Signature::from(decoded.signature);
+        public_key
+            .verify(&signature, &request_digest)
+            .map_err(|_| ErrorCode::new(0x77))
+    }
+}
+
+#[evolve_core::account_impl(Ed25519AuthAccount)]
+mod ed25519_auth_account {
+    use super::Ed25519AuthPayload;
+    use core::convert::TryFrom;
+    use ed25519_consensus::{Signature, VerificationKey};
+    use evolve_authentication::auth_interface::AuthenticationInterface;
+    use evolve_collections::item::Item;
+    use evolve_core::{Environment, ErrorCode, Message, SdkResult};
+    use evolve_macros::{exec, init, query};
+
+    fn err_invalid_auth_payload() -> ErrorCode {
+        ErrorCode::new(0x71)
+    }
+
+    fn err_nonce_mismatch() -> ErrorCode {
+        ErrorCode::new(0x72)
+    }
+
+    fn err_invalid_public_key() -> ErrorCode {
+        ErrorCode::new(0x73)
+    }
+
+    fn err_invalid_signature() -> ErrorCode {
+        ErrorCode::new(0x74)
+    }
+
+    pub struct Ed25519AuthAccount {
+        pub nonce: Item<u64>,
+        pub public_key: Item<[u8; 32]>,
+    }
+
+    impl Default for Ed25519AuthAccount {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
+    impl Ed25519AuthAccount {
+        pub const fn new() -> Self {
+            Self {
+                nonce: Item::new(0),
+                public_key: Item::new(1),
+            }
+        }
+
+        #[init]
+        pub fn initialize(&self, public_key: [u8; 32], env: &mut dyn Environment) -> SdkResult<()> {
+            self.nonce.set(&0, env)?;
+            self.public_key.set(&public_key, env)?;
+            Ok(())
+        }
+
+        #[query]
+        pub fn get_nonce(&self, env: &mut dyn evolve_core::EnvironmentQuery) -> SdkResult<u64> {
+            Ok(self.nonce.may_get(env)?.unwrap_or(0))
+        }
+    }
+
+    impl AuthenticationInterface for Ed25519AuthAccount {
+        #[exec]
+        fn authenticate(&self, tx: Message, env: &mut dyn Environment) -> SdkResult<()> {
+            let payload: Ed25519AuthPayload = tx.get().map_err(|_| err_invalid_auth_payload())?;
+            let current_nonce = self.nonce.may_get(env)?.unwrap_or(0);
+            if payload.nonce != current_nonce {
+                return Err(err_nonce_mismatch());
+            }
+
+            let pubkey_bytes = self
+                .public_key
+                .may_get(env)?
+                .ok_or(err_invalid_public_key())?;
+            let verify_key =
+                VerificationKey::try_from(pubkey_bytes).map_err(|_| err_invalid_public_key())?;
+            let signature = Signature::from(payload.signature);
+            verify_key
+                .verify(&signature, &payload.message_digest)
+                .map_err(|_| err_invalid_signature())?;
+
+            self.nonce.set(&(current_nonce + 1), env)?;
+            Ok(())
+        }
+    }
+}
 
 // ============================================================================
 // Test Infrastructure
@@ -110,6 +243,31 @@ impl AsyncMockStorage {
         addr_key.push(1u8); // Item prefix for eth_address
         let addr_value = Message::new(&eth_address).unwrap().into_bytes().unwrap();
         self.data.write().unwrap().insert(addr_key, addr_value);
+    }
+
+    /// Initialize an Ed25519AuthAccount's storage (nonce and public key).
+    fn init_ed25519_auth_storage(&self, account_id: AccountId, public_key: [u8; 32]) {
+        // Storage keys are: account_id + prefix (u8)
+        // Item::new(0) = nonce, Item::new(1) = public key
+
+        let mut nonce_key = account_id.as_bytes().to_vec();
+        nonce_key.push(0u8);
+        let nonce_value = Message::new(&0u64).unwrap().into_bytes().unwrap();
+        self.data.write().unwrap().insert(nonce_key, nonce_value);
+
+        let mut key_key = account_id.as_bytes().to_vec();
+        key_key.push(1u8);
+        let key_value = Message::new(&public_key).unwrap().into_bytes().unwrap();
+        self.data.write().unwrap().insert(key_key, key_value);
+    }
+
+    /// Set token balance directly in storage for a specific account.
+    fn set_token_balance(&self, token_account_id: AccountId, account_id: AccountId, balance: u128) {
+        let mut key = token_account_id.as_bytes().to_vec();
+        key.push(1u8); // Token::balances storage prefix
+        key.extend(account_id.encode().expect("encode account id"));
+        let value = Message::new(&balance).unwrap().into_bytes().unwrap();
+        self.data.write().unwrap().insert(key, value);
     }
 }
 
@@ -305,6 +463,64 @@ fn setup_genesis(
     (handles, genesis_accounts, alice_account_id, bob_account_id)
 }
 
+fn setup_genesis_with_ed25519_sender(
+    chain_id: u64,
+    alice_address: Address,
+    bob_address: Address,
+    sender_account_id: AccountId,
+    sender_public_key: [u8; 32],
+    sender_initial_balance: u128,
+) -> (TestNodeHandles, EthGenesisAccounts, AccountId, AccountId) {
+    let mut codes = AccountStorageMock::new();
+    install_account_codes(&mut codes);
+    codes
+        .add_code(ed25519_auth_account::Ed25519AuthAccount::new())
+        .expect("install ed25519 auth account code");
+
+    let init_storage = AsyncMockStorage::new();
+    let gas_config = default_gas_config();
+    let stf = build_mempool_stf(gas_config.clone(), AccountId::from_u64(0));
+
+    let (genesis_state, genesis_accounts) = do_eth_genesis(
+        &stf,
+        &codes,
+        &init_storage,
+        alice_address.into(),
+        bob_address.into(),
+    )
+    .expect("genesis should succeed");
+
+    let genesis_changes = genesis_state.into_changes().expect("get changes");
+    init_storage.apply_changes(genesis_changes);
+    init_storage.register_account_code(sender_account_id, "Ed25519AuthAccount");
+    init_storage.init_ed25519_auth_storage(sender_account_id, sender_public_key);
+    init_storage.set_token_balance(
+        genesis_accounts.evolve,
+        sender_account_id,
+        sender_initial_balance,
+    );
+
+    let stf = build_mempool_stf(gas_config, genesis_accounts.scheduler);
+    let config = DevConfig {
+        block_interval: None,
+        gas_limit: 30_000_000,
+        initial_height: 1,
+        chain_id,
+    };
+    let handles = build_dev_node_with_mempool(stf, init_storage, codes, config);
+
+    let alice_account_id =
+        evolve_tx_eth::lookup_account_id_in_storage(handles.dev.storage(), alice_address)
+            .expect("lookup alice id")
+            .expect("alice id exists");
+    let bob_account_id =
+        evolve_tx_eth::lookup_account_id_in_storage(handles.dev.storage(), bob_address)
+            .expect("lookup bob id")
+            .expect("bob id exists");
+
+    (handles, genesis_accounts, alice_account_id, bob_account_id)
+}
+
 fn build_transfer_tx(
     alice_key: &SigningKey,
     chain_id: u64,
@@ -328,12 +544,69 @@ fn build_transfer_tx(
     )
 }
 
-async fn submit_and_produce_block(handles: &TestNodeHandles, chain_id: u64, raw_tx: &[u8]) -> B256 {
+struct Ed25519CustomTxBuildInput<'a> {
+    tx_template_signer: &'a SigningKey,
+    auth_signer: &'a Ed25519SigningKey,
+    chain_id: u64,
+    token_address: Address,
+    recipient_account_id: AccountId,
+    transfer_amount: u128,
+    sender_account_id: AccountId,
+}
+
+fn build_ed25519_custom_tx_context(input: Ed25519CustomTxBuildInput<'_>) -> TxContext {
+    let template_raw_tx = build_transfer_tx(
+        input.tx_template_signer,
+        input.chain_id,
+        input.token_address,
+        input.recipient_account_id,
+        input.transfer_amount,
+    );
+    let envelope = TxEnvelope::decode(&template_raw_tx).expect("decode transfer tx envelope");
+    let invoke_request = envelope
+        .to_invoke_requests()
+        .into_iter()
+        .next()
+        .expect("expected transfer invoke request");
+    let request_digest = keccak256(
+        &invoke_request
+            .encode()
+            .expect("encode invoke request for digest"),
+    );
+    let signature = input.auth_signer.sign(&request_digest).to_bytes();
+    let auth_payload = Ed25519AuthPayload {
+        nonce: 0,
+        message_digest: request_digest,
+        signature,
+    };
+    let proof = Ed25519EthIntentProof {
+        public_key: input.auth_signer.verification_key().to_bytes(),
+        signature,
+    };
+    let intent = EthIntentPayload {
+        envelope: template_raw_tx,
+        auth_proof: borsh::to_vec(&proof).expect("encode intent proof"),
+    };
+
+    TxContext::from_eth_intent(
+        sender_types::CUSTOM,
+        intent,
+        input.sender_account_id,
+        input.sender_account_id.as_bytes().to_vec(),
+        Message::new(&auth_payload).expect("encode auth payload"),
+        0,
+    )
+    .expect("construct custom tx context from eth intent")
+}
+
+async fn submit_context_and_produce_block(
+    handles: &TestNodeHandles,
+    tx_context: TxContext,
+) -> B256 {
     let tx_hash = {
-        let gateway = EthGateway::new(chain_id);
-        let tx_context = gateway.decode_and_verify(raw_tx).expect("decode tx");
+        let tx_id = tx_context.tx_id();
         let mut pool = handles.mempool.write().await;
-        let tx_id = pool.add(tx_context).expect("add tx to mempool");
+        pool.add(tx_context).expect("add tx to mempool");
         B256::from(tx_id)
     };
 
@@ -365,6 +638,14 @@ async fn submit_and_produce_block(handles: &TestNodeHandles, chain_id: u64, raw_
     );
 
     tx_hash
+}
+
+async fn submit_and_produce_block(handles: &TestNodeHandles, chain_id: u64, raw_tx: &[u8]) -> B256 {
+    let tx_context = {
+        let gateway = EthGateway::new(chain_id);
+        gateway.decode_and_verify(raw_tx).expect("decode tx")
+    };
+    submit_context_and_produce_block(handles, tx_context).await
 }
 
 fn assert_post_block_state(
@@ -459,5 +740,97 @@ async fn test_token_transfer_e2e() {
         transfer_amount,
         alice_balance_before,
         bob_balance_before,
+    );
+}
+
+#[tokio::test]
+async fn test_custom_sender_ed25519_transfer_e2e() {
+    let chain_id = 1338u64;
+    let transfer_amount = 75u128;
+    let sender_account_id = AccountId::from_u64(900_001);
+    let sender_initial_balance = 500u128;
+
+    let (alice_key, bob_key) = deterministic_signing_keys();
+    let alice_address = get_address(&alice_key);
+    let bob_address = get_address(&bob_key);
+
+    let auth_signer = Ed25519SigningKey::from([0x42; 32]);
+    let sender_public_key = auth_signer.verification_key().to_bytes();
+
+    let (handles, genesis_accounts, _alice_account_id, bob_account_id) =
+        setup_genesis_with_ed25519_sender(
+            chain_id,
+            alice_address,
+            bob_address,
+            sender_account_id,
+            sender_public_key,
+            sender_initial_balance,
+        );
+
+    let sender_nonce_before = read_nonce(handles.dev.storage(), sender_account_id);
+    let sender_balance_before = read_token_balance(
+        handles.dev.storage(),
+        genesis_accounts.evolve,
+        sender_account_id,
+    );
+    let bob_balance_before = read_token_balance(
+        handles.dev.storage(),
+        genesis_accounts.evolve,
+        bob_account_id,
+    );
+
+    assert_eq!(
+        sender_nonce_before, 0,
+        "custom sender nonce should start at 0"
+    );
+    assert_eq!(
+        sender_balance_before, sender_initial_balance,
+        "custom sender should start funded"
+    );
+
+    let token_address = derive_runtime_contract_address(genesis_accounts.evolve);
+    let tx_context = build_ed25519_custom_tx_context(Ed25519CustomTxBuildInput {
+        tx_template_signer: &alice_key,
+        auth_signer: &auth_signer,
+        chain_id,
+        token_address,
+        recipient_account_id: bob_account_id,
+        transfer_amount,
+        sender_account_id,
+    });
+
+    let mut registry = SignatureVerifierRegistry::new();
+    registry.register_dyn(sender_types::CUSTOM, Ed25519PayloadVerifier);
+    registry
+        .verify_payload(sender_types::CUSTOM, tx_context.payload())
+        .expect("custom payload should pass ed25519 verifier");
+
+    let _tx_hash = submit_context_and_produce_block(&handles, tx_context).await;
+
+    let sender_nonce_after = read_nonce(handles.dev.storage(), sender_account_id);
+    let sender_balance_after = read_token_balance(
+        handles.dev.storage(),
+        genesis_accounts.evolve,
+        sender_account_id,
+    );
+    let bob_balance_after = read_token_balance(
+        handles.dev.storage(),
+        genesis_accounts.evolve,
+        bob_account_id,
+    );
+
+    assert_eq!(
+        sender_nonce_after, 1,
+        "ed25519 sender nonce should increment after auth"
+    );
+    assert_eq!(
+        sender_balance_after,
+        sender_balance_before - transfer_amount,
+        "custom sender balance should decrease by transfer amount"
+    );
+    assert_eq!(
+        bob_balance_after,
+        bob_balance_before + transfer_amount,
+        "recipient balance should increase by transfer amount"
     );
 }

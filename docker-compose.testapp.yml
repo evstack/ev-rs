@@ -1,0 +1,29 @@
+services:
+  testapp:
+    build:
+      context: .
+      dockerfile: docker/testapp/Dockerfile
+    image: evolve/testapp:local
+    command:
+      - run
+      - --grpc-addr
+      - 0.0.0.0:50051
+      - --rpc-addr
+      - 0.0.0.0:8545
+      - --data-dir
+      - /var/lib/evolve/data
+      - --chain-id
+      - "1337"
+    environment:
+      EVOLVE_BLOCK_INTERVAL_MS: 100
+      # Faucet account for x402 demo (Hardhat #0)
+      GENESIS_ALICE_ETH_ADDRESS: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+      GENESIS_ALICE_TOKEN_BALANCE: "1000000000"
+    ports:
+      - "8545:8545"
+      - "50051:50051"
+    volumes:
+      - testapp-data:/var/lib/evolve/data
+
+volumes:
+  testapp-data:

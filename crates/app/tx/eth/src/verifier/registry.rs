@@ -1,33 +1,50 @@
-//! Registry for per-transaction-type signature verification.
+//! Registry for sender-type-based signature verification.
 
 use std::collections::BTreeMap;
 
 use evolve_core::SdkResult;
 use evolve_stf_traits::SignatureVerifier;
 
-use crate::envelope::{tx_type, TxEnvelope};
-use crate::error::ERR_UNSUPPORTED_TX_TYPE;
+use crate::envelope::TxEnvelope;
+use crate::error::{ERR_INVALID_SIGNATURE, ERR_UNSUPPORTED_SENDER_TYPE};
+use crate::payload::TxPayload;
+use crate::sender_type;
 use crate::verifier::EcdsaVerifier;
 
-/// Trait object for dynamic dispatch of signature verification.
+/// Trait object for dynamic dispatch of signature verification by payload.
 pub trait SignatureVerifierDyn: Send + Sync {
-    /// Verify the signature of a transaction envelope.
-    fn verify(&self, tx: &TxEnvelope) -> SdkResult<()>;
+    /// Verify the signature/auth proof for a payload.
+    fn verify(&self, payload: &TxPayload) -> SdkResult<()>;
 }
 
-/// Blanket implementation for any SignatureVerifier<TxEnvelope>.
-impl<T: SignatureVerifier<TxEnvelope> + Send + Sync> SignatureVerifierDyn for T {
-    fn verify(&self, tx: &TxEnvelope) -> SdkResult<()> {
-        self.verify_signature(tx)
+/// Adapter for verifiers that operate on Ethereum envelopes.
+struct EoaPayloadVerifier<V> {
+    inner: V,
+}
+
+impl<V> EoaPayloadVerifier<V> {
+    fn new(inner: V) -> Self {
+        Self { inner }
     }
 }
 
-/// Registry that maps transaction types to their signature verifiers.
+impl<V> SignatureVerifierDyn for EoaPayloadVerifier<V>
+where
+    V: SignatureVerifier<TxEnvelope> + Send + Sync,
+{
+    fn verify(&self, payload: &TxPayload) -> SdkResult<()> {
+        match payload {
+            TxPayload::Eoa(tx) => self.inner.verify_signature(tx.as_ref()),
+            TxPayload::Custom(_) => Err(ERR_INVALID_SIGNATURE),
+        }
+    }
+}
+
+/// Registry that maps sender types to signature verifiers.
 ///
-/// This allows different transaction types to have different verification
-/// logic while providing a unified interface.
+/// This allows decoupling sender authentication from tx envelope types.
 pub struct SignatureVerifierRegistry {
-    verifiers: BTreeMap<u8, Box<dyn SignatureVerifierDyn>>,
+    verifiers: BTreeMap<u16, Box<dyn SignatureVerifierDyn>>,
 }
 
 impl SignatureVerifierRegistry {
@@ -38,42 +55,49 @@ impl SignatureVerifierRegistry {
         }
     }
 
-    /// Create a registry pre-configured for Ethereum transaction types.
-    ///
-    /// Registers ECDSA verification for legacy (0x00) and EIP-1559 (0x02) types.
+    /// Create a registry pre-configured for Ethereum EOA sender authentication.
     pub fn ethereum(chain_id: u64) -> Self {
         let mut registry = Self::new();
-        let verifier = EcdsaVerifier::new(chain_id);
-
-        // All Ethereum types use ECDSA
-        registry.register(tx_type::LEGACY, verifier.clone());
-        registry.register(tx_type::EIP1559, verifier);
-
+        registry.register_eoa(sender_type::EOA_SECP256K1, EcdsaVerifier::new(chain_id));
         registry
     }
 
-    /// Register a verifier for a specific transaction type.
-    pub fn register<V: SignatureVerifier<TxEnvelope> + Send + Sync + 'static>(
+    /// Register a payload verifier for a sender type.
+    pub fn register_dyn(
         &mut self,
-        tx_type: u8,
-        verifier: V,
+        sender_type: u16,
+        verifier: impl SignatureVerifierDyn + 'static,
     ) {
-        self.verifiers.insert(tx_type, Box::new(verifier));
+        self.verifiers.insert(sender_type, Box::new(verifier));
     }
 
-    /// Verify a transaction's signature using the appropriate verifier.
-    pub fn verify(&self, tx: &TxEnvelope) -> SdkResult<()> {
-        let tx_type = tx.tx_type();
-        let verifier = self.verifiers.get(&tx_type).ok_or_else(|| {
-            evolve_core::ErrorCode::new_with_arg(ERR_UNSUPPORTED_TX_TYPE.id, tx_type as u16)
+    /// Register an envelope-based verifier for an EOA sender type.
+    pub fn register_eoa<V>(&mut self, sender_type: u16, verifier: V)
+    where
+        V: SignatureVerifier<TxEnvelope> + Send + Sync + 'static,
+    {
+        self.register_dyn(sender_type, EoaPayloadVerifier::new(verifier));
+    }
+
+    /// Verify a payload using the verifier configured for `sender_type`.
+    pub fn verify_payload(&self, sender_type: u16, payload: &TxPayload) -> SdkResult<()> {
+        let verifier = self.verifiers.get(&sender_type).ok_or_else(|| {
+            evolve_core::ErrorCode::new_with_arg(ERR_UNSUPPORTED_SENDER_TYPE.id, sender_type)
         })?;
-
-        verifier.verify(tx)
+        verifier.verify(payload)
     }
 
-    /// Check if a transaction type is supported.
-    pub fn supports(&self, tx_type: u8) -> bool {
-        self.verifiers.contains_key(&tx_type)
+    /// Backward-compatible verification entrypoint for Ethereum EOA envelopes.
+    pub fn verify(&self, tx: &TxEnvelope) -> SdkResult<()> {
+        self.verify_payload(
+            sender_type::EOA_SECP256K1,
+            &TxPayload::Eoa(Box::new(tx.clone())),
+        )
+    }
+
+    /// Check if a sender type is supported.
+    pub fn supports(&self, sender_type: u16) -> bool {
+        self.verifiers.contains_key(&sender_type)
     }
 }
 
@@ -96,15 +120,13 @@ mod tests {
     #[test]
     fn test_registry_supports() {
         let registry = SignatureVerifierRegistry::ethereum(1);
-
-        assert!(registry.supports(tx_type::LEGACY));
-        assert!(registry.supports(tx_type::EIP1559));
-        assert!(!registry.supports(tx_type::EIP2930)); // Not registered
+        assert!(registry.supports(sender_type::EOA_SECP256K1));
+        assert!(!registry.supports(sender_type::CUSTOM));
     }
 
     #[test]
     fn test_empty_registry() {
         let registry = SignatureVerifierRegistry::new();
-        assert!(!registry.supports(tx_type::LEGACY));
+        assert!(!registry.supports(sender_type::EOA_SECP256K1));
     }
 }

@@ -44,6 +44,19 @@ pub trait Transaction {
         None
     }
 
+    /// Optional hook executed immediately after sender bootstrap registration.
+    ///
+    /// This is useful for transaction types that need to atomically maintain
+    /// auxiliary sender indexes (for example address-to-account registries)
+    /// once bootstrap account creation has completed.
+    fn after_sender_bootstrap(
+        &self,
+        _resolved_sender: AccountId,
+        _env: &mut dyn Environment,
+    ) -> SdkResult<()> {
+        Ok(())
+    }
+
     /// Optional original 20-byte sender address (for ETH-compatible indexing).
     fn sender_eth_address(&self) -> Option<[u8; 20]> {
         None

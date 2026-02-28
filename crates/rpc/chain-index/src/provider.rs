@@ -206,6 +206,21 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
         account_codes: Arc<A>,
         mempool: SharedMempool<Mempool<TxContext>>,
     ) -> Self {
+        let gateway = EthGateway::new(config.chain_id);
+        Self::with_mempool_and_gateway(index, config, account_codes, mempool, gateway)
+    }
+
+    /// Create a new chain state provider with account codes, mempool, and a preconfigured gateway.
+    ///
+    /// This is the extension point for sender-type ingress verification beyond
+    /// default Ethereum secp256k1 envelopes.
+    pub fn with_mempool_and_gateway(
+        index: Arc<I>,
+        config: ChainStateProviderConfig,
+        account_codes: Arc<A>,
+        mempool: SharedMempool<Mempool<TxContext>>,
+        gateway: EthGateway,
+    ) -> Self {
         let default_parallelism = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(4);
@@ -214,7 +229,7 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
             .and_then(|v| v.parse::<usize>().ok())
             .filter(|v| *v > 0)
             .unwrap_or(default_parallelism);
-        let gateway = Arc::new(EthGateway::new(config.chain_id));
+        let gateway = Arc::new(gateway);
         let queue_capacity = std::env::var("EVOLVE_RPC_VERIFY_QUEUE_CAPACITY")
             .ok()
             .and_then(|v| v.parse::<usize>().ok())
@@ -673,8 +688,12 @@ mod tests {
     use std::sync::Mutex;
 
     use crate::types::{StoredBlock, StoredLog, StoredReceipt, StoredTransaction, TxLocation};
+    use borsh::{BorshDeserialize, BorshSerialize};
+    use evolve_core::encoding::Encodable;
+    use evolve_core::{AccountId, ErrorCode, InvokableMessage, InvokeRequest, Message, SdkResult};
     use evolve_mempool::new_shared_mempool;
     use evolve_rpc_types::block::BlockTransactions;
+    use evolve_tx_eth::{sender_types, SignatureVerifierDyn, TxContextMeta, TxPayload};
 
     #[derive(Default)]
     struct MockChainIndex {
@@ -880,6 +899,59 @@ mod tests {
         "620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83"
     );
 
+    #[derive(Clone, BorshSerialize, BorshDeserialize)]
+    struct TestInvoke {
+        value: u8,
+    }
+
+    impl InvokableMessage for TestInvoke {
+        const FUNCTION_IDENTIFIER: u64 = 99_001;
+        const FUNCTION_IDENTIFIER_NAME: &'static str = "test_custom";
+    }
+
+    struct TestCustomVerifier;
+
+    impl SignatureVerifierDyn for TestCustomVerifier {
+        fn verify(&self, payload: &TxPayload) -> SdkResult<()> {
+            match payload {
+                TxPayload::Custom(bytes) if bytes == b"ok" => Ok(()),
+                _ => Err(ErrorCode::new(0x99)),
+            }
+        }
+    }
+
+    fn custom_wire_tx_bytes(sender_type: u16, payload: Vec<u8>) -> Vec<u8> {
+        let sender = AccountId::from_u64(9_001);
+        let recipient = AccountId::from_u64(9_002);
+        let request =
+            InvokeRequest::new(&TestInvoke { value: 7 }).expect("invoke request should encode");
+        let auth_payload =
+            Message::new(&[0x11u8; 4]).expect("authentication payload should encode");
+
+        let tx = TxContext::from_payload(
+            TxPayload::Custom(payload),
+            sender_type,
+            TxContextMeta {
+                tx_hash: B256::repeat_byte(0xAB),
+                gas_limit: 21_000,
+                nonce: 1,
+                chain_id: Some(1),
+                effective_gas_price: 2,
+                invoke_request: request,
+                funds: vec![],
+                sender_account: sender,
+                recipient_account: Some(recipient),
+                sender_key: sender.as_bytes().to_vec(),
+                authentication_payload: auth_payload,
+                sender_eth_address: None,
+                recipient_eth_address: None,
+            },
+        )
+        .expect("custom tx context should build");
+
+        tx.encode().expect("custom tx context should encode")
+    }
+
     #[tokio::test]
     async fn send_raw_transaction_without_mempool_is_not_implemented() {
         let provider = default_provider(Arc::new(MockChainIndex::default()));
@@ -918,6 +990,30 @@ mod tests {
                 .parse::<B256>()
                 .expect("hash literal should parse")
         );
+        assert_eq!(mempool.read().await.len(), 1);
+        assert!(mempool.read().await.contains(&hash.0));
+    }
+
+    #[tokio::test]
+    async fn send_raw_transaction_custom_wire_payload_enters_mempool_with_custom_gateway() {
+        let mempool = new_shared_mempool::<TxContext>();
+        let mut gateway = EthGateway::new(provider_config().chain_id);
+        gateway.register_payload_verifier(sender_types::CUSTOM, TestCustomVerifier);
+        let provider = ChainStateProvider::with_mempool_and_gateway(
+            Arc::new(MockChainIndex::default()),
+            provider_config(),
+            Arc::new(NoopAccountCodes),
+            mempool.clone(),
+            gateway,
+        );
+
+        let raw = custom_wire_tx_bytes(sender_types::CUSTOM, b"ok".to_vec());
+        let hash = provider
+            .send_raw_transaction(&raw)
+            .await
+            .expect("custom wire tx should be accepted by configured gateway");
+
+        assert_eq!(hash, B256::repeat_byte(0xAB));
         assert_eq!(mempool.read().await.len(), 1);
         assert!(mempool.read().await.contains(&hash.0));
     }

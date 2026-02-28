@@ -13,7 +13,7 @@ const EOA_ADDR_TO_ID_PREFIX: &[u8] = b"registry/eoa/eth/a2i/";
 const EOA_ID_TO_ADDR_PREFIX: &[u8] = b"registry/eoa/eth/i2a/";
 const CONTRACT_ADDR_TO_ID_PREFIX: &[u8] = b"registry/contract/runtime/a2i/";
 const CONTRACT_ID_TO_ADDR_PREFIX: &[u8] = b"registry/contract/runtime/i2a/";
-const ETH_EOA_CODE_ID: &str = "EthEoaAccount";
+pub const ETH_EOA_CODE_ID: &str = "EthEoaAccount";
 
 fn addr_to_id_key(address: Address) -> Vec<u8> {
     let mut key = Vec::with_capacity(EOA_ADDR_TO_ID_PREFIX.len() + 20);
@@ -182,6 +182,36 @@ fn set_mapping(
     Ok(())
 }
 
+/// Ensure address/account mapping exists and is conflict-free.
+///
+/// This is idempotent for already consistent mappings.
+pub fn ensure_eoa_mapping(
+    address: Address,
+    account_id: AccountId,
+    env: &mut dyn Environment,
+) -> SdkResult<()> {
+    if let Some(existing) = lookup_account_id_in_env(address, env)? {
+        if existing != account_id {
+            return Err(ERR_ADDRESS_ACCOUNT_CONFLICT);
+        }
+        if let Some(existing_addr) = lookup_address_in_env(account_id, env)? {
+            if existing_addr != address {
+                return Err(ERR_ADDRESS_ACCOUNT_CONFLICT);
+            }
+            return Ok(());
+        }
+    }
+
+    if let Some(existing_addr) = lookup_address_in_env(account_id, env)? {
+        if existing_addr != address {
+            return Err(ERR_ADDRESS_ACCOUNT_CONFLICT);
+        }
+        return set_mapping(address, account_id, env);
+    }
+
+    set_mapping(address, account_id, env)
+}
+
 pub fn resolve_or_create_eoa_account(
     address: Address,
     env: &mut dyn Environment,
@@ -198,7 +228,7 @@ pub fn resolve_or_create_eoa_account(
         env,
     )?;
 
-    set_mapping(address, account_id, env)?;
+    ensure_eoa_mapping(address, account_id, env)?;
     Ok(account_id)
 }
 

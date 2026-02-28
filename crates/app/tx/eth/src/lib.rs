@@ -40,6 +40,8 @@ pub mod error;
 pub mod ethereum;
 pub mod gateway;
 pub mod mempool;
+pub mod payload;
+pub mod sender_type;
 pub mod traits;
 pub mod verifier;
 
@@ -55,9 +57,11 @@ pub use eoa_registry::{
 pub use error::*;
 pub use ethereum::{SignedEip1559Tx, SignedLegacyTx};
 pub use gateway::{EthGateway, GatewayError};
-pub use mempool::TxContext;
+pub use mempool::{TxContext, TxContextMeta};
+pub use payload::{EthIntentPayload, TxPayload};
+pub use sender_type as sender_types;
 pub use traits::{
     derive_eth_eoa_account_id, derive_runtime_contract_account_id, derive_runtime_contract_address,
     derive_system_account_id, TypedTransaction,
 };
-pub use verifier::{EcdsaVerifier, SignatureVerifierRegistry};
+pub use verifier::{EcdsaVerifier, SignatureVerifierDyn, SignatureVerifierRegistry};
