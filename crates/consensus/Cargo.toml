@@ -1,0 +1,44 @@
+[package]
+name = "evolve_consensus"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+commonware-broadcast = { workspace = true }
+commonware-consensus = { workspace = true }
+commonware-cryptography = { workspace = true }
+commonware-codec = { workspace = true }
+commonware-p2p = { workspace = true }
+commonware-parallel = { workspace = true }
+commonware-resolver = { workspace = true }
+commonware-runtime = { workspace = true }
+commonware-storage = { workspace = true }
+commonware-utils = { workspace = true }
+
+evolve_core = { workspace = true }
+evolve_server = { workspace = true }
+evolve_stf_traits = { workspace = true }
+evolve_mempool = { workspace = true }
+evolve_storage = { workspace = true }
+evolve_p2p = { package = "evolve-p2p", path = "../p2p" }
+
+rand_core = "0.6"
+
+alloy-primitives = { workspace = true }
+borsh = { workspace = true }
+bytes = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+commonware-consensus = { workspace = true, features = ["fuzz"] }
+commonware-cryptography = { workspace = true, features = ["mocks"] }
+commonware-p2p = { workspace = true }
+commonware-runtime = { workspace = true, features = ["test-utils"] }
+commonware-macros = { workspace = true }
+
+[lints]
+workspace = true
