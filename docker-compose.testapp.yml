@@ -22,6 +22,12 @@ services:
     ports:
       - "8545:8545"
       - "50051:50051"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8545"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     volumes:
       - testapp-data:/var/lib/evolve/data
 

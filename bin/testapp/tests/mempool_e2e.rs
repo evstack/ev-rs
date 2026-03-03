@@ -59,22 +59,22 @@ impl SignatureVerifierDyn for Ed25519PayloadVerifier {
             return Err(ErrorCode::new(0x75));
         };
         let intent: EthIntentPayload =
-            borsh::from_slice(bytes).map_err(|_| ErrorCode::new(0x75))?;
+            borsh::from_slice(bytes).map_err(|_| ErrorCode::new(0x76))?;
         let decoded: Ed25519EthIntentProof =
-            borsh::from_slice(&intent.auth_proof).map_err(|_| ErrorCode::new(0x75))?;
-        let envelope = intent.decode_envelope().map_err(|_| ErrorCode::new(0x75))?;
+            borsh::from_slice(&intent.auth_proof).map_err(|_| ErrorCode::new(0x77))?;
+        let envelope = intent.decode_envelope().map_err(|_| ErrorCode::new(0x78))?;
         let invoke_request = envelope
             .to_invoke_requests()
             .into_iter()
             .next()
-            .ok_or_else(|| ErrorCode::new(0x75))?;
-        let request_digest = keccak256(&invoke_request.encode().map_err(|_| ErrorCode::new(0x75))?);
+            .ok_or_else(|| ErrorCode::new(0x79))?;
+        let request_digest = keccak256(&invoke_request.encode().map_err(|_| ErrorCode::new(0x7A))?);
         let public_key =
-            VerificationKey::try_from(decoded.public_key).map_err(|_| ErrorCode::new(0x76))?;
+            VerificationKey::try_from(decoded.public_key).map_err(|_| ErrorCode::new(0x7B))?;
         let signature = ed25519_consensus::Signature::from(decoded.signature);
         public_key
             .verify(&signature, &request_digest)
-            .map_err(|_| ErrorCode::new(0x77))
+            .map_err(|_| ErrorCode::new(0x7C))
     }
 }
 
@@ -89,19 +89,19 @@ mod ed25519_auth_account {
     use evolve_macros::{exec, init, query};
 
     fn err_invalid_auth_payload() -> ErrorCode {
-        ErrorCode::new(0x71)
+        ErrorCode::new(0x80)
     }
 
     fn err_nonce_mismatch() -> ErrorCode {
-        ErrorCode::new(0x72)
+        ErrorCode::new(0x81)
     }
 
     fn err_invalid_public_key() -> ErrorCode {
-        ErrorCode::new(0x73)
+        ErrorCode::new(0x82)
     }
 
     fn err_invalid_signature() -> ErrorCode {
-        ErrorCode::new(0x74)
+        ErrorCode::new(0x83)
     }
 
     pub struct Ed25519AuthAccount {
@@ -524,6 +524,7 @@ fn setup_genesis_with_ed25519_sender(
 fn build_transfer_tx(
     alice_key: &SigningKey,
     chain_id: u64,
+    nonce: u64,
     token_address: Address,
     bob_account_id: AccountId,
     transfer_amount: u128,
@@ -537,7 +538,7 @@ fn build_transfer_tx(
     create_signed_tx(
         alice_key,
         chain_id,
-        0,
+        nonce,
         token_address,
         U256::ZERO,
         Bytes::from(calldata),
@@ -548,6 +549,7 @@ struct Ed25519CustomTxBuildInput<'a> {
     tx_template_signer: &'a SigningKey,
     auth_signer: &'a Ed25519SigningKey,
     chain_id: u64,
+    nonce: u64,
     token_address: Address,
     recipient_account_id: AccountId,
     transfer_amount: u128,
@@ -558,6 +560,7 @@ fn build_ed25519_custom_tx_context(input: Ed25519CustomTxBuildInput<'_>) -> TxCo
     let template_raw_tx = build_transfer_tx(
         input.tx_template_signer,
         input.chain_id,
+        input.nonce,
         input.token_address,
         input.recipient_account_id,
         input.transfer_amount,
@@ -575,7 +578,7 @@ fn build_ed25519_custom_tx_context(input: Ed25519CustomTxBuildInput<'_>) -> TxCo
     );
     let signature = input.auth_signer.sign(&request_digest).to_bytes();
     let auth_payload = Ed25519AuthPayload {
-        nonce: 0,
+        nonce: input.nonce,
         message_digest: request_digest,
         signature,
     };
@@ -726,6 +729,7 @@ async fn test_token_transfer_e2e() {
     let raw_tx = build_transfer_tx(
         &alice_key,
         chain_id,
+        0,
         token_address,
         bob_account_id,
         transfer_amount,
@@ -793,12 +797,15 @@ async fn test_custom_sender_ed25519_transfer_e2e() {
         tx_template_signer: &alice_key,
         auth_signer: &auth_signer,
         chain_id,
+        nonce: sender_nonce_before,
         token_address,
         recipient_account_id: bob_account_id,
         transfer_amount,
         sender_account_id,
     });
 
+    // Test-only local registry check: production ingress must configure and
+    // inject sender-type verifiers into the gateway/provider path.
     let mut registry = SignatureVerifierRegistry::new();
     registry.register_dyn(sender_types::CUSTOM, Ed25519PayloadVerifier);
     registry

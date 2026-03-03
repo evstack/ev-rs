@@ -9,7 +9,7 @@ RUN apt-get update \
 # Install the exact nightly toolchain before copying source so this layer is
 # cached independently and the download does not race with the build.
 COPY rust-toolchain.toml ./rust-toolchain.toml
-RUN rustup show active-toolchain || rustup toolchain install
+RUN rustup show
 
 COPY . .
 

@@ -496,6 +496,9 @@ impl Decodable for TxContext {
             });
         }
 
+        // Envelope-only decode fallback uses base_fee=0 because decode does not
+        // have block context; ingress verification (`decode_and_verify`) rebuilds
+        // contexts with runtime base fee for mempool ordering.
         let envelope = TxEnvelope::decode(bytes)?;
         TxContext::new(envelope, 0).ok_or(ERR_RECIPIENT_REQUIRED)
     }

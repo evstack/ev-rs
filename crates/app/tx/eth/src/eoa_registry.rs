@@ -190,23 +190,23 @@ pub fn ensure_eoa_mapping(
     account_id: AccountId,
     env: &mut dyn Environment,
 ) -> SdkResult<()> {
-    if let Some(existing) = lookup_account_id_in_env(address, env)? {
+    let forward = lookup_account_id_in_env(address, env)?;
+    let reverse = lookup_address_in_env(account_id, env)?;
+
+    if let Some(existing) = forward {
         if existing != account_id {
             return Err(ERR_ADDRESS_ACCOUNT_CONFLICT);
         }
-        if let Some(existing_addr) = lookup_address_in_env(account_id, env)? {
-            if existing_addr != address {
-                return Err(ERR_ADDRESS_ACCOUNT_CONFLICT);
-            }
-            return Ok(());
-        }
     }
 
-    if let Some(existing_addr) = lookup_address_in_env(account_id, env)? {
+    if let Some(existing_addr) = reverse {
         if existing_addr != address {
             return Err(ERR_ADDRESS_ACCOUNT_CONFLICT);
         }
-        return set_mapping(address, account_id, env);
+    }
+
+    if forward.is_some() && reverse.is_some() {
+        return Ok(());
     }
 
     set_mapping(address, account_id, env)
