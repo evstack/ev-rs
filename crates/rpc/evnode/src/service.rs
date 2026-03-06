@@ -462,6 +462,7 @@ where
         let updated_state_root = compute_state_root(&changes);
 
         // Log execution results (before moving ownership)
+        let executed_tx_count = result.tx_results.len();
         let successful = result
             .tx_results
             .iter()
@@ -481,11 +482,15 @@ where
 
         // Finalize the block proposal: remove executed txs, return unexecuted in-flight txs.
         if let Some(ref mempool) = self.mempool {
-            let tx_hashes: Vec<[u8; 32]> =
-                block.transactions.iter().map(|tx| tx.hash().0).collect();
-            if !tx_hashes.is_empty() {
+            let executed_hashes: Vec<[u8; 32]> = block
+                .transactions
+                .iter()
+                .take(executed_tx_count)
+                .map(|tx| tx.hash().0)
+                .collect();
+            if !block.transactions.is_empty() {
                 let mut pool = mempool.write().await;
-                pool.finalize(&tx_hashes);
+                pool.finalize(&executed_hashes);
             }
         }
 
@@ -605,9 +610,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy_consensus::{SignableTransaction, TxEip1559};
+    use alloy_primitives::{Address, Bytes, PrimitiveSignature, TxKind, U256};
     use evolve_core::{InvokeResponse, Message};
     use evolve_mempool::shared_mempool_from;
     use evolve_stf::results::TxResult;
+    use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
     use tonic::Code;
@@ -651,6 +659,7 @@ mod tests {
         emit_genesis_change: bool,
         run_genesis_calls: AtomicUsize,
         execute_changes: Vec<StateChange>,
+        executed_tx_count: Option<usize>,
         execute_block_calls: AtomicUsize,
         last_executed_block: Mutex<Option<ObservedBlock>>,
     }
@@ -661,9 +670,15 @@ mod tests {
                 emit_genesis_change,
                 run_genesis_calls: AtomicUsize::new(0),
                 execute_changes,
+                executed_tx_count: None,
                 execute_block_calls: AtomicUsize::new(0),
                 last_executed_block: Mutex::new(None),
             }
+        }
+
+        fn with_executed_tx_count(mut self, executed_tx_count: usize) -> Self {
+            self.executed_tx_count = Some(executed_tx_count);
+            self
         }
     }
 
@@ -699,9 +714,14 @@ mod tests {
                 }
             }
 
+            let executed_tx_count = self
+                .executed_tx_count
+                .unwrap_or(block.transactions.len())
+                .min(block.transactions.len());
             let tx_results: Vec<TxResult> = block
                 .transactions
                 .iter()
+                .take(executed_tx_count)
                 .map(|tx| TxResult {
                     events: vec![],
                     gas_used: tx.envelope().gas_limit(),
@@ -716,7 +736,7 @@ mod tests {
                     tx_results,
                     end_block_events: vec![],
                     gas_used,
-                    txs_skipped: 0,
+                    txs_skipped: block.transactions.len() - executed_tx_count,
                 },
                 exec_state,
             )
@@ -796,6 +816,36 @@ mod tests {
             "b6b3a76400008025a028ef61340bd939bc2195fe537567866003e1a15d3c71ff63e1590",
             "620aa636276a067cbe9d8997f761aecb703304b3800ccf555c9f3dc64214b297fb1966a3b6d83"
         ))
+    }
+
+    fn sign_hash(signing_key: &SigningKey, hash: B256) -> PrimitiveSignature {
+        let (sig, recovery_id): (k256::ecdsa::Signature, k256::ecdsa::RecoveryId) = signing_key
+            .sign_prehash(hash.as_ref())
+            .expect("signing should succeed");
+        let r = U256::from_be_slice(sig.r().to_bytes().as_slice());
+        let s = U256::from_be_slice(sig.s().to_bytes().as_slice());
+        PrimitiveSignature::new(r, s, recovery_id.is_y_odd())
+    }
+
+    fn sample_eip1559_tx_bytes(nonce: u64) -> Vec<u8> {
+        let signing_key =
+            SigningKey::from_bytes((&[7u8; 32]).into()).expect("fixed signing key should be valid");
+        let tx = TxEip1559 {
+            chain_id: 1,
+            nonce,
+            max_priority_fee_per_gas: 1,
+            max_fee_per_gas: 1,
+            gas_limit: 21_000,
+            to: TxKind::Call(Address::repeat_byte(0x22)),
+            value: U256::ZERO,
+            input: Bytes::new(),
+            access_list: Default::default(),
+        };
+        let signature = sign_hash(&signing_key, tx.signature_hash());
+        let signed = tx.into_signed(signature);
+        let mut encoded = vec![0x02];
+        signed.rlp_encode(&mut encoded);
+        encoded
     }
 
     #[tokio::test]
@@ -1187,6 +1237,66 @@ mod tests {
         assert!(
             after_finalize.txs.is_empty(),
             "executed tx should be finalized out of mempool"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_txs_finalizes_only_executed_prefix_from_external_batch() {
+        let tx1 = TxContext::decode(&sample_eip1559_tx_bytes(0)).expect("tx1 should decode");
+        let tx2 = TxContext::decode(&sample_eip1559_tx_bytes(1)).expect("tx2 should decode");
+
+        let mut pool = Mempool::<TxContext>::new();
+        pool.add(tx1).expect("tx1 should be added to mempool");
+        pool.add(tx2).expect("tx2 should be added to mempool");
+        let mempool = shared_mempool_from(pool);
+
+        let service = ExecutorServiceImpl::with_mempool(
+            MockStf::new(false, Vec::new()).with_executed_tx_count(1),
+            MockStorage,
+            MockCodes,
+            ExecutorServiceConfig::default(),
+            mempool,
+        );
+        init_test_chain(&service).await;
+
+        let proposed = service
+            .get_txs(Request::new(GetTxsRequest {}))
+            .await
+            .expect("get_txs should succeed")
+            .into_inner()
+            .txs;
+        assert_eq!(proposed.len(), 2, "both txs should be proposed");
+        let expected_remaining_hash = TxContext::decode(&proposed[1])
+            .expect("second proposed tx should decode")
+            .hash();
+
+        service
+            .execute_txs(Request::new(ExecuteTxsRequest {
+                block_height: 2,
+                timestamp: None,
+                prev_state_root: vec![],
+                txs: proposed,
+            }))
+            .await
+            .expect("execute_txs should succeed");
+
+        let after_finalize = service
+            .get_txs(Request::new(GetTxsRequest {}))
+            .await
+            .expect("second get_txs should succeed")
+            .into_inner()
+            .txs;
+        assert_eq!(
+            after_finalize.len(),
+            1,
+            "unexecuted tx should be returned to the mempool"
+        );
+        let remaining_hash = TxContext::decode(&after_finalize[0])
+            .expect("remaining tx should decode")
+            .hash();
+        assert_eq!(
+            remaining_hash, expected_remaining_hash,
+            "only the unexecuted tail should be re-proposed"
         );
     }
 }

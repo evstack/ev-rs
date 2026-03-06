@@ -74,6 +74,9 @@ impl NodeConfig {
             enabled: self.rpc.enabled,
             enable_block_indexing: self.rpc.enable_block_indexing,
             grpc_addr: None,
+            grpc_enable_gzip: self.grpc.enable_gzip,
+            grpc_max_message_size: self.grpc_max_message_size_usize(),
+            shutdown_timeout_secs: self.operations.shutdown_timeout_secs,
         }
     }
 }
@@ -255,6 +258,25 @@ mod tests {
         let figment = build_figment(&path).merge(("chain.chain_id", 42u64));
         let config: NodeConfig = figment.extract().expect("extract");
         assert_eq!(config.chain.chain_id, 42);
+    }
+
+    #[test]
+    fn to_rpc_config_preserves_grpc_and_shutdown_settings() {
+        let mut config = NodeConfig::default();
+        config.chain.chain_id = 77;
+        config.rpc.enabled = false;
+        config.rpc.enable_block_indexing = false;
+        config.grpc.enable_gzip = false;
+        config.grpc.max_message_size = 8 * 1024 * 1024;
+        config.operations.shutdown_timeout_secs = 42;
+
+        let rpc = config.to_rpc_config();
+        assert_eq!(rpc.chain_id, 77);
+        assert!(!rpc.enabled);
+        assert!(!rpc.enable_block_indexing);
+        assert!(!rpc.grpc_enable_gzip);
+        assert_eq!(rpc.grpc_max_message_size, 8 * 1024 * 1024);
+        assert_eq!(rpc.shutdown_timeout_secs, 42);
     }
 
     #[test]

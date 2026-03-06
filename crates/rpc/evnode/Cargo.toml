@@ -19,6 +19,11 @@ evolve_stf_traits.workspace = true
 evolve_mempool.workspace = true
 evolve_server.workspace = true
 evolve_tx_eth.workspace = true
+evolve_node.workspace = true
+evolve_chain_index.workspace = true
+evolve_eth_jsonrpc.workspace = true
+evolve_rpc_types.workspace = true
+evolve_storage.workspace = true
 
 # External dependencies
 tonic = { version = "0.12", features = ["gzip"] }
@@ -28,6 +33,8 @@ tokio = { workspace = true, features = ["sync", "rt-multi-thread"] }
 async-trait.workspace = true
 tracing.workspace = true
 thiserror = "2"
+commonware-runtime.workspace = true
+borsh.workspace = true
 
 # For alloy types
 alloy-primitives.workspace = true
@@ -42,6 +49,8 @@ tonic-build = "0.12"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 tracing-subscriber = "0.3"
 evolve_testapp.workspace = true
+alloy-consensus = { workspace = true, features = ["k256"] }
+k256 = { version = "0.13", features = ["ecdsa"] }
 
 [[example]]
 name = "run_server"

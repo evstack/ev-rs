@@ -12,35 +12,15 @@ name = "evd"
 path = "src/main.rs"
 
 [dependencies]
-# Workspace dependencies
-evolve_core.workspace = true
-evolve_stf.workspace = true
-evolve_stf_traits.workspace = true
-evolve_mempool.workspace = true
-evolve_server.workspace = true
-evolve_storage.workspace = true
 evolve_node.workspace = true
 evolve_evnode = { workspace = true, features = ["testapp"] }
+evolve_storage.workspace = true
 evolve_testapp.workspace = true
-evolve_token.workspace = true
-evolve_scheduler.workspace = true
-evolve_testing.workspace = true
-evolve_tx_eth.workspace = true
-evolve_chain_index.workspace = true
-evolve_eth_jsonrpc.workspace = true
-evolve_rpc_types.workspace = true
 
-# External dependencies
-alloy-primitives.workspace = true
 commonware-runtime.workspace = true
 
-# External dependencies
-futures.workspace = true
 clap = { workspace = true }
-tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-borsh.workspace = true
 
 [lints]
 workspace = true

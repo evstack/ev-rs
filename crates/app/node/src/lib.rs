@@ -123,6 +123,12 @@ pub struct RpcConfig {
     /// Optional gRPC server address. When set, a gRPC server is started
     /// alongside JSON-RPC, sharing the same state provider and subscriptions.
     pub grpc_addr: Option<SocketAddr>,
+    /// Enable gzip compression for the gRPC server.
+    pub grpc_enable_gzip: bool,
+    /// Maximum gRPC request/response size in bytes.
+    pub grpc_max_message_size: usize,
+    /// Graceful shutdown timeout in seconds.
+    pub shutdown_timeout_secs: u64,
 }
 
 impl Default for RpcConfig {
@@ -133,6 +139,9 @@ impl Default for RpcConfig {
             enabled: true,
             enable_block_indexing: true,
             grpc_addr: None,
+            grpc_enable_gzip: true,
+            grpc_max_message_size: 4 * 1024 * 1024,
+            shutdown_timeout_secs: 10,
         }
     }
 }
@@ -167,6 +176,19 @@ impl RpcConfig {
     /// Enable the gRPC server on the given address.
     pub fn with_grpc(mut self, addr: SocketAddr) -> Self {
         self.grpc_addr = Some(addr);
+        self
+    }
+
+    /// Configure gRPC compression and message sizing.
+    pub fn with_grpc_settings(mut self, enable_gzip: bool, max_message_size: usize) -> Self {
+        self.grpc_enable_gzip = enable_gzip;
+        self.grpc_max_message_size = max_message_size;
+        self
+    }
+
+    /// Set the graceful shutdown timeout in seconds.
+    pub fn with_shutdown_timeout_secs(mut self, shutdown_timeout_secs: u64) -> Self {
+        self.shutdown_timeout_secs = shutdown_timeout_secs;
         self
     }
 }
@@ -228,6 +250,41 @@ async fn build_block_archive(context: TokioContext) -> OnBlockArchive {
             );
         }
     })
+}
+
+fn grpc_server_config(rpc_config: &RpcConfig, addr: SocketAddr) -> GrpcServerConfig {
+    GrpcServerConfig {
+        addr,
+        chain_id: rpc_config.chain_id,
+        enable_gzip: rpc_config.grpc_enable_gzip,
+        max_message_size: rpc_config.grpc_max_message_size,
+    }
+}
+
+fn shutdown_timeout(rpc_config: &RpcConfig) -> Duration {
+    Duration::from_secs(rpc_config.shutdown_timeout_secs)
+}
+
+#[derive(Clone, Copy)]
+enum EthRunnerMode {
+    PersistentSidecars,
+    EphemeralSidecars,
+}
+
+impl EthRunnerMode {
+    fn enable_block_archive(self) -> bool {
+        matches!(self, Self::PersistentSidecars)
+    }
+
+    fn persistent_chain_index_path(self, data_dir: &Path) -> Option<std::path::PathBuf> {
+        matches!(self, Self::PersistentSidecars).then(|| data_dir.join("chain-index.sqlite"))
+    }
+}
+
+#[derive(Clone)]
+struct EthRunnerConfig {
+    rpc: RpcConfig,
+    runner_mode: EthRunnerMode,
 }
 
 /// Run the dev node with default settings (RPC enabled).
@@ -465,11 +522,7 @@ pub fn run_dev_node_with_rpc<
                         codes_for_rpc,
                     )
                     .with_state_querier(state_querier);
-                    let grpc_config = GrpcServerConfig {
-                        addr: grpc_addr,
-                        chain_id: rpc_config.chain_id,
-                        ..Default::default()
-                    };
+                    let grpc_config = grpc_server_config(&rpc_config, grpc_addr);
                     tracing::info!("Starting gRPC server on {}", grpc_addr);
                     let grpc_server = GrpcServer::with_subscription_manager(
                         grpc_config,
@@ -516,7 +569,7 @@ pub fn run_dev_node_with_rpc<
                     _ = tokio::signal::ctrl_c() => {
                         tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                         context_for_shutdown
-                            .stop(0, Some(Duration::from_secs(10)))
+                            .stop(0, Some(shutdown_timeout(&rpc_config)))
                             .await
                             .expect("shutdown failed");
                     }
@@ -560,7 +613,7 @@ pub fn run_dev_node_with_rpc<
                     _ = tokio::signal::ctrl_c() => {
                         tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                         context_for_shutdown
-                            .stop(0, Some(Duration::from_secs(10)))
+                            .stop(0, Some(shutdown_timeout(&rpc_config)))
                             .await
                             .expect("shutdown failed");
                     }
@@ -741,7 +794,7 @@ pub fn run_dev_node_with_rpc_and_mempool<
                 _ = tokio::signal::ctrl_c() => {
                     tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                     context_for_shutdown
-                        .stop(0, Some(Duration::from_secs(10)))
+                        .stop(0, Some(shutdown_timeout(&rpc_config)))
                         .await
                         .expect("shutdown failed");
                 }
@@ -810,6 +863,62 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
     BuildStorageFut:
         Future<Output = Result<S, Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
 {
+    run_dev_node_with_rpc_and_mempool_eth_impl(
+        data_dir,
+        build_genesis_stf,
+        build_stf,
+        build_codes,
+        run_genesis,
+        build_storage,
+        EthRunnerConfig {
+            rpc: rpc_config,
+            runner_mode: EthRunnerMode::PersistentSidecars,
+        },
+    )
+}
+
+fn run_dev_node_with_rpc_and_mempool_eth_impl<
+    Stf,
+    Codes,
+    G,
+    S,
+    BuildGenesisStf,
+    BuildStf,
+    BuildCodes,
+    RunGenesis,
+    BuildStorage,
+    BuildStorageFut,
+>(
+    data_dir: impl AsRef<Path>,
+    build_genesis_stf: BuildGenesisStf,
+    build_stf: BuildStf,
+    build_codes: BuildCodes,
+    run_genesis: RunGenesis,
+    build_storage: BuildStorage,
+    runner_config: EthRunnerConfig,
+) where
+    Codes: AccountsCodeStorage + Send + Sync + 'static,
+    S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
+    Stf: StfExecutor<TxContext, S, Codes> + Send + Sync + 'static,
+    G: BorshSerialize
+        + BorshDeserialize
+        + Clone
+        + Debug
+        + HasTokenAccountId
+        + Send
+        + Sync
+        + 'static,
+    BuildGenesisStf: Fn() -> Stf + Send + Sync + 'static,
+    BuildStf: Fn(&G) -> Stf + Send + Sync + 'static,
+    BuildCodes: Fn() -> Codes + Clone + Send + Sync + 'static,
+    RunGenesis: Fn(&Stf, &Codes, &S) -> Result<GenesisOutput<G>, Box<dyn std::error::Error + Send + Sync>>
+        + Send
+        + Sync
+        + 'static,
+    BuildStorage: Fn(RuntimeContext, StorageConfig) -> BuildStorageFut + Send + Sync + 'static,
+    BuildStorageFut:
+        Future<Output = Result<S, Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
+{
     tracing::info!("=== Evolve Dev Node (ETH mempool) ===");
     let data_dir = data_dir.as_ref();
     std::fs::create_dir_all(data_dir).expect("failed to create data directory");
@@ -818,7 +927,9 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
         path: data_dir.to_path_buf(),
         ..Default::default()
     };
-    let chain_index_db_path = data_dir.join("chain-index.sqlite");
+    let chain_index_db_path = runner_config
+        .runner_mode
+        .persistent_chain_index_path(data_dir);
 
     let runtime_config = TokioConfig::default()
         .with_storage_directory(data_dir)
@@ -838,8 +949,9 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
         let build_codes = Arc::clone(&build_codes);
         let run_genesis = Arc::clone(&run_genesis);
         let build_storage = Arc::clone(&build_storage);
-        let rpc_config = rpc_config.clone();
+        let rpc_config = runner_config.rpc.clone();
         let chain_index_db_path = chain_index_db_path.clone();
+        let runner_mode = runner_config.runner_mode;
 
         async move {
             let context_for_shutdown = context.clone();
@@ -884,13 +996,22 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
 
             let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
 
-            // Build block archive callback (always on)
-            let archive_cb = build_block_archive(context_for_archive).await;
+            let archive_cb = if runner_mode.enable_block_archive() {
+                Some(build_block_archive(context_for_archive).await)
+            } else {
+                tracing::info!(
+                    "Block archive disabled for mock-storage runner to keep sidecars ephemeral"
+                );
+                None
+            };
 
             let rpc_handle = if rpc_config.enabled {
                 let chain_index = Arc::new(
-                    PersistentChainIndex::new(&chain_index_db_path)
-                        .expect("failed to open chain index database"),
+                    match chain_index_db_path.as_ref() {
+                        Some(path) => PersistentChainIndex::new(path),
+                        None => PersistentChainIndex::in_memory(),
+                    }
+                    .expect("failed to open chain index database"),
                 );
 
                 if let Err(e) = chain_index.initialize() {
@@ -946,11 +1067,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                         mempool.clone(),
                     )
                     .with_state_querier(state_querier);
-                    let grpc_config = GrpcServerConfig {
-                        addr: grpc_addr,
-                        chain_id: rpc_config.chain_id,
-                        ..Default::default()
-                    };
+                    let grpc_config = grpc_server_config(&rpc_config, grpc_addr);
                     tracing::info!("Starting gRPC server on {}", grpc_addr);
                     let grpc_server = GrpcServer::with_subscription_manager(
                         grpc_config,
@@ -974,8 +1091,11 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                     subscriptions,
                     mempool.clone(),
                 )
-                .with_indexing_enabled(rpc_config.enable_block_indexing)
-                .with_block_archive(archive_cb);
+                .with_indexing_enabled(rpc_config.enable_block_indexing);
+                let consensus = match archive_cb {
+                    Some(archive_cb) => consensus.with_block_archive(archive_cb),
+                    None => consensus,
+                };
                 let dev: Arc<DevConsensus<Stf, S, Codes, TxContext, PersistentChainIndex>> =
                     Arc::new(consensus);
 
@@ -994,7 +1114,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                     _ = tokio::signal::ctrl_c() => {
                         tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                         context_for_shutdown
-                            .stop(0, Some(Duration::from_secs(10)))
+                            .stop(0, Some(shutdown_timeout(&rpc_config)))
                             .await
                             .expect("shutdown failed");
                     }
@@ -1015,8 +1135,11 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
 
                 Some((handle, grpc_handle))
             } else {
-                let consensus = DevConsensus::with_mempool(stf, storage, codes, dev_config, mempool)
-                    .with_block_archive(archive_cb);
+                let consensus = DevConsensus::with_mempool(stf, storage, codes, dev_config, mempool);
+                let consensus = match archive_cb {
+                    Some(archive_cb) => consensus.with_block_archive(archive_cb),
+                    None => consensus,
+                };
                 let dev: Arc<DevConsensus<Stf, S, Codes, TxContext, evolve_server::NoopChainIndex>> =
                     Arc::new(consensus);
 
@@ -1035,7 +1158,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                     _ = tokio::signal::ctrl_c() => {
                         tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                         context_for_shutdown
-                            .stop(0, Some(Duration::from_secs(10)))
+                            .stop(0, Some(shutdown_timeout(&rpc_config)))
                             .await
                             .expect("shutdown failed");
                     }
@@ -1110,14 +1233,17 @@ pub fn run_dev_node_with_rpc_and_mempool_mock_storage<
         + Sync
         + 'static,
 {
-    run_dev_node_with_rpc_and_mempool_eth(
+    run_dev_node_with_rpc_and_mempool_eth_impl(
         data_dir,
         build_genesis_stf,
         build_stf,
         build_codes,
         run_genesis,
         |_context, _config| async { Ok(MockStorage::new()) },
-        rpc_config,
+        EthRunnerConfig {
+            rpc: rpc_config,
+            runner_mode: EthRunnerMode::EphemeralSidecars,
+        },
     )
 }
 
