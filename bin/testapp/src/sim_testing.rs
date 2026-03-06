@@ -481,6 +481,16 @@ impl SimTestApp {
         pool.finalize(executed_tx_hashes);
     }
 
+    /// Finalize the mempool after block production, keeping only unexecuted txs.
+    fn finalize_proposed_batch(&mut self, tx_hashes: &[[u8; 32]], result: &BlockResult) {
+        let executed: Vec<_> = tx_hashes
+            .iter()
+            .copied()
+            .take(result.tx_results.len())
+            .collect();
+        self.finalize_mempool_batch(&executed);
+    }
+
     fn produce_block_internal(
         &mut self,
         height: u64,
@@ -499,12 +509,7 @@ impl SimTestApp {
         let (tx_hashes, transactions) = self.propose_mempool_batch(max_txs);
         let height = self.sim.time().block_height();
         let result = self.produce_block_internal(height, transactions, true);
-        let executed: Vec<_> = tx_hashes
-            .iter()
-            .copied()
-            .take(result.tx_results.len())
-            .collect();
-        self.finalize_mempool_batch(&executed);
+        self.finalize_proposed_batch(&tx_hashes, &result);
         result
     }
 
@@ -632,12 +637,7 @@ impl SimTestApp {
                 }
                 let (tx_hashes, transactions) = app.propose_mempool_batch(max_txs);
                 let result = app.produce_block_internal(height, transactions, false);
-                let executed: Vec<_> = tx_hashes
-                    .iter()
-                    .copied()
-                    .take(result.tx_results.len())
-                    .collect();
-                app.finalize_mempool_batch(&executed);
+                app.finalize_proposed_batch(&tx_hashes, &result);
                 result
             },
             |app| app.sim.advance_block(),
@@ -661,12 +661,7 @@ impl SimTestApp {
                 }
                 let (tx_hashes, transactions) = app.propose_mempool_batch(max_txs);
                 let result = app.produce_block_internal(height, transactions, false);
-                let executed: Vec<_> = tx_hashes
-                    .iter()
-                    .copied()
-                    .take(result.tx_results.len())
-                    .collect();
-                app.finalize_mempool_batch(&executed);
+                app.finalize_proposed_batch(&tx_hashes, &result);
                 result
             },
             |app| app.sim.advance_block(),
@@ -700,13 +695,7 @@ impl SimTestApp {
                 let (tx_hashes, transactions) = app.propose_mempool_batch(max_txs);
                 let block = Block::for_testing(height, transactions);
                 let result = app.apply_block_with_trace(&block, &mut builder);
-
-                let executed: Vec<_> = tx_hashes
-                    .iter()
-                    .copied()
-                    .take(result.tx_results.len())
-                    .collect();
-                app.finalize_mempool_batch(&executed);
+                app.finalize_proposed_batch(&tx_hashes, &result);
                 result
             },
             |app| app.sim.advance_block(),

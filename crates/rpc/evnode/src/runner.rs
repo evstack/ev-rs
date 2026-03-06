@@ -25,8 +25,11 @@ use evolve_eth_jsonrpc::{start_server_with_subscriptions, RpcServerConfig, Subsc
 use evolve_mempool::{new_shared_mempool, Mempool, SharedMempool};
 use evolve_node::{GenesisOutput, HasTokenAccountId, NodeConfig};
 use evolve_rpc_types::SyncStatus;
-use evolve_server::{load_chain_state, save_chain_state, BlockBuilder, ChainState, StfExecutor};
-use evolve_stf_traits::{AccountsCodeStorage, StateChange};
+use evolve_server::{
+    load_chain_state, save_chain_state, state_changes_to_operations, BlockBuilder, ChainState,
+    StfExecutor,
+};
+use evolve_stf_traits::AccountsCodeStorage;
 use evolve_storage::{Operation, Storage, StorageConfig};
 use evolve_tx_eth::TxContext;
 
@@ -347,16 +350,6 @@ where
     Some(RpcRuntimeHandle::new(move || {
         handle.stop().expect("failed to stop RPC server");
     }))
-}
-
-fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
-    changes
-        .into_iter()
-        .map(|change| match change {
-            StateChange::Set { key, value } => Operation::Set { key, value },
-            StateChange::Remove { key } => Operation::Remove { key },
-        })
-        .collect()
 }
 
 /// Run an external-consensus execution node for ETH transactions.

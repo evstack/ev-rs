@@ -30,7 +30,8 @@ use evolve_grpc::{GrpcServer, GrpcServerConfig};
 use evolve_mempool::{new_shared_mempool, Mempool, MempoolTx, SharedMempool};
 use evolve_rpc_types::SyncStatus;
 use evolve_server::{
-    load_chain_state, save_chain_state, ChainState, DevConfig, DevConsensus, CHAIN_STATE_KEY,
+    load_chain_state, save_chain_state, state_changes_to_operations, ChainState, DevConfig,
+    DevConsensus, CHAIN_STATE_KEY,
 };
 use evolve_server::{OnBlockArchive, StfExecutor};
 use evolve_stf_traits::{AccountsCodeStorage, StateChange, Transaction};
@@ -1356,16 +1357,6 @@ async fn commit_genesis<G: BorshSerialize + Clone, S: Storage>(
         .await
         .map_err(|e| format!("commit failed: {:?}", e))?;
     Ok(())
-}
-
-fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
-    changes
-        .into_iter()
-        .map(|change| match change {
-            StateChange::Set { key, value } => Operation::Set { key, value },
-            StateChange::Remove { key } => Operation::Remove { key },
-        })
-        .collect()
 }
 
 #[cfg(test)]

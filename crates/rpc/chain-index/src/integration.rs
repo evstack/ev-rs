@@ -194,8 +194,8 @@ where
     for (idx, (tx, tx_result)) in txs.iter().zip(result.tx_results.iter()).enumerate() {
         let tx_hash = B256::from(tx.compute_identifier());
         cumulative_gas += tx_result.gas_used;
+        let eth_fields = ethereum_tx_fields(tx);
 
-        // Build stored transaction
         let stored_tx = build_stored_transaction(
             tx,
             tx_hash,
@@ -203,10 +203,10 @@ where
             block_hash,
             idx as u32,
             metadata.chain_id,
+            &eth_fields,
         );
         stored_txs.push(stored_tx);
 
-        // Build stored receipt
         let stored_receipt = build_stored_receipt(
             tx,
             tx_result,
@@ -215,6 +215,7 @@ where
             block_hash,
             idx as u32,
             cumulative_gas,
+            &eth_fields,
         );
         stored_receipts.push(stored_receipt);
     }
@@ -243,33 +244,44 @@ where
 }
 
 /// Build a StoredTransaction from an STF Transaction.
-fn build_stored_transaction<Tx: Transaction + Any>(
+fn build_stored_transaction<Tx: Transaction>(
     tx: &Tx,
     tx_hash: B256,
     block_number: u64,
     block_hash: B256,
     transaction_index: u32,
     chain_id: u64,
+    eth_fields: &Option<EthereumIndexedTransaction>,
 ) -> StoredTransaction {
     let from = resolve_sender_address(tx);
     let to = resolve_recipient_address(tx);
-    let eth_fields = ethereum_tx_fields(tx);
 
-    // Extract value from funds (sum of all fungible assets as a simple approach)
-    let value = eth_fields
-        .as_ref()
-        .map(|fields| fields.value)
-        .unwrap_or_else(|| {
-            tx.funds()
-                .iter()
-                .fold(U256::ZERO, |acc, fa| acc + U256::from(fa.amount))
-        });
+    if let Some(f) = eth_fields {
+        return StoredTransaction {
+            hash: tx_hash,
+            block_number,
+            block_hash,
+            transaction_index,
+            from,
+            to,
+            value: f.value,
+            gas: tx.gas_limit(),
+            gas_price: f.gas_price,
+            input: f.input.clone(),
+            nonce: f.nonce,
+            v: f.v,
+            r: f.r,
+            s: f.s,
+            tx_type: f.tx_type,
+            chain_id: f.chain_id,
+        };
+    }
 
-    // Preserve the original Ethereum calldata when available.
-    let input = eth_fields
-        .as_ref()
-        .map(|fields| fields.input.clone())
-        .unwrap_or_else(|| Bytes::from(borsh::to_vec(tx.request()).unwrap_or_default()));
+    let value = tx
+        .funds()
+        .iter()
+        .fold(U256::ZERO, |acc, fa| acc + U256::from(fa.amount));
+    let input = Bytes::from(borsh::to_vec(tx.request()).unwrap_or_default());
 
     StoredTransaction {
         hash: tx_hash,
@@ -280,34 +292,20 @@ fn build_stored_transaction<Tx: Transaction + Any>(
         to,
         value,
         gas: tx.gas_limit(),
-        gas_price: eth_fields
-            .as_ref()
-            .map(|fields| fields.gas_price)
-            .unwrap_or(U256::ZERO),
+        gas_price: U256::ZERO,
         input,
-        nonce: eth_fields.as_ref().map(|fields| fields.nonce).unwrap_or(0),
-        v: eth_fields.as_ref().map(|fields| fields.v).unwrap_or(0),
-        r: eth_fields
-            .as_ref()
-            .map(|fields| fields.r)
-            .unwrap_or(U256::ZERO),
-        s: eth_fields
-            .as_ref()
-            .map(|fields| fields.s)
-            .unwrap_or(U256::ZERO),
-        tx_type: eth_fields
-            .as_ref()
-            .map(|fields| fields.tx_type)
-            .unwrap_or(0),
-        chain_id: match eth_fields.as_ref() {
-            Some(fields) => fields.chain_id,
-            None => Some(chain_id),
-        },
+        nonce: 0,
+        v: 0,
+        r: U256::ZERO,
+        s: U256::ZERO,
+        tx_type: 0,
+        chain_id: Some(chain_id),
     }
 }
 
 /// Build a StoredReceipt from an STF TxResult.
-fn build_stored_receipt<Tx: Transaction + Any>(
+#[allow(clippy::too_many_arguments)]
+fn build_stored_receipt<Tx: Transaction>(
     tx: &Tx,
     tx_result: &TxResult,
     tx_hash: B256,
@@ -315,15 +313,11 @@ fn build_stored_receipt<Tx: Transaction + Any>(
     block_hash: B256,
     transaction_index: u32,
     cumulative_gas_used: u64,
+    eth_fields: &Option<EthereumIndexedTransaction>,
 ) -> StoredReceipt {
     let from = resolve_sender_address(tx);
     let to = resolve_recipient_address(tx);
-    let eth_fields = ethereum_tx_fields(tx);
-
-    // Convert events to logs
     let logs: Vec<StoredLog> = tx_result.events.iter().map(event_to_stored_log).collect();
-
-    // Determine status (1 = success, 0 = failure)
     let status = if tx_result.response.is_ok() { 1 } else { 0 };
 
     StoredReceipt {
@@ -337,15 +331,12 @@ fn build_stored_receipt<Tx: Transaction + Any>(
         gas_used: tx_result.gas_used,
         effective_gas_price: eth_fields
             .as_ref()
-            .map(|fields| fields.gas_price)
+            .map(|f| f.gas_price)
             .unwrap_or(U256::ZERO),
         contract_address: None, // TODO: Detect contract creation
         logs,
         status,
-        tx_type: eth_fields
-            .as_ref()
-            .map(|fields| fields.tx_type)
-            .unwrap_or(0),
+        tx_type: eth_fields.as_ref().map(|f| f.tx_type).unwrap_or(0),
     }
 }
 

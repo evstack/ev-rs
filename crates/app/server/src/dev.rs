@@ -855,7 +855,7 @@ fn compute_block_hash(height: u64, timestamp: u64, parent_hash: B256) -> B256 {
     keccak256(&data)
 }
 
-fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
+pub fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
     changes
         .into_iter()
         .map(|change| match change {
