@@ -88,6 +88,13 @@ impl SignatureVerifierRegistry {
     }
 
     /// Backward-compatible verification entrypoint for Ethereum EOA envelopes.
+    ///
+    /// This helper clones the envelope and boxes it as `TxPayload::Eoa`, so it
+    /// incurs an extra heap allocation. Call `verify_payload` directly when the
+    /// caller already has a payload and sender type.
+    #[deprecated(
+        note = "allocates by cloning into TxPayload::Eoa(Box<_>); prefer verify_payload(sender_type::EOA_SECP256K1, payload)"
+    )]
     pub fn verify(&self, tx: &TxEnvelope) -> SdkResult<()> {
         self.verify_payload(
             sender_type::EOA_SECP256K1,
@@ -109,7 +116,10 @@ impl Default for SignatureVerifierRegistry {
 
 impl SignatureVerifier<TxEnvelope> for SignatureVerifierRegistry {
     fn verify_signature(&self, tx: &TxEnvelope) -> SdkResult<()> {
-        self.verify(tx)
+        self.verify_payload(
+            sender_type::EOA_SECP256K1,
+            &TxPayload::Eoa(Box::new(tx.clone())),
+        )
     }
 }
 

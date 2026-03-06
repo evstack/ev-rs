@@ -232,22 +232,17 @@ impl TxContext {
         self.sender_type
     }
 
-    /// Get sender address for EOA payloads.
-    pub fn sender_address(&self) -> Address {
+    /// Get sender address when available.
+    pub fn sender_address(&self) -> Option<Address> {
         match self.sender_resolution {
-            SenderResolution::EoaAddress(address) => address,
-            SenderResolution::Account(_) => {
-                panic!("sender_address() is only available for EOA sender types")
-            }
+            SenderResolution::EoaAddress(address) => Some(address),
+            SenderResolution::Account(_) => None,
         }
     }
 
     /// Get sender address when available.
     pub fn sender_address_opt(&self) -> Option<Address> {
-        match self.sender_resolution {
-            SenderResolution::EoaAddress(address) => Some(address),
-            SenderResolution::Account(_) => None,
-        }
+        self.sender_address()
     }
 
     /// Get nonce.
@@ -266,24 +261,26 @@ impl TxContext {
     }
 
     /// Get envelope for EOA payloads.
-    pub fn envelope(&self) -> &TxEnvelope {
-        match &self.payload {
-            TxPayload::Eoa(envelope) => envelope.as_ref(),
-            TxPayload::Custom(_) => panic!("envelope() is only available for EOA payloads"),
-        }
-    }
-
-    /// Get envelope when available.
-    pub fn envelope_opt(&self) -> Option<&TxEnvelope> {
+    pub fn envelope(&self) -> Option<&TxEnvelope> {
         match &self.payload {
             TxPayload::Eoa(envelope) => Some(envelope.as_ref()),
             TxPayload::Custom(_) => None,
         }
     }
 
+    /// Get envelope when available.
+    pub fn envelope_opt(&self) -> Option<&TxEnvelope> {
+        self.envelope()
+    }
+
     /// Get chain ID.
     pub fn chain_id(&self) -> Option<u64> {
         self.chain_id
+    }
+
+    /// Get the stored account-level authentication payload.
+    pub fn account_authentication_payload(&self) -> &Message {
+        &self.authentication_payload
     }
 }
 
@@ -404,7 +401,11 @@ impl Transaction for TxContext {
 
 impl AuthenticationPayload for TxContext {
     fn authentication_payload(&self) -> SdkResult<Message> {
-        Ok(self.authentication_payload.clone())
+        if self.sender_type == sender_type::EOA_SECP256K1 {
+            return Ok(self.authentication_payload.clone());
+        }
+
+        Message::new(self)
     }
 }
 

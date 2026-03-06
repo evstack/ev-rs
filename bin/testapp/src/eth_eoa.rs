@@ -105,7 +105,10 @@ pub mod eth_eoa_account {
                 }
             // Backward-compatible fallback for older validator payloads.
             } else if let Ok(mempool_tx) = tx.get::<TxContext>() {
-                let sender_bytes: [u8; 20] = mempool_tx.sender_address().into();
+                let sender_bytes: [u8; 20] = mempool_tx
+                    .sender_address()
+                    .ok_or_else(|| evolve_core::ErrorCode::new(0x51))?
+                    .into();
                 if sender_bytes != expected_address {
                     return Err(evolve_core::ErrorCode::new(0x51)); // Sender mismatch
                 }

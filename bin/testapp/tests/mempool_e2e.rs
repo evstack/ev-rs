@@ -7,6 +7,8 @@
 //! 4. Transaction is authenticated and executed
 //! 5. Token balances are updated correctly
 
+#![allow(unexpected_cfgs)]
+
 use alloy_consensus::{SignableTransaction, TxEip1559};
 use alloy_primitives::{
     keccak256 as keccak256_b256, Address, Bytes, PrimitiveSignature, TxKind, B256, U256,
@@ -15,7 +17,7 @@ use async_trait::async_trait;
 use borsh::{BorshDeserialize, BorshSerialize};
 use ed25519_consensus::{SigningKey as Ed25519SigningKey, VerificationKey};
 use evolve_core::encoding::Encodable;
-use evolve_core::{AccountId, ErrorCode, Message, ReadonlyKV, SdkResult};
+use evolve_core::{define_error, AccountId, ErrorCode, Message, ReadonlyKV, SdkResult};
 use evolve_mempool::MempoolTx;
 use evolve_node::{build_dev_node_with_mempool, DevNodeMempoolHandles};
 use evolve_server::DevConfig;
@@ -29,8 +31,7 @@ use evolve_testapp::{
 use evolve_testing::server_mocks::AccountStorageMock;
 use evolve_tx_eth::{
     derive_runtime_contract_address, sender_types, EthGateway, EthIntentPayload,
-    SignatureVerifierDyn, SignatureVerifierRegistry, TxContext, TxEnvelope, TxPayload,
-    TypedTransaction,
+    SignatureVerifierDyn, TxContext, TxEnvelope, TxPayload, TypedTransaction,
 };
 use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
@@ -42,7 +43,6 @@ type TestNodeHandles =
 #[derive(Clone, BorshSerialize, BorshDeserialize)]
 struct Ed25519AuthPayload {
     nonce: u64,
-    message_digest: [u8; 32],
     signature: [u8; 64],
 }
 
@@ -54,56 +54,95 @@ struct Ed25519EthIntentProof {
 
 struct Ed25519PayloadVerifier;
 
+define_error!(
+    ERR_ED25519_PAYLOAD_NOT_CUSTOM,
+    0x75,
+    "ed25519 verifier expects custom payload"
+);
+define_error!(
+    ERR_ED25519_INTENT_DECODE,
+    0x76,
+    "failed to decode ed25519 intent payload"
+);
+define_error!(
+    ERR_ED25519_PROOF_DECODE,
+    0x77,
+    "failed to decode ed25519 auth proof"
+);
+define_error!(
+    ERR_ED25519_ENVELOPE_DECODE,
+    0x78,
+    "failed to decode ed25519 envelope"
+);
+define_error!(
+    ERR_ED25519_REQUEST_MISSING,
+    0x79,
+    "missing invoke request in ed25519 envelope"
+);
+define_error!(
+    ERR_ED25519_REQUEST_ENCODE,
+    0x7A,
+    "failed to encode invoke request"
+);
+define_error!(ERR_ED25519_PUBLIC_KEY, 0x7B, "invalid ed25519 public key");
+define_error!(ERR_ED25519_SIGNATURE, 0x7C, "invalid ed25519 signature");
+
 impl SignatureVerifierDyn for Ed25519PayloadVerifier {
     fn verify(&self, payload: &TxPayload) -> SdkResult<()> {
         let TxPayload::Custom(bytes) = payload else {
-            return Err(ErrorCode::new(0x75));
+            return Err(ERR_ED25519_PAYLOAD_NOT_CUSTOM);
         };
         let intent: EthIntentPayload =
-            borsh::from_slice(bytes).map_err(|_| ErrorCode::new(0x76))?;
+            borsh::from_slice(bytes).map_err(|_| ERR_ED25519_INTENT_DECODE)?;
         let decoded: Ed25519EthIntentProof =
-            borsh::from_slice(&intent.auth_proof).map_err(|_| ErrorCode::new(0x77))?;
-        let envelope = intent.decode_envelope().map_err(|_| ErrorCode::new(0x78))?;
+            borsh::from_slice(&intent.auth_proof).map_err(|_| ERR_ED25519_PROOF_DECODE)?;
+        let envelope = intent
+            .decode_envelope()
+            .map_err(|_| ERR_ED25519_ENVELOPE_DECODE)?;
         let invoke_request = envelope
             .to_invoke_requests()
             .into_iter()
             .next()
-            .ok_or_else(|| ErrorCode::new(0x79))?;
-        let request_digest = keccak256(&invoke_request.encode().map_err(|_| ErrorCode::new(0x7A))?);
+            .ok_or(ERR_ED25519_REQUEST_MISSING)?;
+        let request_digest = keccak256(
+            &invoke_request
+                .encode()
+                .map_err(|_| ERR_ED25519_REQUEST_ENCODE)?,
+        );
         let public_key =
-            VerificationKey::try_from(decoded.public_key).map_err(|_| ErrorCode::new(0x7B))?;
+            VerificationKey::try_from(decoded.public_key).map_err(|_| ERR_ED25519_PUBLIC_KEY)?;
         let signature = ed25519_consensus::Signature::from(decoded.signature);
         public_key
             .verify(&signature, &request_digest)
-            .map_err(|_| ErrorCode::new(0x7C))
+            .map_err(|_| ERR_ED25519_SIGNATURE)
     }
 }
 
 #[evolve_core::account_impl(Ed25519AuthAccount)]
 mod ed25519_auth_account {
-    use super::Ed25519AuthPayload;
+    use super::{keccak256, Ed25519AuthPayload};
     use core::convert::TryFrom;
     use ed25519_consensus::{Signature, VerificationKey};
     use evolve_authentication::auth_interface::AuthenticationInterface;
     use evolve_collections::item::Item;
-    use evolve_core::{Environment, ErrorCode, Message, SdkResult};
+    use evolve_core::encoding::Encodable;
+    use evolve_core::{define_error, Environment, Message, SdkResult};
     use evolve_macros::{exec, init, query};
+    use evolve_stf_traits::Transaction as _;
+    use evolve_tx_eth::TxContext;
 
-    fn err_invalid_auth_payload() -> ErrorCode {
-        ErrorCode::new(0x80)
-    }
-
-    fn err_nonce_mismatch() -> ErrorCode {
-        ErrorCode::new(0x81)
-    }
-
-    fn err_invalid_public_key() -> ErrorCode {
-        ErrorCode::new(0x82)
-    }
-
-    fn err_invalid_signature() -> ErrorCode {
-        ErrorCode::new(0x83)
-    }
+    define_error!(
+        ERR_INVALID_AUTH_PAYLOAD,
+        0x80,
+        "invalid ed25519 auth payload"
+    );
+    define_error!(ERR_NONCE_MISMATCH, 0x81, "ed25519 nonce mismatch");
+    define_error!(ERR_INVALID_PUBLIC_KEY, 0x82, "invalid ed25519 public key");
+    define_error!(
+        ERR_INVALID_SIGNATURE,
+        0x83,
+        "invalid ed25519 account signature"
+    );
 
     pub struct Ed25519AuthAccount {
         pub nonce: Item<u64>,
@@ -140,22 +179,32 @@ mod ed25519_auth_account {
     impl AuthenticationInterface for Ed25519AuthAccount {
         #[exec]
         fn authenticate(&self, tx: Message, env: &mut dyn Environment) -> SdkResult<()> {
-            let payload: Ed25519AuthPayload = tx.get().map_err(|_| err_invalid_auth_payload())?;
+            let tx_context: TxContext = tx.get().map_err(|_| ERR_INVALID_AUTH_PAYLOAD)?;
+            let payload: Ed25519AuthPayload = tx_context
+                .account_authentication_payload()
+                .get()
+                .map_err(|_| ERR_INVALID_AUTH_PAYLOAD)?;
             let current_nonce = self.nonce.may_get(env)?.unwrap_or(0);
             if payload.nonce != current_nonce {
-                return Err(err_nonce_mismatch());
+                return Err(ERR_NONCE_MISMATCH);
             }
+            let request_digest = keccak256(
+                &tx_context
+                    .request()
+                    .encode()
+                    .map_err(|_| ERR_INVALID_AUTH_PAYLOAD)?,
+            );
 
             let pubkey_bytes = self
                 .public_key
                 .may_get(env)?
-                .ok_or(err_invalid_public_key())?;
+                .ok_or(ERR_INVALID_PUBLIC_KEY)?;
             let verify_key =
-                VerificationKey::try_from(pubkey_bytes).map_err(|_| err_invalid_public_key())?;
+                VerificationKey::try_from(pubkey_bytes).map_err(|_| ERR_INVALID_PUBLIC_KEY)?;
             let signature = Signature::from(payload.signature);
             verify_key
-                .verify(&signature, &payload.message_digest)
-                .map_err(|_| err_invalid_signature())?;
+                .verify(&signature, &request_digest)
+                .map_err(|_| ERR_INVALID_SIGNATURE)?;
 
             self.nonce.set(&(current_nonce + 1), env)?;
             Ok(())
@@ -581,7 +630,6 @@ fn build_ed25519_custom_tx_context(input: Ed25519CustomTxBuildInput<'_>) -> TxCo
     let signature = input.auth_signer.sign(&request_digest).to_bytes();
     let auth_payload = Ed25519AuthPayload {
         nonce: input.nonce,
-        message_digest: request_digest,
         signature,
     };
     let proof = Ed25519EthIntentProof {
@@ -604,7 +652,13 @@ fn build_ed25519_custom_tx_context(input: Ed25519CustomTxBuildInput<'_>) -> TxCo
     .expect("construct custom tx context from eth intent")
 }
 
-async fn submit_context_and_produce_block(
+fn build_ed25519_custom_wire_tx(input: Ed25519CustomTxBuildInput<'_>) -> Vec<u8> {
+    build_ed25519_custom_tx_context(input)
+        .encode()
+        .expect("encode custom tx context")
+}
+
+async fn submit_verified_context_and_produce_block(
     handles: &TestNodeHandles,
     tx_context: TxContext,
 ) -> B256 {
@@ -650,7 +704,18 @@ async fn submit_and_produce_block(handles: &TestNodeHandles, chain_id: u64, raw_
         let gateway = EthGateway::new(chain_id);
         gateway.decode_and_verify(raw_tx).expect("decode tx")
     };
-    submit_context_and_produce_block(handles, tx_context).await
+    submit_verified_context_and_produce_block(handles, tx_context).await
+}
+
+async fn submit_with_gateway_and_produce_block(
+    handles: &TestNodeHandles,
+    gateway: &EthGateway,
+    raw_tx: &[u8],
+) -> B256 {
+    let tx_context = gateway
+        .decode_and_verify(raw_tx)
+        .expect("decode and verify custom tx");
+    submit_verified_context_and_produce_block(handles, tx_context).await
 }
 
 fn assert_post_block_state(
@@ -687,6 +752,111 @@ fn assert_post_block_state(
         bob_balance_after,
         bob_balance_before + transfer_amount,
         "bob balance should increase by transfer amount"
+    );
+}
+
+struct Ed25519SenderTestSetup {
+    handles: TestNodeHandles,
+    genesis_accounts: EthGenesisAccounts,
+    bob_account_id: AccountId,
+    auth_signer: Ed25519SigningKey,
+    alice_key: SigningKey,
+    token_address: Address,
+    sender_account_id: AccountId,
+    sender_nonce_before: u64,
+    sender_balance_before: u128,
+    bob_balance_before: u128,
+    transfer_amount: u128,
+}
+
+fn setup_ed25519_sender_test() -> Ed25519SenderTestSetup {
+    let chain_id = 1338u64;
+    let transfer_amount = 75u128;
+    let sender_account_id = AccountId::from_u64(900_001);
+    let sender_initial_balance = 500u128;
+
+    let (alice_key, bob_key) = deterministic_signing_keys();
+    let alice_address = get_address(&alice_key);
+    let bob_address = get_address(&bob_key);
+
+    let auth_signer = Ed25519SigningKey::from([0x42; 32]);
+    let sender_public_key = auth_signer.verification_key().to_bytes();
+
+    let (handles, genesis_accounts, _alice_account_id, bob_account_id) =
+        setup_genesis_with_ed25519_sender(
+            chain_id,
+            alice_address,
+            bob_address,
+            sender_account_id,
+            sender_public_key,
+            sender_initial_balance,
+        );
+
+    let sender_nonce_before = read_nonce(handles.dev.storage(), sender_account_id);
+    let sender_balance_before = read_token_balance(
+        handles.dev.storage(),
+        genesis_accounts.evolve,
+        sender_account_id,
+    );
+    let bob_balance_before = read_token_balance(
+        handles.dev.storage(),
+        genesis_accounts.evolve,
+        bob_account_id,
+    );
+
+    assert_eq!(
+        sender_nonce_before, 0,
+        "custom sender nonce should start at 0"
+    );
+    assert_eq!(
+        sender_balance_before, sender_initial_balance,
+        "custom sender should start funded"
+    );
+
+    let token_address = derive_runtime_contract_address(genesis_accounts.evolve);
+
+    Ed25519SenderTestSetup {
+        handles,
+        genesis_accounts,
+        bob_account_id,
+        auth_signer,
+        alice_key,
+        token_address,
+        sender_account_id,
+        sender_nonce_before,
+        sender_balance_before,
+        bob_balance_before,
+        transfer_amount,
+    }
+}
+
+fn assert_custom_sender_post_state(setup: &Ed25519SenderTestSetup) {
+    let sender_nonce_after = read_nonce(setup.handles.dev.storage(), setup.sender_account_id);
+    let sender_balance_after = read_token_balance(
+        setup.handles.dev.storage(),
+        setup.genesis_accounts.evolve,
+        setup.sender_account_id,
+    );
+    let bob_balance_after = read_token_balance(
+        setup.handles.dev.storage(),
+        setup.genesis_accounts.evolve,
+        setup.bob_account_id,
+    );
+
+    assert_eq!(
+        sender_nonce_after,
+        setup.sender_nonce_before + 1,
+        "ed25519 sender nonce should increment after auth"
+    );
+    assert_eq!(
+        sender_balance_after,
+        setup.sender_balance_before - setup.transfer_amount,
+        "custom sender balance should decrease by transfer amount"
+    );
+    assert_eq!(
+        bob_balance_after,
+        setup.bob_balance_before + setup.transfer_amount,
+        "recipient balance should increase by transfer amount"
     );
 }
 
@@ -751,95 +921,21 @@ async fn test_token_transfer_e2e() {
 
 #[tokio::test]
 async fn test_custom_sender_ed25519_transfer_e2e() {
-    let chain_id = 1338u64;
-    let transfer_amount = 75u128;
-    let sender_account_id = AccountId::from_u64(900_001);
-    let sender_initial_balance = 500u128;
+    let setup = setup_ed25519_sender_test();
+    let mut gateway = EthGateway::new(1338);
+    gateway.register_payload_verifier(sender_types::CUSTOM, Ed25519PayloadVerifier);
 
-    let (alice_key, bob_key) = deterministic_signing_keys();
-    let alice_address = get_address(&alice_key);
-    let bob_address = get_address(&bob_key);
-
-    let auth_signer = Ed25519SigningKey::from([0x42; 32]);
-    let sender_public_key = auth_signer.verification_key().to_bytes();
-
-    let (handles, genesis_accounts, _alice_account_id, bob_account_id) =
-        setup_genesis_with_ed25519_sender(
-            chain_id,
-            alice_address,
-            bob_address,
-            sender_account_id,
-            sender_public_key,
-            sender_initial_balance,
-        );
-
-    let sender_nonce_before = read_nonce(handles.dev.storage(), sender_account_id);
-    let sender_balance_before = read_token_balance(
-        handles.dev.storage(),
-        genesis_accounts.evolve,
-        sender_account_id,
-    );
-    let bob_balance_before = read_token_balance(
-        handles.dev.storage(),
-        genesis_accounts.evolve,
-        bob_account_id,
-    );
-
-    assert_eq!(
-        sender_nonce_before, 0,
-        "custom sender nonce should start at 0"
-    );
-    assert_eq!(
-        sender_balance_before, sender_initial_balance,
-        "custom sender should start funded"
-    );
-
-    let token_address = derive_runtime_contract_address(genesis_accounts.evolve);
-    let tx_context = build_ed25519_custom_tx_context(Ed25519CustomTxBuildInput {
-        tx_template_signer: &alice_key,
-        auth_signer: &auth_signer,
-        chain_id,
-        nonce: sender_nonce_before,
-        token_address,
-        recipient_account_id: bob_account_id,
-        transfer_amount,
-        sender_account_id,
+    let raw_tx = build_ed25519_custom_wire_tx(Ed25519CustomTxBuildInput {
+        tx_template_signer: &setup.alice_key,
+        auth_signer: &setup.auth_signer,
+        chain_id: 1338,
+        nonce: setup.sender_nonce_before,
+        token_address: setup.token_address,
+        recipient_account_id: setup.bob_account_id,
+        transfer_amount: setup.transfer_amount,
+        sender_account_id: setup.sender_account_id,
     });
 
-    // Test-only local registry check: production ingress must configure and
-    // inject sender-type verifiers into the gateway/provider path.
-    let mut registry = SignatureVerifierRegistry::new();
-    registry.register_dyn(sender_types::CUSTOM, Ed25519PayloadVerifier);
-    registry
-        .verify_payload(sender_types::CUSTOM, tx_context.payload())
-        .expect("custom payload should pass ed25519 verifier");
-
-    let _tx_hash = submit_context_and_produce_block(&handles, tx_context).await;
-
-    let sender_nonce_after = read_nonce(handles.dev.storage(), sender_account_id);
-    let sender_balance_after = read_token_balance(
-        handles.dev.storage(),
-        genesis_accounts.evolve,
-        sender_account_id,
-    );
-    let bob_balance_after = read_token_balance(
-        handles.dev.storage(),
-        genesis_accounts.evolve,
-        bob_account_id,
-    );
-
-    assert_eq!(
-        sender_nonce_after, 1,
-        "ed25519 sender nonce should increment after auth"
-    );
-    assert_eq!(
-        sender_balance_after,
-        sender_balance_before - transfer_amount,
-        "custom sender balance should decrease by transfer amount"
-    );
-    assert_eq!(
-        bob_balance_after,
-        bob_balance_before + transfer_amount,
-        "recipient balance should increase by transfer amount"
-    );
+    let _tx_hash = submit_with_gateway_and_produce_block(&setup.handles, &gateway, &raw_tx).await;
+    assert_custom_sender_post_state(&setup);
 }
