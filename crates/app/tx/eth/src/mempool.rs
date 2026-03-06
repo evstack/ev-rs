@@ -419,10 +419,10 @@ impl Encodable for TxContext {
             RecipientResolution::Account(account) => Some(account),
             RecipientResolution::EoaAddress(_) | RecipientResolution::None => None,
         };
-        let payload = match &self.payload {
-            TxPayload::Eoa(envelope) => TxPayloadWire::Eoa(envelope.encode()),
-            TxPayload::Custom(bytes) => TxPayloadWire::Custom(bytes.clone()),
+        let TxPayload::Custom(bytes) = &self.payload else {
+            unreachable!("EOA payload handled by early return above");
         };
+        let payload = TxPayloadWire::Custom(bytes.clone());
         let wire = TxContextWireV1 {
             sender_type: self.sender_type,
             payload,

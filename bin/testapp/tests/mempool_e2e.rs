@@ -8,7 +8,7 @@
 //! 5. Token balances are updated correctly
 
 use alloy_consensus::{SignableTransaction, TxEip1559};
-use alloy_primitives::{Address, Bytes, PrimitiveSignature, TxKind, B256, U256};
+use alloy_primitives::{keccak256 as keccak256_b256, Address, Bytes, PrimitiveSignature, TxKind, B256, U256};
 use async_trait::async_trait;
 use borsh::{BorshDeserialize, BorshSerialize};
 use ed25519_consensus::{SigningKey as Ed25519SigningKey, VerificationKey};
@@ -33,7 +33,6 @@ use evolve_tx_eth::{
 use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
 use std::sync::RwLock;
-use tiny_keccak::{Hasher, Keccak};
 
 type TestNodeHandles =
     DevNodeMempoolHandles<MempoolStf, AsyncMockStorage, AccountStorageMock, TxContext>;
@@ -227,38 +226,32 @@ impl AsyncMockStorage {
 
     /// Initialize an EthEoaAccount's storage (nonce and eth_address).
     fn init_eth_eoa_storage(&self, account_id: AccountId, eth_address: [u8; 20]) {
-        use evolve_core::Message;
-
         // Storage keys are: account_id + prefix (u8)
         // Item::new(0) = nonce, Item::new(1) = eth_address
+        let mut data = self.data.write().unwrap();
 
-        // Set nonce = 0
         let mut nonce_key = account_id.as_bytes().to_vec();
-        nonce_key.push(0u8); // Item prefix for nonce
-        let nonce_value = Message::new(&0u64).unwrap().into_bytes().unwrap();
-        self.data.write().unwrap().insert(nonce_key, nonce_value);
+        nonce_key.push(0u8);
+        data.insert(nonce_key, Message::new(&0u64).unwrap().into_bytes().unwrap());
 
-        // Set eth_address
         let mut addr_key = account_id.as_bytes().to_vec();
-        addr_key.push(1u8); // Item prefix for eth_address
-        let addr_value = Message::new(&eth_address).unwrap().into_bytes().unwrap();
-        self.data.write().unwrap().insert(addr_key, addr_value);
+        addr_key.push(1u8);
+        data.insert(addr_key, Message::new(&eth_address).unwrap().into_bytes().unwrap());
     }
 
     /// Initialize an Ed25519AuthAccount's storage (nonce and public key).
     fn init_ed25519_auth_storage(&self, account_id: AccountId, public_key: [u8; 32]) {
         // Storage keys are: account_id + prefix (u8)
         // Item::new(0) = nonce, Item::new(1) = public key
+        let mut data = self.data.write().unwrap();
 
         let mut nonce_key = account_id.as_bytes().to_vec();
         nonce_key.push(0u8);
-        let nonce_value = Message::new(&0u64).unwrap().into_bytes().unwrap();
-        self.data.write().unwrap().insert(nonce_key, nonce_value);
+        data.insert(nonce_key, Message::new(&0u64).unwrap().into_bytes().unwrap());
 
-        let mut key_key = account_id.as_bytes().to_vec();
-        key_key.push(1u8);
-        let key_value = Message::new(&public_key).unwrap().into_bytes().unwrap();
-        self.data.write().unwrap().insert(key_key, key_value);
+        let mut pubkey_key = account_id.as_bytes().to_vec();
+        pubkey_key.push(1u8);
+        data.insert(pubkey_key, Message::new(&public_key).unwrap().into_bytes().unwrap());
     }
 
     /// Set token balance directly in storage for a specific account.
@@ -311,13 +304,8 @@ impl evolve_storage::Storage for AsyncMockStorage {
 // Helper Functions
 // ============================================================================
 
-/// Compute keccak256 hash.
 fn keccak256(data: &[u8]) -> [u8; 32] {
-    let mut keccak = Keccak::v256();
-    let mut output = [0u8; 32];
-    keccak.update(data);
-    keccak.finalize(&mut output);
-    output
+    keccak256_b256(data).0
 }
 
 /// Compute function selector from function name (first 4 bytes of keccak256).
