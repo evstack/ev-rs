@@ -8,7 +8,9 @@
 //! 5. Token balances are updated correctly
 
 use alloy_consensus::{SignableTransaction, TxEip1559};
-use alloy_primitives::{keccak256 as keccak256_b256, Address, Bytes, PrimitiveSignature, TxKind, B256, U256};
+use alloy_primitives::{
+    keccak256 as keccak256_b256, Address, Bytes, PrimitiveSignature, TxKind, B256, U256,
+};
 use async_trait::async_trait;
 use borsh::{BorshDeserialize, BorshSerialize};
 use ed25519_consensus::{SigningKey as Ed25519SigningKey, VerificationKey};
@@ -232,11 +234,17 @@ impl AsyncMockStorage {
 
         let mut nonce_key = account_id.as_bytes().to_vec();
         nonce_key.push(0u8);
-        data.insert(nonce_key, Message::new(&0u64).unwrap().into_bytes().unwrap());
+        data.insert(
+            nonce_key,
+            Message::new(&0u64).unwrap().into_bytes().unwrap(),
+        );
 
         let mut addr_key = account_id.as_bytes().to_vec();
         addr_key.push(1u8);
-        data.insert(addr_key, Message::new(&eth_address).unwrap().into_bytes().unwrap());
+        data.insert(
+            addr_key,
+            Message::new(&eth_address).unwrap().into_bytes().unwrap(),
+        );
     }
 
     /// Initialize an Ed25519AuthAccount's storage (nonce and public key).
@@ -247,11 +255,17 @@ impl AsyncMockStorage {
 
         let mut nonce_key = account_id.as_bytes().to_vec();
         nonce_key.push(0u8);
-        data.insert(nonce_key, Message::new(&0u64).unwrap().into_bytes().unwrap());
+        data.insert(
+            nonce_key,
+            Message::new(&0u64).unwrap().into_bytes().unwrap(),
+        );
 
         let mut pubkey_key = account_id.as_bytes().to_vec();
         pubkey_key.push(1u8);
-        data.insert(pubkey_key, Message::new(&public_key).unwrap().into_bytes().unwrap());
+        data.insert(
+            pubkey_key,
+            Message::new(&public_key).unwrap().into_bytes().unwrap(),
+        );
     }
 
     /// Set token balance directly in storage for a specific account.
