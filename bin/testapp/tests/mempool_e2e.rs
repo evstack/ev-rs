@@ -8,7 +8,7 @@
 //! 5. Token balances are updated correctly
 
 use alloy_consensus::{SignableTransaction, TxEip1559};
-use alloy_primitives::{Address, Bytes, PrimitiveSignature, TxKind, B256, U256};
+use alloy_primitives::{Address, Bytes, TxKind, B256, U256};
 use async_trait::async_trait;
 use evolve_core::{AccountId, ErrorCode, ReadonlyKV};
 use evolve_node::{build_dev_node_with_mempool, DevNodeMempoolHandles};
@@ -21,7 +21,7 @@ use evolve_testapp::{
 };
 use evolve_testing::server_mocks::AccountStorageMock;
 use evolve_tx_eth::{derive_runtime_contract_address, EthGateway, TxContext};
-use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
+use k256::ecdsa::{SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
 use std::sync::RwLock;
 use tiny_keccak::{Hasher, Keccak};
@@ -168,14 +168,7 @@ fn compute_selector(fn_name: &str) -> [u8; 4] {
     [hash[0], hash[1], hash[2], hash[3]]
 }
 
-/// Sign a transaction hash and create an alloy signature.
-fn sign_hash(signing_key: &SigningKey, hash: alloy_primitives::B256) -> PrimitiveSignature {
-    let (sig, recovery_id) = signing_key.sign_prehash(hash.as_ref()).unwrap();
-    let r = U256::from_be_slice(&sig.r().to_bytes());
-    let s = U256::from_be_slice(&sig.s().to_bytes());
-    let v = recovery_id.is_y_odd();
-    PrimitiveSignature::new(r, s, v)
-}
+use evolve_tx_eth::sign_hash;
 
 /// Get Ethereum address from signing key.
 fn get_address(signing_key: &SigningKey) -> alloy_primitives::Address {

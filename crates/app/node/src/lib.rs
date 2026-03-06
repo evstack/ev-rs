@@ -21,7 +21,7 @@ use commonware_runtime::tokio::{Config as TokioConfig, Context as TokioContext, 
 use commonware_runtime::{Runner as RunnerTrait, Spawner};
 use evolve_chain_index::{
     ChainStateProvider, ChainStateProviderConfig, PersistentChainIndex, StateQuerier,
-    StorageStateQuerier,
+    StorageStateQuerier, DEFAULT_PROTOCOL_VERSION,
 };
 use evolve_core::encoding::Encodable;
 use evolve_core::{AccountId, ReadonlyKV};
@@ -486,7 +486,7 @@ pub fn run_dev_node_with_rpc<
                 let codes_for_rpc = Arc::new(build_codes());
                 let state_provider_config = ChainStateProviderConfig {
                     chain_id: rpc_config.chain_id,
-                    protocol_version: "0x1".to_string(),
+                    protocol_version: DEFAULT_PROTOCOL_VERSION.to_string(),
                     gas_price: U256::ZERO,
                     sync_status: SyncStatus::NotSyncing(false),
                 };
@@ -1024,7 +1024,7 @@ fn run_dev_node_with_rpc_and_mempool_eth_impl<
                 let codes_for_rpc = Arc::new(build_codes());
                 let state_provider_config = ChainStateProviderConfig {
                     chain_id: rpc_config.chain_id,
-                    protocol_version: "0x1".to_string(),
+                    protocol_version: DEFAULT_PROTOCOL_VERSION.to_string(),
                     gas_price: U256::ZERO,
                     sync_status: SyncStatus::NotSyncing(false),
                 };
@@ -1363,7 +1363,7 @@ async fn commit_genesis<G: BorshSerialize + Clone, S: Storage>(
 mod tests {
     use super::*;
     use alloy_consensus::{SignableTransaction, TxLegacy};
-    use alloy_primitives::{Address, Bytes, PrimitiveSignature, U256, U64};
+    use alloy_primitives::{Address, Bytes, U256, U64};
     use evolve_chain_index::NoopAccountCodes;
     use evolve_eth_jsonrpc::StateProvider;
     use evolve_mempool::MempoolTx;
@@ -1373,7 +1373,7 @@ mod tests {
     use evolve_stf::execution_state::ExecutionState;
     use evolve_stf::results::{BlockResult, TxResult};
     use evolve_stf_traits::{AccountsCodeStorage, Block as _};
-    use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
+    use k256::ecdsa::SigningKey;
     use rand::rngs::OsRng;
     use tokio::time::{sleep, timeout, Duration};
 
@@ -1427,13 +1427,7 @@ mod tests {
         }
     }
 
-    fn sign_hash(signing_key: &SigningKey, hash: alloy_primitives::B256) -> PrimitiveSignature {
-        let (sig, recovery_id) = signing_key.sign_prehash(hash.as_ref()).unwrap();
-        let r = U256::from_be_slice(&sig.r().to_bytes());
-        let s = U256::from_be_slice(&sig.s().to_bytes());
-        let v = recovery_id.is_y_odd();
-        PrimitiveSignature::new(r, s, v)
-    }
+    use evolve_tx_eth::sign_hash;
 
     fn make_signed_legacy_tx(chain_id: u64) -> Vec<u8> {
         make_signed_legacy_tx_with_gas(chain_id, 21_000)

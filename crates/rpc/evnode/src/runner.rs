@@ -12,7 +12,7 @@ use std::sync::{mpsc, Arc};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
-use alloy_primitives::{keccak256, Address, B256, U256};
+use alloy_primitives::{Address, B256, U256};
 use borsh::{BorshDeserialize, BorshSerialize};
 use commonware_runtime::tokio::{Config as TokioConfig, Context as TokioContext, Runner};
 use commonware_runtime::{Runner as RunnerTrait, Spawner};
@@ -26,8 +26,8 @@ use evolve_mempool::{new_shared_mempool, Mempool, SharedMempool};
 use evolve_node::{GenesisOutput, HasTokenAccountId, NodeConfig};
 use evolve_rpc_types::SyncStatus;
 use evolve_server::{
-    load_chain_state, save_chain_state, state_changes_to_operations, BlockBuilder, ChainState,
-    StfExecutor,
+    compute_block_hash, load_chain_state, save_chain_state, state_changes_to_operations,
+    BlockBuilder, ChainState, StfExecutor,
 };
 use evolve_stf_traits::AccountsCodeStorage;
 use evolve_storage::{Operation, Storage, StorageConfig};
@@ -104,8 +104,7 @@ impl ExternalConsensusCommitSink {
                     storage.commit().await.expect("storage commit failed")
                 });
                 let state_root = B256::from_slice(commit_hash.as_bytes());
-                let block_hash =
-                    compute_external_consensus_block_hash(info.height, info.timestamp, parent_hash);
+                let block_hash = compute_block_hash(info.height, info.timestamp, parent_hash);
                 let metadata = BlockMetadata::new(
                     block_hash,
                     parent_hash,
@@ -198,14 +197,6 @@ fn init_persistent_chain_index(
         tracing::warn!("Failed to initialize chain index: {:?}", err);
     }
     Some(index)
-}
-
-fn compute_external_consensus_block_hash(height: u64, timestamp: u64, parent_hash: B256) -> B256 {
-    let mut data = Vec::with_capacity(48);
-    data.extend_from_slice(&height.to_le_bytes());
-    data.extend_from_slice(&timestamp.to_le_bytes());
-    data.extend_from_slice(parent_hash.as_slice());
-    keccak256(&data)
 }
 
 fn resolve_initial_parent_hash(
@@ -321,7 +312,7 @@ where
     let codes_for_rpc = Arc::new(build_codes());
     let state_provider_config = ChainStateProviderConfig {
         chain_id: config.chain.chain_id,
-        protocol_version: "0x1".to_string(),
+        protocol_version: evolve_chain_index::DEFAULT_PROTOCOL_VERSION.to_string(),
         gas_price: U256::ZERO,
         sync_status: SyncStatus::NotSyncing(false),
     };

@@ -290,6 +290,7 @@ mod tests {
     use evolve_core::Message;
     use evolve_storage::MockStorage;
     use evolve_testapp::genesis_config::{AccountConfig, TokenConfig};
+    use evolve_tx_eth::ETH_EOA_CODE_ID;
     use std::collections::BTreeMap;
 
     fn apply_changes_to_map(
@@ -375,7 +376,7 @@ mod tests {
                     return None;
                 }
                 let code_id = Message::from_bytes((*value).clone()).get::<String>().ok()?;
-                if code_id != "EthEoaAccount" {
+                if code_id != ETH_EOA_CODE_ID {
                     return None;
                 }
                 let id_bytes: [u8; 32] = key[1..33].try_into().ok()?;
@@ -391,6 +392,6 @@ mod tests {
         assert_ne!(output.genesis_result.alice, output.genesis_result.atom);
         assert_ne!(output.genesis_result.bob, output.genesis_result.atom);
 
-        assert_eq!(count_registered_code_id(&state, "EthEoaAccount"), 1);
+        assert_eq!(count_registered_code_id(&state, ETH_EOA_CODE_ID), 1);
     }
 }

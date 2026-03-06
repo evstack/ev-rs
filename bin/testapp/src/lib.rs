@@ -438,7 +438,7 @@ mod tests {
                     return None;
                 }
                 let code_id = Message::from_bytes(value.clone()).get::<String>().ok()?;
-                if code_id != "EthEoaAccount" {
+                if code_id != evolve_tx_eth::ETH_EOA_CODE_ID {
                     return None;
                 }
                 let account_bytes: [u8; 32] = key[1..33].try_into().ok()?;

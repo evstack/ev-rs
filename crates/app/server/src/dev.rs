@@ -844,7 +844,7 @@ fn current_timestamp() -> u64 {
 ///
 /// In production, this would be a proper Merkle root or similar.
 /// For dev mode, we use a simple hash of height + timestamp + parent.
-fn compute_block_hash(height: u64, timestamp: u64, parent_hash: B256) -> B256 {
+pub fn compute_block_hash(height: u64, timestamp: u64, parent_hash: B256) -> B256 {
     use alloy_primitives::keccak256;
 
     let mut data = Vec::with_capacity(48);

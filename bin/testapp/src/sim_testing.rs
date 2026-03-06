@@ -3,7 +3,7 @@ use crate::{
     PLACEHOLDER_ACCOUNT,
 };
 use alloy_consensus::{SignableTransaction, TxEip1559};
-use alloy_primitives::{Bytes, PrimitiveSignature, TxKind, U256};
+use alloy_primitives::{Bytes, TxKind, U256};
 use evolve_core::{
     encoding::Decodable, AccountId, Environment, FungibleAsset, InvokableMessage, ReadonlyKV,
     SdkResult,
@@ -23,9 +23,10 @@ use evolve_testing::server_mocks::AccountStorageMock;
 use evolve_token::account::TokenRef;
 use evolve_tx_eth::{
     derive_eth_eoa_account_id, derive_runtime_contract_address, register_runtime_contract_account,
+    sign_hash, ETH_EOA_CODE_ID,
 };
 use evolve_tx_eth::{EthGateway, TxContext};
-use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
+use k256::ecdsa::{SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
 use tiny_keccak::{Hasher, Keccak};
 
@@ -64,15 +65,6 @@ fn get_address(signing_key: &SigningKey) -> alloy_primitives::Address {
     let public_key_bytes = &public_key.as_bytes()[1..];
     let hash = keccak256(public_key_bytes);
     alloy_primitives::Address::from_slice(&hash[12..])
-}
-
-fn sign_hash(signing_key: &SigningKey, hash: alloy_primitives::B256) -> PrimitiveSignature {
-    let (sig, recovery_id): (k256::ecdsa::Signature, k256::ecdsa::RecoveryId) =
-        signing_key.sign_prehash(hash.as_ref()).unwrap();
-    let r = U256::from_be_slice(sig.r().to_bytes().as_slice());
-    let s = U256::from_be_slice(sig.s().to_bytes().as_slice());
-    let v = recovery_id.is_y_odd();
-    PrimitiveSignature::new(r, s, v)
 }
 
 fn create_signed_tx(
@@ -337,9 +329,9 @@ impl SimTestApp {
         let alice_id = derive_eth_eoa_account_id(alice_address);
         let bob_id = derive_eth_eoa_account_id(bob_address);
 
-        register_account_code_identifier(&mut sim, alice_id, "EthEoaAccount")
+        register_account_code_identifier(&mut sim, alice_id, ETH_EOA_CODE_ID)
             .expect("register alice code");
-        register_account_code_identifier(&mut sim, bob_id, "EthEoaAccount")
+        register_account_code_identifier(&mut sim, bob_id, ETH_EOA_CODE_ID)
             .expect("register bob code");
         init_eth_eoa_storage(&mut sim, alice_id, alice_address.into()).expect("init alice eoa");
         init_eth_eoa_storage(&mut sim, bob_id, bob_address.into()).expect("init bob eoa");
@@ -736,7 +728,7 @@ impl SimTestApp {
     /// Create an EOA with a specific Ethereum address.
     pub fn create_eoa_with_address(&mut self, eth_address: [u8; 20]) -> AccountId {
         let account_id = derive_eth_eoa_account_id(alloy_primitives::Address::from(eth_address));
-        register_account_code_identifier(&mut self.sim, account_id, "EthEoaAccount")
+        register_account_code_identifier(&mut self.sim, account_id, ETH_EOA_CODE_ID)
             .expect("register eoa code");
         init_eth_eoa_storage(&mut self.sim, account_id, eth_address).expect("init eoa storage");
         account_id

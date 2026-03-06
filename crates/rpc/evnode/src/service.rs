@@ -611,11 +611,11 @@ where
 mod tests {
     use super::*;
     use alloy_consensus::{SignableTransaction, TxEip1559};
-    use alloy_primitives::{Address, Bytes, PrimitiveSignature, TxKind, U256};
+    use alloy_primitives::{Address, Bytes, TxKind, U256};
     use evolve_core::{InvokeResponse, Message};
     use evolve_mempool::shared_mempool_from;
     use evolve_stf::results::TxResult;
-    use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
+    use k256::ecdsa::SigningKey;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
     use tonic::Code;
@@ -818,14 +818,7 @@ mod tests {
         ))
     }
 
-    fn sign_hash(signing_key: &SigningKey, hash: B256) -> PrimitiveSignature {
-        let (sig, recovery_id): (k256::ecdsa::Signature, k256::ecdsa::RecoveryId) = signing_key
-            .sign_prehash(hash.as_ref())
-            .expect("signing should succeed");
-        let r = U256::from_be_slice(sig.r().to_bytes().as_slice());
-        let s = U256::from_be_slice(sig.s().to_bytes().as_slice());
-        PrimitiveSignature::new(r, s, recovery_id.is_y_odd())
-    }
+    use evolve_tx_eth::sign_hash;
 
     fn sample_eip1559_tx_bytes(nonce: u64) -> Vec<u8> {
         let signing_key =

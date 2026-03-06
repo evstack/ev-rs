@@ -102,6 +102,9 @@ impl IngressVerifier {
     }
 }
 
+/// Default protocol version reported by the RPC server.
+pub const DEFAULT_PROTOCOL_VERSION: &str = "0x1";
+
 /// State provider configuration.
 #[derive(Debug, Clone)]
 pub struct ChainStateProviderConfig {
