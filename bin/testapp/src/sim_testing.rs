@@ -43,6 +43,7 @@ pub struct SimTestApp {
 
 const SIM_CHAIN_ID: u64 = 1337;
 const MAX_SIGNING_KEY_ATTEMPTS: usize = 16;
+const DEFAULT_TEST_BLOCK_GAS_LIMIT: u64 = 30_000_000;
 
 fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut keccak = Keccak::v256();
@@ -460,10 +461,10 @@ impl SimTestApp {
         Ok(alloy_primitives::B256::from(tx_id))
     }
 
-    fn take_mempool_batch(&mut self, max_txs: usize) -> (Vec<[u8; 32]>, Vec<TxContext>) {
+    fn propose_mempool_batch(&mut self, max_txs: usize) -> (Vec<[u8; 32]>, Vec<TxContext>) {
         let selected = {
             let mut pool = self.mempool.blocking_write();
-            pool.select(max_txs)
+            pool.propose(DEFAULT_TEST_BLOCK_GAS_LIMIT, max_txs).0
         };
 
         let mut tx_hashes = Vec::with_capacity(selected.len());
@@ -475,12 +476,9 @@ impl SimTestApp {
         (tx_hashes, transactions)
     }
 
-    fn remove_many_from_mempool(&mut self, tx_hashes: &[[u8; 32]]) {
-        if tx_hashes.is_empty() {
-            return;
-        }
+    fn finalize_mempool_batch(&mut self, executed_tx_hashes: &[[u8; 32]]) {
         let mut pool = self.mempool.blocking_write();
-        pool.remove_many(tx_hashes);
+        pool.finalize(executed_tx_hashes);
     }
 
     fn produce_block_internal(
@@ -498,10 +496,15 @@ impl SimTestApp {
     }
 
     pub fn produce_block_from_mempool(&mut self, max_txs: usize) -> BlockResult {
-        let (tx_hashes, transactions) = self.take_mempool_batch(max_txs);
+        let (tx_hashes, transactions) = self.propose_mempool_batch(max_txs);
         let height = self.sim.time().block_height();
         let result = self.produce_block_internal(height, transactions, true);
-        self.remove_many_from_mempool(&tx_hashes);
+        let executed: Vec<_> = tx_hashes
+            .iter()
+            .copied()
+            .take(result.tx_results.len())
+            .collect();
+        self.finalize_mempool_batch(&executed);
         result
     }
 
@@ -627,9 +630,14 @@ impl SimTestApp {
                 for raw_tx in &txs {
                     app.submit_raw_tx(raw_tx).expect("submit tx");
                 }
-                let (tx_hashes, transactions) = app.take_mempool_batch(max_txs);
+                let (tx_hashes, transactions) = app.propose_mempool_batch(max_txs);
                 let result = app.produce_block_internal(height, transactions, false);
-                app.remove_many_from_mempool(&tx_hashes);
+                let executed: Vec<_> = tx_hashes
+                    .iter()
+                    .copied()
+                    .take(result.tx_results.len())
+                    .collect();
+                app.finalize_mempool_batch(&executed);
                 result
             },
             |app| app.sim.advance_block(),
@@ -651,9 +659,14 @@ impl SimTestApp {
                 for raw_tx in &txs {
                     app.submit_raw_tx(raw_tx).expect("submit tx");
                 }
-                let (tx_hashes, transactions) = app.take_mempool_batch(max_txs);
+                let (tx_hashes, transactions) = app.propose_mempool_batch(max_txs);
                 let result = app.produce_block_internal(height, transactions, false);
-                app.remove_many_from_mempool(&tx_hashes);
+                let executed: Vec<_> = tx_hashes
+                    .iter()
+                    .copied()
+                    .take(result.tx_results.len())
+                    .collect();
+                app.finalize_mempool_batch(&executed);
                 result
             },
             |app| app.sim.advance_block(),
@@ -684,11 +697,16 @@ impl SimTestApp {
                     app.submit_raw_tx(raw_tx).expect("submit tx");
                 }
 
-                let (tx_hashes, transactions) = app.take_mempool_batch(max_txs);
+                let (tx_hashes, transactions) = app.propose_mempool_batch(max_txs);
                 let block = Block::for_testing(height, transactions);
                 let result = app.apply_block_with_trace(&block, &mut builder);
 
-                app.remove_many_from_mempool(&tx_hashes);
+                let executed: Vec<_> = tx_hashes
+                    .iter()
+                    .copied()
+                    .take(result.tx_results.len())
+                    .collect();
+                app.finalize_mempool_batch(&executed);
                 result
             },
             |app| app.sim.advance_block(),

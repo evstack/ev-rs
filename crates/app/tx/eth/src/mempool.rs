@@ -166,8 +166,9 @@ impl Transaction for TxContext {
 
 impl AuthenticationPayload for TxContext {
     fn authentication_payload(&self) -> SdkResult<Message> {
-        let sender: [u8; 20] = self.sender_address().into();
-        Message::new(&sender)
+        // Pass the canonical transaction context through authentication so EOAs
+        // can verify both the recovered sender and the transaction nonce.
+        Message::new(self)
     }
 }
 

@@ -849,6 +849,7 @@ mod tests {
             to: Some(Address::repeat_byte(0x42)),
             cumulative_gas_used: 21_000,
             gas_used: 21_000,
+            effective_gas_price: U256::from(1u64),
             contract_address: None,
             logs: vec![],
             status: 1,

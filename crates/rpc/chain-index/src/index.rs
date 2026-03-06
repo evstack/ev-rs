@@ -335,6 +335,7 @@ impl PersistentChainIndex {
         let contract_address_bytes: Option<Vec<u8>> = row.get(8)?;
         let status: i64 = row.get(9)?;
         let tx_type: i64 = row.get(10)?;
+        let effective_gas_price_bytes: Vec<u8> = row.get(11)?;
 
         let to = to_bytes
             .as_deref()
@@ -354,6 +355,7 @@ impl PersistentChainIndex {
             to,
             cumulative_gas_used: cumulative_gas_used as u64,
             gas_used: gas_used as u64,
+            effective_gas_price: alloy_primitives::U256::from_be_slice(&effective_gas_price_bytes),
             contract_address,
             logs: vec![], // logs are stored separately
             status: status as u8,
@@ -491,10 +493,14 @@ impl ChainIndex for PersistentChainIndex {
 
         let conn = self.read_conn()?;
         let result = conn.query_row(
-            "SELECT transaction_hash, transaction_index, block_hash, block_number,
-                    from_addr, to_addr, cumulative_gas_used, gas_used, contract_address,
-                    status, tx_type
-             FROM receipts WHERE transaction_hash = ?",
+            "SELECT receipts.transaction_hash, receipts.transaction_index, receipts.block_hash,
+                    receipts.block_number, receipts.from_addr, receipts.to_addr,
+                    receipts.cumulative_gas_used, receipts.gas_used,
+                    receipts.contract_address, receipts.status, receipts.tx_type,
+                    transactions.gas_price
+             FROM receipts
+             INNER JOIN transactions ON transactions.hash = receipts.transaction_hash
+             WHERE receipts.transaction_hash = ?",
             params![hash.as_slice()],
             Self::row_to_stored_receipt,
         );
@@ -837,6 +843,7 @@ mod tests {
             to: Some(Address::repeat_byte(0x02)),
             cumulative_gas_used: 21000 * (index as u64 + 1),
             gas_used: 21000,
+            effective_gas_price: U256::ZERO,
             contract_address: None,
             logs: vec![],
             status: if success { 1 } else { 0 },
