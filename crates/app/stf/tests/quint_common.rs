@@ -1,13 +1,23 @@
 #![allow(dead_code)]
 
 use evolve_core::runtime_api::ACCOUNT_IDENTIFIER_PREFIX;
-use evolve_core::{AccountCode, AccountId, ErrorCode, ReadonlyKV};
-use evolve_stf_traits::{AccountsCodeStorage, BeginBlocker, EndBlocker, StateChange, WritableKV};
+use evolve_core::{
+    AccountCode, AccountId, Environment, ErrorCode, InvokeResponse, ReadonlyKV, SdkResult,
+};
+use evolve_stf::gas::StorageGasConfig;
+use evolve_stf_traits::{
+    AccountsCodeStorage, BeginBlocker, EndBlocker, PostTxExecution, StateChange, TxValidator,
+    WritableKV,
+};
 use hashbrown::HashMap;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
-use std::fs;
+use std::io::BufReader;
 use std::path::Path;
+
+// ---------------------------------------------------------------------------
+// ITF deserialization types
+// ---------------------------------------------------------------------------
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct ItfBigInt {
@@ -30,13 +40,52 @@ pub struct ItfMap<K, V> {
     pub entries: Vec<(K, V)>,
 }
 
+#[derive(Deserialize)]
+pub struct ItfBlockResult {
+    pub gas_used: ItfBigInt,
+    pub tx_results: Vec<ItfTxResult>,
+    pub txs_skipped: Option<ItfBigInt>,
+}
+
+#[derive(Deserialize)]
+pub struct ItfTxResult {
+    pub gas_used: ItfBigInt,
+    pub result: ItfResult,
+}
+
+#[derive(Deserialize)]
+pub struct ItfResult {
+    pub ok: bool,
+    pub err_code: ItfBigInt,
+}
+
+// ---------------------------------------------------------------------------
+// Spec error constants (shared across conformance tests)
+// ---------------------------------------------------------------------------
+
+pub const SPEC_ERR_OUT_OF_GAS: i64 = 0x01;
+pub const SPEC_ERR_EXECUTION: i64 = 200;
+
+// ---------------------------------------------------------------------------
+// Trace file utilities
+// ---------------------------------------------------------------------------
+
 pub fn find_single_trace_file(traces_dir: &Path, test_name: &str) -> std::path::PathBuf {
-    let trace_files: Vec<_> = fs::read_dir(traces_dir)
-        .unwrap()
+    let prefix = format!("out_{}_", test_name);
+    let trace_files: Vec<_> = std::fs::read_dir(traces_dir)
+        .unwrap_or_else(|e| {
+            panic!(
+                "Cannot read traces directory {}: {e}. \
+                 Regenerate traces with: quint test specs/stf_*.qnt \
+                 --out-itf \"specs/traces/out_{{test}}_{{seq}}.itf.json\"",
+                traces_dir.display()
+            )
+        })
         .filter_map(|e| e.ok())
         .filter(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            name.starts_with(&format!("out_{}_", test_name)) && name.ends_with(".itf.json")
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with(&prefix) && name.ends_with(".itf.json")
         })
         .collect();
 
@@ -51,9 +100,13 @@ pub fn find_single_trace_file(traces_dir: &Path, test_name: &str) -> std::path::
 }
 
 pub fn read_itf_trace<T: DeserializeOwned>(trace_path: &Path) -> T {
-    let trace_json = fs::read_to_string(trace_path).unwrap();
-    serde_json::from_str(&trace_json).unwrap()
+    let file = std::fs::File::open(trace_path).unwrap();
+    serde_json::from_reader(BufReader::new(file)).unwrap()
 }
+
+// ---------------------------------------------------------------------------
+// Noop STF components
+// ---------------------------------------------------------------------------
 
 pub struct NoopBegin<B>(std::marker::PhantomData<B>);
 
@@ -64,25 +117,68 @@ impl<B> Default for NoopBegin<B> {
 }
 
 impl<B> BeginBlocker<B> for NoopBegin<B> {
-    fn begin_block(&self, _block: &B, _env: &mut dyn evolve_core::Environment) {}
+    fn begin_block(&self, _block: &B, _env: &mut dyn Environment) {}
 }
 
 #[derive(Default)]
 pub struct NoopEnd;
 
 impl EndBlocker for NoopEnd {
-    fn end_block(&self, _env: &mut dyn evolve_core::Environment) {}
+    fn end_block(&self, _env: &mut dyn Environment) {}
 }
+
+pub struct NoopValidator<T>(std::marker::PhantomData<T>);
+
+impl<T> Default for NoopValidator<T> {
+    fn default() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<T> TxValidator<T> for NoopValidator<T> {
+    fn validate_tx(&self, _tx: &T, _env: &mut dyn Environment) -> SdkResult<()> {
+        Ok(())
+    }
+}
+
+pub struct NoopPostTx<T>(std::marker::PhantomData<T>);
+
+impl<T> Default for NoopPostTx<T> {
+    fn default() -> Self {
+        Self(std::marker::PhantomData)
+    }
+}
+
+impl<T> PostTxExecution<T> for NoopPostTx<T> {
+    fn after_tx_executed(
+        _tx: &T,
+        _gas_consumed: u64,
+        _tx_result: &SdkResult<InvokeResponse>,
+        _env: &mut dyn Environment,
+    ) -> SdkResult<()> {
+        Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// In-memory storage and code store
+// ---------------------------------------------------------------------------
 
 pub struct CodeStore {
     codes: HashMap<String, Box<dyn AccountCode>>,
 }
 
-impl CodeStore {
-    pub fn new() -> Self {
+impl Default for CodeStore {
+    fn default() -> Self {
         Self {
             codes: HashMap::new(),
         }
+    }
+}
+
+impl CodeStore {
+    pub fn new() -> Self {
+        Self::default()
     }
     pub fn add_code(&mut self, code: impl AccountCode + 'static) {
         self.codes.insert(code.identifier(), Box::new(code));
@@ -128,8 +224,76 @@ impl WritableKV for InMemoryStorage {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 pub fn account_code_key(account: AccountId) -> Vec<u8> {
     let mut out = vec![ACCOUNT_IDENTIFIER_PREFIX];
     out.extend_from_slice(&account.as_bytes());
     out
+}
+
+pub fn default_gas_config() -> StorageGasConfig {
+    StorageGasConfig {
+        storage_get_charge: 1,
+        storage_set_charge: 1,
+        storage_remove_charge: 1,
+    }
+}
+
+pub fn register_account(storage: &mut InMemoryStorage, account: AccountId, code_id: &str) {
+    use evolve_core::Message;
+    let id = code_id.to_string();
+    storage.data.insert(
+        account_code_key(account),
+        Message::new(&id).unwrap().into_bytes().unwrap(),
+    );
+}
+
+pub fn extract_account_storage(
+    storage: &InMemoryStorage,
+    account: AccountId,
+) -> HashMap<Vec<u8>, Vec<u8>> {
+    let prefix = account.as_bytes();
+    let mut result = HashMap::new();
+    for (key, value) in &storage.data {
+        if key.len() >= prefix.len() && key[..prefix.len()] == prefix {
+            result.insert(key[prefix.len()..].to_vec(), value.clone());
+        }
+    }
+    result
+}
+
+pub fn expected_storage_from_itf(
+    itf_storage: &ItfMap<ItfBigInt, ItfMap<Vec<ItfBigInt>, Vec<ItfBigInt>>>,
+    account: AccountId,
+) -> HashMap<Vec<u8>, Vec<u8>> {
+    let mut expected = HashMap::new();
+    for (account_id_itf, account_store_itf) in &itf_storage.entries {
+        if AccountId::new(account_id_itf.as_u64() as u128) != account {
+            continue;
+        }
+        for (key_itf, value_itf) in &account_store_itf.entries {
+            let key: Vec<u8> = key_itf.iter().map(|b| b.as_u64() as u8).collect();
+            let value: Vec<u8> = value_itf.iter().map(|b| b.as_u64() as u8).collect();
+            expected.insert(key, value);
+        }
+    }
+    expected
+}
+
+pub fn assert_storage_matches(
+    storage: &InMemoryStorage,
+    itf_storage: &ItfMap<ItfBigInt, ItfMap<Vec<ItfBigInt>, Vec<ItfBigInt>>>,
+    account: AccountId,
+    test_name: &str,
+) {
+    let expected = expected_storage_from_itf(itf_storage, account);
+    let actual = extract_account_storage(storage, account);
+    assert_eq!(
+        actual, expected,
+        "{}: storage mismatch for account {:?}",
+        test_name, account
+    );
 }

@@ -14,23 +14,22 @@ use evolve_core::{
     AccountCode, AccountId, BlockContext, Environment, EnvironmentQuery, ErrorCode, FungibleAsset,
     InvokableMessage, InvokeRequest, InvokeResponse, Message, SdkResult,
 };
-use evolve_stf::gas::StorageGasConfig;
 use evolve_stf::Stf;
 use evolve_stf_traits::{
     Block as BlockTrait, PostTxExecution, SenderBootstrap, Transaction, TxValidator, WritableKV,
 };
-use hashbrown::HashMap;
 use serde::Deserialize;
 use std::path::Path;
 
 mod quint_common;
 use quint_common::{
-    account_code_key, find_single_trace_file, read_itf_trace, CodeStore, InMemoryStorage,
-    ItfBigInt, ItfMap, NoopBegin, NoopEnd,
+    assert_storage_matches, find_single_trace_file, read_itf_trace, register_account, CodeStore,
+    InMemoryStorage, ItfBigInt, ItfBlockResult, ItfMap, NoopBegin, NoopEnd, SPEC_ERR_EXECUTION,
+    SPEC_ERR_OUT_OF_GAS,
 };
 
 // ---------------------------------------------------------------------------
-// ITF deserialization types
+// ITF deserialization types (spec-specific state shape)
 // ---------------------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -42,33 +41,15 @@ struct ItfTrace {
 struct ItfState {
     block_height: ItfBigInt,
     last_result: ItfBlockResult,
-    #[allow(dead_code)]
-    last_block_tx_count: ItfBigInt,
     storage: ItfMap<ItfBigInt, ItfMap<Vec<ItfBigInt>, Vec<ItfBigInt>>>,
 }
 
-#[derive(Deserialize)]
-struct ItfBlockResult {
-    gas_used: ItfBigInt,
-    tx_results: Vec<ItfTxResult>,
-    txs_skipped: ItfBigInt,
-}
-
-#[derive(Deserialize)]
-struct ItfTxResult {
-    gas_used: ItfBigInt,
-    result: ItfResult,
-}
-
-#[derive(Deserialize)]
-struct ItfResult {
-    ok: bool,
-    err_code: ItfBigInt,
-}
-
 // ---------------------------------------------------------------------------
-// STF test infrastructure (mirrors model_tests in lib.rs)
+// STF test infrastructure
 // ---------------------------------------------------------------------------
+
+const SPEC_ERR_VALIDATION: i64 = 100;
+const SPEC_ERR_BOOTSTRAP: i64 = 300;
 
 #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
 struct TestMsg {
@@ -154,18 +135,15 @@ struct Validator;
 impl TxValidator<TestTx> for Validator {
     fn validate_tx(&self, tx: &TestTx, env: &mut dyn Environment) -> SdkResult<()> {
         if tx.fail_validate {
-            return Err(ErrorCode::new(100));
+            return Err(ErrorCode::new(SPEC_ERR_VALIDATION as u16));
         }
-        // Simulate production signature verification: query the sender's
-        // account code. If the sender is not registered this fails, mirroring
-        // the real validator that cannot verify signatures without account code.
         let probe = TestMsg {
             key: vec![],
             value: vec![],
             fail_after_write: false,
         };
         env.do_query(tx.sender(), &InvokeRequest::new(&probe).unwrap())
-            .map_err(|_| ErrorCode::new(100))?;
+            .map_err(|_| ErrorCode::new(SPEC_ERR_VALIDATION as u16))?;
         Ok(())
     }
 }
@@ -205,7 +183,7 @@ impl AccountCode for TestAccount {
     ) -> SdkResult<InvokeResponse> {
         let init: BootstrapInit = request.get()?;
         if init.fail {
-            return Err(ErrorCode::new(300));
+            return Err(ErrorCode::new(SPEC_ERR_BOOTSTRAP as u16));
         }
         InvokeResponse::new(&())
     }
@@ -221,7 +199,7 @@ impl AccountCode for TestAccount {
         };
         env.do_exec(STORAGE_ACCOUNT_ID, &InvokeRequest::new(&set)?, vec![])?;
         if msg.fail_after_write {
-            return Err(ErrorCode::new(200));
+            return Err(ErrorCode::new(SPEC_ERR_EXECUTION as u16));
         }
         InvokeResponse::new(&())
     }
@@ -237,11 +215,6 @@ impl AccountCode for TestAccount {
 // ---------------------------------------------------------------------------
 // Test case definitions (must match the Quint spec's run declarations)
 // ---------------------------------------------------------------------------
-
-const SPEC_ERR_OUT_OF_GAS: i64 = 0x01;
-const SPEC_ERR_VALIDATION: i64 = 100;
-const SPEC_ERR_EXECUTION: i64 = 200;
-const SPEC_ERR_BOOTSTRAP: i64 = 300;
 
 const TEST_ACCOUNT: u128 = 100;
 const TEST_SENDER: u128 = 200;
@@ -292,7 +265,6 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 gas_limit: 1_000_000,
             }],
         },
-        // sender=TEST_ACCOUNT (registered) for all non-bootstrap tests
         ConformanceCase {
             test_name: "successfulTxTest",
             blocks: vec![TestBlock {
@@ -493,8 +465,6 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                 })],
             }],
         },
-        // unregisteredSenderTest: sender=200 (not registered), no bootstrap
-        // Validator queries sender account for sig verification -> fails
         ConformanceCase {
             test_name: "unregisteredSenderTest",
             blocks: vec![TestBlock {
@@ -594,15 +564,6 @@ fn known_test_cases() -> Vec<ConformanceCase> {
 fn quint_itf_conformance() {
     let traces_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../specs/traces");
 
-    if !traces_dir.exists() {
-        panic!(
-            "ITF traces not found at {}. \
-             Run: quint test --main=stf specs/stf_core.qnt \
-             --out-itf \"specs/traces/out_{{test}}_{{seq}}.itf.json\"",
-            traces_dir.display()
-        );
-    }
-
     let test_cases = known_test_cases();
     let mut matched = 0;
 
@@ -625,29 +586,18 @@ fn quint_itf_conformance() {
 
         let spec_result = &spec_state.last_result;
 
-        let gas_config = StorageGasConfig {
-            storage_get_charge: 1,
-            storage_set_charge: 1,
-            storage_remove_charge: 1,
-        };
         let stf = Stf::new(
             NoopBegin::<TestBlock>::default(),
             NoopEnd,
             Validator,
             NoopPostTx,
-            gas_config,
+            quint_common::default_gas_config(),
         );
 
         let mut storage = InMemoryStorage::default();
         let mut codes = CodeStore::new();
         codes.add_code(TestAccount);
-
-        let test_account = AccountId::new(TEST_ACCOUNT);
-        let code_id = "test_account".to_string();
-        storage.data.insert(
-            account_code_key(test_account),
-            Message::new(&code_id).unwrap().into_bytes().unwrap(),
-        );
+        register_account(&mut storage, AccountId::new(TEST_ACCOUNT), "test_account");
 
         let mut real_result = None;
         for block in &case.blocks {
@@ -695,17 +645,17 @@ fn quint_itf_conformance() {
                         case.test_name
                     ),
                     SPEC_ERR_VALIDATION => assert_eq!(
-                        real_err, 100,
+                        real_err, SPEC_ERR_VALIDATION as u16,
                         "{} tx[{i}]: expected validation error",
                         case.test_name
                     ),
                     SPEC_ERR_EXECUTION => assert_eq!(
-                        real_err, 200,
+                        real_err, SPEC_ERR_EXECUTION as u16,
                         "{} tx[{i}]: expected execution error",
                         case.test_name
                     ),
                     SPEC_ERR_BOOTSTRAP => assert_eq!(
-                        real_err, 300,
+                        real_err, SPEC_ERR_BOOTSTRAP as u16,
                         "{} tx[{i}]: expected bootstrap error",
                         case.test_name
                     ),
@@ -736,46 +686,14 @@ fn quint_itf_conformance() {
         // 5. Skipped count
         assert_eq!(
             real_result.txs_skipped,
-            spec_result.txs_skipped.as_u64() as usize,
+            spec_result.txs_skipped.as_ref().unwrap().as_u64() as usize,
             "{}: txs_skipped mismatch",
             case.test_name
         );
 
         // 6. Storage
-        let modeled_accounts =
-            [AccountId::new(TEST_ACCOUNT), AccountId::new(TEST_SENDER)];
-        for account_id in modeled_accounts {
-            let mut expected = HashMap::<Vec<u8>, Vec<u8>>::new();
-            for (account_id_itf, account_store_itf) in &spec_state.storage.entries {
-                if AccountId::new(account_id_itf.as_u64() as u128) != account_id {
-                    continue;
-                }
-                for (key_itf, value_itf) in &account_store_itf.entries {
-                    let key: Vec<u8> = key_itf.iter().map(|b| b.as_u64() as u8).collect();
-                    let value: Vec<u8> =
-                        value_itf.iter().map(|b| b.as_u64() as u8).collect();
-                    expected.insert(key, value);
-                }
-            }
-
-            let mut actual = HashMap::<Vec<u8>, Vec<u8>>::new();
-            let account_prefix = account_id.as_bytes();
-            for (raw_key, raw_value) in &storage.data {
-                if raw_key.len() < account_prefix.len() {
-                    continue;
-                }
-                if raw_key[..account_prefix.len()] == account_prefix {
-                    actual.insert(
-                        raw_key[account_prefix.len()..].to_vec(),
-                        raw_value.clone(),
-                    );
-                }
-            }
-            assert_eq!(
-                actual, expected,
-                "{}: storage mismatch for account {:?}",
-                case.test_name, account_id
-            );
+        for account_id in [AccountId::new(TEST_ACCOUNT), AccountId::new(TEST_SENDER)] {
+            assert_storage_matches(&storage, &spec_state.storage, account_id, case.test_name);
         }
 
         matched += 1;

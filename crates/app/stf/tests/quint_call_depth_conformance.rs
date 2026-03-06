@@ -11,18 +11,17 @@
 use borsh::{BorshDeserialize, BorshSerialize};
 use evolve_core::{
     AccountCode, AccountId, BlockContext, Environment, EnvironmentQuery, FungibleAsset,
-    InvokableMessage, InvokeRequest, InvokeResponse, Message, SdkResult,
+    InvokableMessage, InvokeRequest, InvokeResponse, SdkResult,
 };
-use evolve_stf::gas::StorageGasConfig;
 use evolve_stf::Stf;
-use evolve_stf_traits::{Block as BlockTrait, PostTxExecution, Transaction, TxValidator};
+use evolve_stf_traits::{Block as BlockTrait, Transaction};
 use serde::Deserialize;
 use std::path::Path;
 
 mod quint_common;
 use quint_common::{
-    account_code_key, find_single_trace_file, read_itf_trace, CodeStore, InMemoryStorage,
-    ItfBigInt, NoopBegin, NoopEnd,
+    find_single_trace_file, read_itf_trace, register_account, CodeStore, InMemoryStorage,
+    ItfBigInt, NoopBegin, NoopEnd, NoopPostTx, NoopValidator,
 };
 
 #[derive(Deserialize)]
@@ -104,27 +103,6 @@ impl BlockTrait<TestTx> for TestBlock {
 }
 
 #[derive(Default)]
-struct NoopValidator;
-impl TxValidator<TestTx> for NoopValidator {
-    fn validate_tx(&self, _tx: &TestTx, _env: &mut dyn Environment) -> SdkResult<()> {
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct NoopPostTx;
-impl PostTxExecution<TestTx> for NoopPostTx {
-    fn after_tx_executed(
-        _tx: &TestTx,
-        _gas_consumed: u64,
-        _tx_result: &SdkResult<InvokeResponse>,
-        _env: &mut dyn Environment,
-    ) -> SdkResult<()> {
-        Ok(())
-    }
-}
-
-#[derive(Default)]
 struct RecursiveAccount;
 
 impl AccountCode for RecursiveAccount {
@@ -168,10 +146,6 @@ impl AccountCode for RecursiveAccount {
 const RECURSIVE_ACCOUNT: u128 = 100;
 const TEST_SENDER: u128 = 200;
 
-/// Maps Quint test names to the recursive depth the Rust test should exercise.
-///
-/// The Quint spec models individual do_exec/return_from_call steps. The Rust
-/// conformance test uses a single recursive account that calls itself N times.
 struct ConformanceCase {
     test_name: &'static str,
     requested_depth: u16,
@@ -180,31 +154,26 @@ struct ConformanceCase {
 
 fn known_test_cases() -> Vec<ConformanceCase> {
     vec![
-        // singleCallTest: one do_exec, stack=[1], OK
         ConformanceCase {
             test_name: "singleCallTest",
             requested_depth: 1,
             expect_ok: true,
         },
-        // nestedCallsTest: 3 nested calls, stack=[1,2,3], OK
         ConformanceCase {
             test_name: "nestedCallsTest",
             requested_depth: 3,
             expect_ok: true,
         },
-        // returnUnwindsStackTest: 2 calls + 1 return, OK (depth 2 succeeds)
         ConformanceCase {
             test_name: "returnUnwindsStackTest",
             requested_depth: 2,
             expect_ok: true,
         },
-        // fullUnwindTest: 2 calls + 2 returns, OK (depth 2 succeeds)
         ConformanceCase {
             test_name: "fullUnwindTest",
             requested_depth: 2,
             expect_ok: true,
         },
-        // recursiveCallsTest: 3 recursive self-calls, OK
         ConformanceCase {
             test_name: "recursiveCallsTest",
             requested_depth: 3,
@@ -216,14 +185,6 @@ fn known_test_cases() -> Vec<ConformanceCase> {
 #[test]
 fn quint_itf_call_depth_conformance() {
     let traces_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../specs/traces");
-    if !traces_dir.exists() {
-        panic!(
-            "ITF traces not found at {}. Run: quint test --main=stf_call_depth \
-             specs/stf_call_depth.qnt \
-             --out-itf \"specs/traces/out_{{test}}_{{seq}}.itf.json\"",
-            traces_dir.display()
-        );
-    }
 
     let test_cases = known_test_cases();
     for case in &test_cases {
@@ -241,36 +202,25 @@ fn quint_itf_call_depth_conformance() {
             case.test_name, case.expect_ok, spec_result.ok
         );
 
-        let gas_config = StorageGasConfig {
-            storage_get_charge: 1,
-            storage_set_charge: 1,
-            storage_remove_charge: 1,
-        };
         let stf = Stf::new(
             NoopBegin::<TestBlock>::default(),
             NoopEnd,
-            NoopValidator,
-            NoopPostTx,
-            gas_config,
+            NoopValidator::<TestTx>::default(),
+            NoopPostTx::<TestTx>::default(),
+            quint_common::default_gas_config(),
         );
 
         let mut storage = InMemoryStorage::default();
         let mut codes = CodeStore::new();
         codes.add_code(RecursiveAccount);
-
-        let recursive_account = AccountId::new(RECURSIVE_ACCOUNT);
-        let code_id = "recursive".to_string();
-        storage.data.insert(
-            account_code_key(recursive_account),
-            Message::new(&code_id).unwrap().into_bytes().unwrap(),
-        );
+        register_account(&mut storage, AccountId::new(RECURSIVE_ACCOUNT), "recursive");
 
         let msg = RecurseMsg {
             remaining: case.requested_depth,
         };
         let tx = TestTx {
             sender: AccountId::new(TEST_SENDER),
-            recipient: recursive_account,
+            recipient: AccountId::new(RECURSIVE_ACCOUNT),
             request: InvokeRequest::new(&msg).unwrap(),
             gas_limit: 1_000_000,
             funds: vec![],
@@ -297,11 +247,7 @@ fn quint_itf_call_depth_conformance() {
         );
 
         if !case.expect_ok {
-            let real_err = real_result.tx_results[0]
-                .response
-                .as_ref()
-                .unwrap_err()
-                .id;
+            let real_err = real_result.tx_results[0].response.as_ref().unwrap_err().id;
             assert_eq!(
                 real_err,
                 evolve_stf::errors::ERR_CALL_DEPTH_EXCEEDED.id,
