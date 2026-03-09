@@ -102,6 +102,11 @@ test-sim:
 test-e2e:
     cargo test -p evolve_testapp e2e
 
+# Run the Docker-backed evd external-consensus e2e test
+[group('test')]
+test-evd-docker-e2e:
+    cargo test -p evd --test external_consensus_e2e -- --ignored --nocapture
+
 # Run tests with output shown
 [group('test')]
 test-verbose:

@@ -10,11 +10,8 @@ use evolve_core::AccountId;
 use std::collections::HashMap;
 
 /// Convert AccountId to serializable bytes.
-fn account_to_bytes(id: AccountId) -> [u8; 16] {
-    let bytes = id.as_bytes();
-    let mut arr = [0u8; 16];
-    arr.copy_from_slice(&bytes[..16]);
-    arr
+fn account_to_bytes(id: AccountId) -> [u8; 32] {
+    id.as_bytes()
 }
 
 /// Inspector for examining trace and state.
@@ -384,14 +381,14 @@ mod tests {
         let mut builder = TraceBuilder::new(42, StateSnapshot::empty());
 
         builder.block_start(0, 1000);
-        builder.tx_start([1; 32], AccountId::new(1), AccountId::new(2));
+        builder.tx_start([1; 32], AccountId::from_u64(1), AccountId::from_u64(2));
         builder.state_change(b"balance:user1".to_vec(), None, Some(b"100".to_vec()));
         builder.state_change(b"balance:user2".to_vec(), None, Some(b"200".to_vec()));
         builder.tx_end([1; 32], true, 100);
         builder.block_end(0, [0; 32]);
 
         builder.block_start(1, 2000);
-        builder.tx_start([2; 32], AccountId::new(2), AccountId::new(3));
+        builder.tx_start([2; 32], AccountId::from_u64(2), AccountId::from_u64(3));
         builder.state_change(
             b"balance:user1".to_vec(),
             Some(b"100".to_vec()),

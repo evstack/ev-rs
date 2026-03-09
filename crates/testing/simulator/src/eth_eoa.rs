@@ -33,14 +33,16 @@ pub fn init_eth_eoa_storage(
     account_id: AccountId,
     eth_address: [u8; 20],
 ) -> Result<(), ErrorCode> {
-    let mut nonce_key = account_id.as_bytes();
+    let mut nonce_key = Vec::with_capacity(account_id.as_bytes().len() + 1);
+    nonce_key.extend_from_slice(&account_id.as_bytes());
     nonce_key.push(0u8);
     let nonce_value = Message::new(&0u64)
         .expect("encode nonce")
         .into_bytes()
         .expect("nonce bytes");
 
-    let mut addr_key = account_id.as_bytes();
+    let mut addr_key = Vec::with_capacity(account_id.as_bytes().len() + 1);
+    addr_key.extend_from_slice(&account_id.as_bytes());
     addr_key.push(1u8);
     let addr_value = Message::new(&eth_address)
         .expect("encode eth address")

@@ -39,6 +39,18 @@ just node-run
 
 Default RPC endpoint: `http://localhost:8545`.
 
+### Run `evd` (and optionally `ev-node`) with Docker Compose
+
+Run `evd` only:
+
+```bash
+docker compose up --build evd
+```
+
+Notes:
+- `evd` JSON-RPC is exposed on `http://localhost:8545`
+- `evd` gRPC is exposed on `localhost:50051`
+
 ## Documentation
 
 Read the docs for implementation details instead of this README.

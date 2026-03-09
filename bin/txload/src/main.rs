@@ -5,11 +5,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alloy_consensus::{SignableTransaction, TxEip1559};
-use alloy_primitives::{keccak256, Address, Bytes, PrimitiveSignature, TxKind, B256, U256};
+use alloy_primitives::{keccak256, Address, Bytes, TxKind, U256};
 use clap::Parser;
 use evolve_core::AccountId;
-use evolve_tx_eth::address_to_account_id;
-use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
+use evolve_tx_eth::derive_eth_eoa_account_id;
+use k256::ecdsa::{SigningKey, VerifyingKey};
 use rand::RngCore;
 use serde_json::{json, Value};
 use tokio::time::Instant;
@@ -265,15 +265,7 @@ fn wallet_address(signing_key: &SigningKey) -> Address {
     Address::from_slice(&hash.as_slice()[12..])
 }
 
-fn sign_hash(signing_key: &SigningKey, hash: B256) -> PrimitiveSignature {
-    let (sig, recovery_id): (k256::ecdsa::Signature, k256::ecdsa::RecoveryId) = signing_key
-        .sign_prehash(hash.as_ref())
-        .expect("signing failed");
-    let r = U256::from_be_slice(sig.r().to_bytes().as_slice());
-    let s = U256::from_be_slice(sig.s().to_bytes().as_slice());
-    let v = recovery_id.is_y_odd();
-    PrimitiveSignature::new(r, s, v)
-}
+use evolve_tx_eth::sign_hash;
 
 fn create_signed_tx(
     signing_key: &SigningKey,
@@ -378,7 +370,7 @@ async fn run_loadtest(config: LoadtestConfig) -> Result<(), String> {
             wallets.push(WorkerWallet {
                 signing_key: key,
                 address,
-                account_id: address_to_account_id(address),
+                account_id: derive_eth_eoa_account_id(address),
                 next_nonce: 0,
             });
         }
@@ -567,7 +559,7 @@ mod tests {
 
     #[test]
     fn build_transfer_calldata_has_selector_and_borsh_args() {
-        let recipient = AccountId::new(42);
+        let recipient = AccountId::from_u64(42);
         let amount = 999_u128;
 
         let calldata = build_transfer_calldata(recipient, amount).unwrap();
