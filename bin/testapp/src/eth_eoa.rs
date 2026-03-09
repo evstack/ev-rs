@@ -23,7 +23,9 @@ pub mod eth_eoa_account {
     use evolve_collections::item::Item;
     use evolve_core::{AccountId, Environment, Message, SdkResult};
     use evolve_macros::{exec, init, query};
-    use evolve_tx_eth::{TxContext, ERR_NONCE_TOO_HIGH, ERR_NONCE_TOO_LOW};
+    use evolve_tx_eth::{
+        TxContext, ERR_NONCE_OVERFLOW, ERR_NONCE_TOO_HIGH, ERR_NONCE_TOO_LOW, ERR_SENDER_MISMATCH,
+    };
 
     /// An Ethereum-compatible externally owned account.
     ///
@@ -55,8 +57,14 @@ pub mod eth_eoa_account {
         }
 
         fn increment_nonce(&self, env: &mut dyn Environment) -> SdkResult<()> {
-            self.nonce
-                .update(|v| Ok(v.unwrap_or_default().saturating_add(1)), env)?;
+            self.nonce.update(
+                |v| {
+                    v.unwrap_or_default()
+                        .checked_add(1)
+                        .ok_or(ERR_NONCE_OVERFLOW)
+                },
+                env,
+            )?;
             Ok(())
         }
 
@@ -68,7 +76,7 @@ pub mod eth_eoa_account {
         ) -> SdkResult<()> {
             let sender_address: [u8; 20] = tx.sender_address().into();
             if sender_address != expected_address {
-                return Err(evolve_core::ErrorCode::new(0x51)); // Sender mismatch
+                return Err(ERR_SENDER_MISMATCH);
             }
 
             let current_nonce = self.nonce.may_get(env)?.unwrap_or(0);
@@ -129,12 +137,12 @@ pub mod eth_eoa_account {
 
             if let Ok(sender_address) = tx.get::<[u8; 20]>() {
                 if sender_address != expected_address {
-                    return Err(evolve_core::ErrorCode::new(0x51)); // Sender mismatch
+                    return Err(ERR_SENDER_MISMATCH);
                 }
             } else if let Ok(sender_id) = tx.get::<AccountId>() {
                 // Fast path: validator passes sender AccountId directly.
                 if sender_id != env.whoami() {
-                    return Err(evolve_core::ErrorCode::new(0x51)); // Sender mismatch
+                    return Err(ERR_SENDER_MISMATCH);
                 }
             }
             // For other tx types, skip verification (test mode)

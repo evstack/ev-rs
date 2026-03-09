@@ -95,15 +95,15 @@ impl ExternalConsensusCommitSink {
                 .expect("failed to build commit sink runtime");
 
             while let Ok(info) = receiver.recv() {
+                let state_root = info.state_root;
                 let operations = state_changes_to_operations(info.state_changes);
-                let commit_hash = runtime.block_on(async {
+                runtime.block_on(async {
                     storage
                         .batch(operations)
                         .await
                         .expect("storage batch failed");
                     storage.commit().await.expect("storage commit failed")
                 });
-                let state_root = B256::from_slice(commit_hash.as_bytes());
                 let block_hash = compute_block_hash(info.height, info.timestamp, parent_hash);
                 let metadata = BlockMetadata::new(
                     block_hash,

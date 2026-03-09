@@ -236,11 +236,7 @@ struct ComposeStack {
 }
 
 impl ComposeStack {
-    fn new(
-        project_name: String,
-        compose_file: PathBuf,
-        env: Vec<(String, String)>,
-    ) -> Self {
+    fn new(project_name: String, compose_file: PathBuf, env: Vec<(String, String)>) -> Self {
         Self {
             project_name,
             compose_file,

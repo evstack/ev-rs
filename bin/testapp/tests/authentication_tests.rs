@@ -2,7 +2,7 @@ use evolve_authentication::auth_interface::AuthenticationInterfaceRef;
 use evolve_authentication::ERR_NOT_EOA;
 use evolve_core::Message;
 use evolve_testapp::sim_testing::SimTestApp;
-use evolve_tx_eth::{ERR_NONCE_TOO_HIGH, ERR_NONCE_TOO_LOW};
+use evolve_tx_eth::{ERR_NONCE_TOO_HIGH, ERR_NONCE_TOO_LOW, ERR_SENDER_MISMATCH};
 
 #[test]
 fn test_successful_transaction() {
@@ -45,7 +45,7 @@ fn test_forged_sender_account_id_payload_rejected() {
     });
 
     match res {
-        Err(err) => assert_eq!(err.id, 0x51),
+        Err(err) => assert_eq!(err, ERR_SENDER_MISMATCH),
         Ok(_) => panic!("expected forged sender payload to be rejected"),
     }
 }

@@ -191,6 +191,8 @@ impl PersistentChainIndex {
                  s BLOB NOT NULL,
                  tx_type INTEGER NOT NULL,
                  chain_id INTEGER,
+                 max_fee_per_gas BLOB,
+                 max_priority_fee_per_gas BLOB,
                  FOREIGN KEY (block_number) REFERENCES blocks(number)
              );
              CREATE INDEX IF NOT EXISTS idx_tx_block ON transactions(block_number);
@@ -297,6 +299,8 @@ impl PersistentChainIndex {
         let s_bytes: Vec<u8> = row.get(13)?;
         let tx_type: i64 = row.get(14)?;
         let chain_id: Option<i64> = row.get(15)?;
+        let max_fee_bytes: Option<Vec<u8>> = row.get(16)?;
+        let max_priority_bytes: Option<Vec<u8>> = row.get(17)?;
 
         let to = to_bytes
             .as_deref()
@@ -320,6 +324,8 @@ impl PersistentChainIndex {
             s: U256::from_be_slice(&s_bytes),
             tx_type: tx_type as u8,
             chain_id: chain_id.map(|c| c as u64),
+            max_fee_per_gas: max_fee_bytes.map(|b| U256::from_be_slice(&b)),
+            max_priority_fee_per_gas: max_priority_bytes.map(|b| U256::from_be_slice(&b)),
         })
     }
 
@@ -452,7 +458,8 @@ impl ChainIndex for PersistentChainIndex {
         let conn = self.read_conn()?;
         let result = conn.query_row(
             "SELECT hash, block_number, block_hash, transaction_index, from_addr, to_addr,
-                    value, gas, gas_price, input, nonce, v, r, s, tx_type, chain_id
+                    value, gas, gas_price, input, nonce, v, r, s, tx_type, chain_id,
+                    max_fee_per_gas, max_priority_fee_per_gas
              FROM transactions WHERE hash = ?",
             params![hash.as_slice()],
             Self::row_to_stored_transaction,
@@ -626,8 +633,9 @@ fn insert_transaction(
     tx.execute(
         "INSERT OR REPLACE INTO transactions
          (hash, block_number, block_hash, transaction_index, from_addr, to_addr,
-          value, gas, gas_price, input, nonce, v, r, s, tx_type, chain_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          value, gas, gas_price, input, nonce, v, r, s, tx_type, chain_id,
+          max_fee_per_gas, max_priority_fee_per_gas)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             transaction.hash.as_slice(),
             transaction.block_number as i64,
@@ -645,6 +653,12 @@ fn insert_transaction(
             &u256_to_be_bytes(transaction.s) as &[u8],
             transaction.tx_type as i64,
             transaction.chain_id.map(|c| c as i64),
+            transaction
+                .max_fee_per_gas
+                .map(|v| u256_to_be_bytes(v).to_vec()),
+            transaction
+                .max_priority_fee_per_gas
+                .map(|v| u256_to_be_bytes(v).to_vec()),
         ],
     )?;
     Ok(())
@@ -823,6 +837,8 @@ mod tests {
             s: U256::ZERO,
             tx_type: 0,
             chain_id: Some(1),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
         }
     }
 

@@ -488,10 +488,8 @@ where
                 .take(executed_tx_count)
                 .map(|tx| tx.hash().0)
                 .collect();
-            if !block.transactions.is_empty() {
-                let mut pool = mempool.write().await;
-                pool.finalize(&executed_hashes);
-            }
+            let mut pool = mempool.write().await;
+            pool.finalize(&executed_hashes);
         }
 
         // Handle state changes / notify callback

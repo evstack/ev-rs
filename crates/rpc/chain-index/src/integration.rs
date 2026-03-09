@@ -93,6 +93,8 @@ struct EthereumIndexedTransaction {
     s: U256,
     tx_type: u8,
     chain_id: Option<u64>,
+    max_fee_per_gas: Option<U256>,
+    max_priority_fee_per_gas: Option<U256>,
 }
 
 fn legacy_signature_v(y_parity: bool, chain_id: Option<u64>) -> u64 {
@@ -123,6 +125,8 @@ fn ethereum_tx_fields<Tx: Transaction + Any>(tx: &Tx) -> Option<EthereumIndexedT
                 s: signature.s(),
                 tx_type: 0,
                 chain_id,
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
             }
         }
         TxEnvelope::Eip1559(eip1559) => {
@@ -138,6 +142,8 @@ fn ethereum_tx_fields<Tx: Transaction + Any>(tx: &Tx) -> Option<EthereumIndexedT
                 s: signature.s(),
                 tx_type: 2,
                 chain_id: Some(eip1559.tx().chain_id),
+                max_fee_per_gas: Some(U256::from(eip1559.tx().max_fee_per_gas)),
+                max_priority_fee_per_gas: Some(U256::from(eip1559.tx().max_priority_fee_per_gas)),
             }
         }
     })
@@ -274,6 +280,8 @@ fn build_stored_transaction<Tx: Transaction>(
             s: f.s,
             tx_type: f.tx_type,
             chain_id: f.chain_id,
+            max_fee_per_gas: f.max_fee_per_gas,
+            max_priority_fee_per_gas: f.max_priority_fee_per_gas,
         };
     }
 
@@ -300,6 +308,8 @@ fn build_stored_transaction<Tx: Transaction>(
         s: U256::ZERO,
         tx_type: 0,
         chain_id: Some(chain_id),
+        max_fee_per_gas: None,
+        max_priority_fee_per_gas: None,
     }
 }
 

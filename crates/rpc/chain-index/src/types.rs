@@ -105,6 +105,12 @@ pub struct StoredTransaction {
     pub tx_type: u8,
     /// Chain ID.
     pub chain_id: Option<u64>,
+    /// EIP-1559 max fee per gas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_fee_per_gas: Option<U256>,
+    /// EIP-1559 max priority fee per gas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_priority_fee_per_gas: Option<U256>,
 }
 
 impl StoredTransaction {
@@ -121,8 +127,8 @@ impl StoredTransaction {
             value: self.value,
             gas: U64::from(self.gas),
             gas_price: Some(self.gas_price),
-            max_fee_per_gas: None,
-            max_priority_fee_per_gas: None,
+            max_fee_per_gas: self.max_fee_per_gas,
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas,
             input: self.input.clone(),
             v: U64::from(self.v),
             r: self.r,

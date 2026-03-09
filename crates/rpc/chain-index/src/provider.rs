@@ -834,6 +834,8 @@ mod tests {
             s: U256::from(2u64),
             tx_type: 0,
             chain_id: Some(1),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
         }
     }
 
