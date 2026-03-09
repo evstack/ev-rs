@@ -1087,7 +1087,7 @@ pub fn query(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Used by `#[derive(AccountState)]` to assign storage prefixes to fields.
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// #[derive(AccountState)]
 /// pub struct Token {
 ///     #[storage(0)]
@@ -1107,7 +1107,7 @@ pub fn storage(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// Use this for stateless helper types like `EventsEmitter` that don't need storage.
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// #[derive(AccountState)]
 /// pub struct MyModule {
 ///     #[storage(0)]
@@ -1130,7 +1130,7 @@ pub fn skip_storage(_attr: TokenStream, item: TokenStream) -> TokenStream {
 /// - Two fields have the same storage prefix
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// use evolve_macros::AccountState;
 /// use evolve_collections::{item::Item, map::Map};
 ///

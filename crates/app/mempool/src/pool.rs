@@ -111,7 +111,7 @@ impl<T: MempoolTx> Mempool<T> {
         let tx = Arc::new(tx);
 
         // Insert into hash index
-        self.by_hash.insert(tx_id, tx.clone());
+        self.by_hash.insert(tx_id, tx);
 
         // Insert into priority queue
         self.by_priority.push(OrderedEntry {

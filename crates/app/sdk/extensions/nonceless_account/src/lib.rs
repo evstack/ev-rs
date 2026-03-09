@@ -109,9 +109,8 @@ mod tests {
 
     use crate::account::{NoncelessAccount, ERR_TIMESTAMP_REPLAY};
 
-    fn setup_account(owner_id: u128) -> (NoncelessAccount, MockEnv) {
-        let contract_address = AccountId::new(1);
-        let owner = AccountId::new(owner_id);
+    fn setup_account(owner: AccountId) -> (NoncelessAccount, MockEnv) {
+        let contract_address = AccountId::from_u64(1);
         let mut env = MockEnv::new(contract_address, owner);
 
         let account = NoncelessAccount::default();
@@ -124,15 +123,17 @@ mod tests {
 
     #[test]
     fn test_initialize() {
-        let (account, mut env) = setup_account(42);
+        let owner42 = AccountId::from_u64(42);
+        let (account, mut env) = setup_account(owner42);
 
         assert_eq!(account.get_last_timestamp(&mut env).unwrap(), 0);
-        assert_eq!(account.get_owner(&mut env).unwrap(), AccountId::new(42));
+        assert_eq!(account.get_owner(&mut env).unwrap(), owner42);
     }
 
     #[test]
     fn test_verify_and_update_success() {
-        let (account, mut env) = setup_account(42);
+        let owner42 = AccountId::from_u64(42);
+        let (account, mut env) = setup_account(owner42);
 
         account.verify_and_update(1000, &mut env).unwrap();
         assert_eq!(account.get_last_timestamp(&mut env).unwrap(), 1000);
@@ -143,7 +144,8 @@ mod tests {
 
     #[test]
     fn test_timestamp_replay_rejected() {
-        let (account, mut env) = setup_account(42);
+        let owner42 = AccountId::from_u64(42);
+        let (account, mut env) = setup_account(owner42);
 
         // First update succeeds
         account.verify_and_update(1000, &mut env).unwrap();
@@ -166,10 +168,11 @@ mod tests {
 
     #[test]
     fn test_unauthorized() {
-        let (account, mut env) = setup_account(42);
+        let owner42 = AccountId::from_u64(42);
+        let (account, mut env) = setup_account(owner42);
 
         // Change sender to non-owner
-        env = env.with_sender(AccountId::new(999));
+        env = env.with_sender(AccountId::from_u64(999));
 
         let result = account.verify_and_update(1000, &mut env);
         assert!(matches!(result, Err(e) if e == ERR_UNAUTHORIZED));

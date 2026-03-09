@@ -24,8 +24,46 @@ pub trait Transaction {
     fn funds(&self) -> &[FungibleAsset];
     fn compute_identifier(&self) -> [u8; 32];
 
+    /// Resolve the canonical sender account ID in the current state context.
+    ///
+    /// Default behavior is the static sender embedded in the transaction.
+    /// ETH transactions can override this to use address->account registry lookup.
+    fn resolve_sender_account(&self, _env: &mut dyn Environment) -> SdkResult<AccountId> {
+        Ok(self.sender())
+    }
+
+    /// Resolve the canonical recipient account ID in the current state context.
+    ///
+    /// Default behavior is the static recipient embedded in the transaction.
+    fn resolve_recipient_account(&self, _env: &mut dyn Environment) -> SdkResult<AccountId> {
+        Ok(self.recipient())
+    }
+
     /// Optional sender bootstrap primitive for STF account auto-registration.
     fn sender_bootstrap(&self) -> Option<SenderBootstrap> {
+        None
+    }
+
+    /// Optional hook executed immediately after sender bootstrap registration.
+    ///
+    /// This is useful for transaction types that need to atomically maintain
+    /// auxiliary sender indexes (for example address-to-account registries)
+    /// once bootstrap account creation has completed.
+    fn after_sender_bootstrap(
+        &self,
+        _resolved_sender: AccountId,
+        _env: &mut dyn Environment,
+    ) -> SdkResult<()> {
+        Ok(())
+    }
+
+    /// Optional original 20-byte sender address (for ETH-compatible indexing).
+    fn sender_eth_address(&self) -> Option<[u8; 20]> {
+        None
+    }
+
+    /// Optional original 20-byte recipient address (for ETH-compatible indexing).
+    fn recipient_eth_address(&self) -> Option<[u8; 20]> {
         None
     }
 }
@@ -66,7 +104,7 @@ pub trait PostTxExecution<Tx> {
     fn after_tx_executed(
         tx: &Tx,
         gas_consumed: u64,
-        tx_result: SdkResult<InvokeResponse>,
+        tx_result: &SdkResult<InvokeResponse>,
         env: &mut dyn Environment,
     ) -> SdkResult<()>;
 }
@@ -154,7 +192,7 @@ pub struct SignatureVerificationResult {
 /// A vector of verification results, one per transaction, in order.
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// let results = verify_signatures_parallel(&transactions, &my_verifier);
 ///
 /// // Filter out transactions with invalid signatures

@@ -3,22 +3,16 @@
 //! These tests use real Ethereum transaction data to verify correct behavior.
 
 use alloy_consensus::{SignableTransaction, TxEip1559, TxLegacy};
-use alloy_primitives::{Address, Bytes, PrimitiveSignature, B256, U256};
+use alloy_primitives::{Address, Bytes, B256, U256};
 use evolve_stf_traits::TxDecoder;
 use evolve_tx_eth::{
-    tx_type, EcdsaVerifier, SignatureVerifierRegistry, TxEnvelope, TypedTransaction, TypedTxDecoder,
+    sender_type, tx_type, EcdsaVerifier, SignatureVerifierRegistry, TxEnvelope, TxPayload,
+    TypedTransaction, TypedTxDecoder,
 };
-use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
+use k256::ecdsa::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 
-/// Helper to sign a transaction hash and create an alloy signature
-fn sign_hash(signing_key: &SigningKey, hash: B256) -> PrimitiveSignature {
-    let (sig, recovery_id) = signing_key.sign_prehash(hash.as_ref()).unwrap();
-    let r = U256::from_be_slice(&sig.r().to_bytes());
-    let s = U256::from_be_slice(&sig.s().to_bytes());
-    let v = recovery_id.is_y_odd();
-    PrimitiveSignature::new(r, s, v)
-}
+use evolve_tx_eth::sign_hash;
 
 /// Get address from signing key (Ethereum address derivation)
 fn get_address(signing_key: &SigningKey) -> Address {
@@ -348,14 +342,19 @@ fn test_registry_verifies_correct_chain() {
     signed.rlp_encode(&mut encoded);
 
     let decoded = TxEnvelope::decode(&encoded).unwrap();
+    let payload = TxPayload::Eoa(Box::new(decoded.clone()));
 
     // Create registry for mainnet
     let registry = SignatureVerifierRegistry::ethereum(1);
-    assert!(registry.verify(&decoded).is_ok());
+    assert!(registry
+        .verify_payload(sender_type::EOA_SECP256K1, &payload)
+        .is_ok());
 
     // Create registry for different chain
     let registry_wrong = SignatureVerifierRegistry::ethereum(5);
-    assert!(registry_wrong.verify(&decoded).is_err());
+    assert!(registry_wrong
+        .verify_payload(sender_type::EOA_SECP256K1, &payload)
+        .is_err());
 }
 
 // ============================================================================
@@ -364,15 +363,15 @@ fn test_registry_verifies_correct_chain() {
 
 #[test]
 fn test_address_to_account_id_preserves_uniqueness() {
-    use evolve_tx_eth::address_to_account_id;
+    use evolve_tx_eth::derive_eth_eoa_account_id;
 
     let addr1 = Address::repeat_byte(0x11);
     let addr2 = Address::repeat_byte(0x22);
     let addr3 = Address::repeat_byte(0x33);
 
-    let id1 = address_to_account_id(addr1);
-    let id2 = address_to_account_id(addr2);
-    let id3 = address_to_account_id(addr3);
+    let id1 = derive_eth_eoa_account_id(addr1);
+    let id2 = derive_eth_eoa_account_id(addr2);
+    let id3 = derive_eth_eoa_account_id(addr3);
 
     // All should be unique
     assert_ne!(id1, id2);
@@ -382,11 +381,11 @@ fn test_address_to_account_id_preserves_uniqueness() {
 
 #[test]
 fn test_sender_account_id_matches_address_conversion() {
-    use evolve_tx_eth::address_to_account_id;
+    use evolve_tx_eth::derive_eth_eoa_account_id;
 
     let signing_key = SigningKey::random(&mut OsRng);
     let sender = get_address(&signing_key);
-    let expected_id = address_to_account_id(sender);
+    let expected_id = derive_eth_eoa_account_id(sender);
 
     let tx = TxLegacy {
         chain_id: Some(1),

@@ -314,9 +314,9 @@ mod tests {
         use evolve_core::AccountId;
         use patterns::*;
 
-        let token = AccountId::new(1);
-        let sender = AccountId::new(2);
-        let recipient = AccountId::new(3);
+        let token = AccountId::from_u64(1);
+        let sender = AccountId::from_u64(2);
+        let recipient = AccountId::from_u64(3);
 
         // Just verify the functions don't panic and return non-empty keys
         assert!(!balance_key(token, sender).is_empty());

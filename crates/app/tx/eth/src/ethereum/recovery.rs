@@ -39,15 +39,10 @@ fn secp() -> &'static Secp256k1<All> {
 mod tests {
     use super::*;
     use alloy_primitives::U256;
-    use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
+    use k256::ecdsa::{SigningKey, VerifyingKey};
     use rand::rngs::OsRng;
 
-    fn sign_hash(signing_key: &SigningKey, hash: B256) -> alloy_primitives::PrimitiveSignature {
-        let (sig, recovery_id) = signing_key.sign_prehash(hash.as_ref()).expect("sign");
-        let r = U256::from_be_slice(&sig.r().to_bytes());
-        let s = U256::from_be_slice(&sig.s().to_bytes());
-        alloy_primitives::PrimitiveSignature::new(r, s, recovery_id.is_y_odd())
-    }
+    use crate::sign_hash;
 
     fn get_address(signing_key: &SigningKey) -> Address {
         let verifying_key = VerifyingKey::from(signing_key);

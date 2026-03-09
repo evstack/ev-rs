@@ -1,0 +1,38 @@
+services:
+  evd:
+    build:
+      context: "${REPO_ROOT}"
+      dockerfile: docker/evd/Dockerfile
+    image: evolve/evd:local
+    user: "0:0"
+    command:
+      - run
+      - --genesis-file
+      - /config/evd-genesis.json
+      - --grpc-addr
+      - 0.0.0.0:50051
+      - --rpc-addr
+      - 0.0.0.0:8545
+      - --data-dir
+      - /var/lib/evolve/data
+    ports:
+      - "127.0.0.1:${RPC_PORT}:8545"
+    volumes:
+      - "${DATA_DIR}:/var/lib/evolve/data"
+      - "${GENESIS_FILE}:/config/evd-genesis.json:ro"
+  ev-node:
+    image: ghcr.io/evstack/ev-node-grpc:main
+    depends_on:
+      - evd
+    restart: on-failure
+    command:
+      - start
+      - --home
+      - /evnode-home
+      - --evnode.signer.passphrase_file
+      - /evnode-passphrase.txt
+      - --grpc-executor-url
+      - http://evd:50051
+    volumes:
+      - "${EVNODE_HOME}:/evnode-home"
+      - "${EVNODE_PASSPHRASE_FILE}:/evnode-passphrase.txt:ro"

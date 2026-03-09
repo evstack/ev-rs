@@ -8,11 +8,8 @@ use evolve_core::AccountId;
 use serde::{Deserialize, Serialize};
 
 /// Convert AccountId to serializable bytes.
-fn account_to_bytes(id: AccountId) -> [u8; 16] {
-    let bytes = id.as_bytes();
-    let mut arr = [0u8; 16];
-    arr.copy_from_slice(&bytes[..16]);
-    arr
+fn account_to_bytes(id: AccountId) -> [u8; 32] {
+    id.as_bytes()
 }
 
 /// A breakpoint condition.
@@ -25,7 +22,7 @@ pub enum Breakpoint {
     OnTx([u8; 32]),
 
     /// Break on any transaction involving this account (stored as bytes).
-    OnAccount([u8; 16]),
+    OnAccount([u8; 32]),
 
     /// Break when a specific storage key is modified.
     OnStorageKey(Vec<u8>),
@@ -311,8 +308,8 @@ mod tests {
 
     #[test]
     fn test_on_account() {
-        let account = AccountId::new(42);
-        let other = AccountId::new(100);
+        let account = AccountId::from_u64(42);
+        let other = AccountId::from_u64(100);
         let bp = Breakpoint::on_account(account);
         let state = StateSnapshot::empty();
 

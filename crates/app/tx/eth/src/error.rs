@@ -18,6 +18,17 @@ define_error!(
 define_error!(ERR_TX_DECODE, 0x14, "failed to decode transaction");
 define_error!(ERR_EMPTY_INPUT, 0x15, "empty transaction input");
 define_error!(ERR_INVALID_TX_HASH, 0x16, "transaction hash mismatch");
+define_error!(
+    ERR_SENDER_MISMATCH,
+    0x17,
+    "recovered sender does not match account address"
+);
+define_error!(
+    ERR_UNSUPPORTED_SENDER_TYPE,
+    0x1A,
+    "unsupported sender type {arg}"
+);
+define_error!(ERR_NONCE_OVERFLOW, 0x1B, "nonce overflow");
 
 // Nonce errors (0x18-0x1B range)
 define_error!(ERR_NONCE_TOO_LOW, 0x18, "nonce too low");
@@ -29,4 +40,16 @@ define_error!(
     ERR_GAS_LIMIT_TOO_HIGH,
     0x1D,
     "gas limit exceeds block limit"
+);
+
+// System/runtime lookup errors (0x50-0x5F range)
+define_error!(
+    ERR_RECIPIENT_REQUIRED,
+    0x50,
+    "recipient required (contract creation not supported yet)"
+);
+define_error!(
+    ERR_ADDRESS_ACCOUNT_CONFLICT,
+    0x5A,
+    "address/account registry conflict"
 );

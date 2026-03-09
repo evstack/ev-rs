@@ -9,7 +9,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```text
 //! use evolve_server::{DevConsensus, DevConfig};
 //! use commonware_runtime::Spawner;
 //!
@@ -384,7 +384,7 @@ where
         let height = self.state.height.fetch_add(1, Ordering::SeqCst);
         let parent_hash = *self.state.last_hash.read().await;
         let timestamp = current_timestamp();
-        let tx_count = transactions.len();
+        let proposed_tx_count = transactions.len();
 
         // Build the block
         let block = BlockBuilder::<Tx>::new()
@@ -407,12 +407,13 @@ where
 
         // Calculate gas used and success/failure counts
         let gas_used: u64 = result.tx_results.iter().map(|r| r.gas_used).sum();
+        let executed_tx_count = result.tx_results.len();
         let successful_txs = result
             .tx_results
             .iter()
             .filter(|r| r.response.is_ok())
             .count();
-        let failed_txs = tx_count - successful_txs;
+        let failed_txs = executed_tx_count.saturating_sub(successful_txs);
 
         // Convert StateChange to Operation and commit via async storage
         let operations = state_changes_to_operations(changes);
@@ -506,16 +507,18 @@ where
         }
 
         tracing::info!(
-            "Produced block {} with {} txs, {} gas used",
+            "Produced block {} with {} executed txs ({} proposed, {} skipped), {} gas used",
             height,
-            tx_count,
+            executed_tx_count,
+            proposed_tx_count,
+            result.txs_skipped,
             gas_used
         );
 
         Ok(ProducedBlock {
             height,
             hash: block_hash,
-            tx_count,
+            tx_count: executed_tx_count,
             gas_used,
             successful_txs,
             failed_txs,
@@ -535,7 +538,7 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// // Spawn block production as a managed task
     /// let dev = Arc::new(DevConsensus::new(...));
     /// context.clone().spawn(|ctx| {
@@ -594,7 +597,7 @@ where
     /// Produce a block with transactions from the mempool.
     ///
     /// Selects up to `max_txs` transactions from the mempool,
-    /// produces a block, and removes the included transactions from the mempool.
+    /// produces a block, and finalizes only the transactions that were executed.
     ///
     /// Returns an error if no mempool is configured.
     pub async fn produce_block_from_mempool(
@@ -606,13 +609,18 @@ where
             .as_ref()
             .ok_or_else(|| ServerError::Execution("no mempool configured".to_string()))?;
 
-        // Select transactions from mempool
+        if max_txs == 0 {
+            return self.produce_block_with_txs(vec![]).await;
+        }
+
+        // Build a gas-aware proposal so over-budget transactions remain queued.
         let selected = {
             let mut pool = mempool.write().await;
-            pool.select(max_txs)
+            pool.propose(self.config.gas_limit, max_txs).0
         };
 
-        // Get transaction hashes before converting (for removal after block production)
+        // Record the proposal before cloning the owned transactions so we can finalize
+        // executed transactions and requeue anything that was not committed.
         let tx_hashes: Vec<_> = selected.iter().map(|tx| tx.tx_id()).collect();
 
         // Convert Arc<Tx> to Tx
@@ -621,13 +629,23 @@ where
             .map(|arc_tx| (*arc_tx).clone())
             .collect();
 
-        // Produce the block
-        let result = self.produce_block_with_txs(transactions).await?;
+        // Produce the block. On failure, requeue the entire proposal.
+        let result = match self.produce_block_with_txs(transactions).await {
+            Ok(result) => result,
+            Err(err) => {
+                if !tx_hashes.is_empty() {
+                    let mut pool = mempool.write().await;
+                    pool.finalize(&[]);
+                }
+                return Err(err);
+            }
+        };
 
-        // Remove included transactions from mempool
+        // Confirm only the transactions STF actually executed and requeue the rest.
         if !tx_hashes.is_empty() {
+            let executed: Vec<_> = tx_hashes.iter().copied().take(result.tx_count).collect();
             let mut pool = mempool.write().await;
-            pool.remove_many(&tx_hashes);
+            pool.finalize(&executed);
         }
 
         Ok(result)
@@ -826,7 +844,7 @@ fn current_timestamp() -> u64 {
 ///
 /// In production, this would be a proper Merkle root or similar.
 /// For dev mode, we use a simple hash of height + timestamp + parent.
-fn compute_block_hash(height: u64, timestamp: u64, parent_hash: B256) -> B256 {
+pub fn compute_block_hash(height: u64, timestamp: u64, parent_hash: B256) -> B256 {
     use alloy_primitives::keccak256;
 
     let mut data = Vec::with_capacity(48);
@@ -837,7 +855,7 @@ fn compute_block_hash(height: u64, timestamp: u64, parent_hash: B256) -> B256 {
     keccak256(&data)
 }
 
-fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
+pub fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
     changes
         .into_iter()
         .map(|change| match change {

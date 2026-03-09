@@ -13,7 +13,7 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```text
 //! use evolve_mempool::{Mempool, MempoolTx, MempoolOps, GasPriceOrdering};
 //!
 //! // Implement MempoolTx for your transaction type
@@ -34,7 +34,7 @@
 //!
 //! Implement `MempoolOps<T>` for custom backends (Redis, persistent, etc.):
 //!
-//! ```ignore
+//! ```text
 //! impl MempoolOps<MyTx> for MyCustomMempool {
 //!     fn add(&mut self, tx: MyTx) -> Result<[u8; 32], MempoolError> { ... }
 //!     fn select(&mut self, limit: usize) -> Vec<Arc<MyTx>> { ... }

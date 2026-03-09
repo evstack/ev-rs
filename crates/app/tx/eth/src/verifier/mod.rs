@@ -8,4 +8,4 @@ mod ecdsa;
 mod registry;
 
 pub use ecdsa::EcdsaVerifier;
-pub use registry::SignatureVerifierRegistry;
+pub use registry::{SignatureVerifierDyn, SignatureVerifierRegistry};

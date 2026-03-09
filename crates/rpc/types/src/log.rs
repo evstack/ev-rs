@@ -93,15 +93,10 @@ pub fn event_to_log(
     tx_index: u64,
     log_index: u64,
 ) -> Option<RpcLog> {
-    use sha2::{Digest, Sha256};
-
     let address = crate::account_id_to_address(event.source);
 
     // Hash the event name to create the first topic (similar to Solidity event signature)
-    let mut hasher = Sha256::new();
-    hasher.update(event.name.as_bytes());
-    let name_hash = hasher.finalize();
-    let topic0 = B256::from_slice(&name_hash);
+    let topic0 = alloy_primitives::keccak256(event.name.as_bytes());
 
     // Event contents become the data
     let data_bytes = event.contents.as_bytes().ok()?;
@@ -124,7 +119,6 @@ mod tests {
     use super::*;
     use evolve_core::{events_api::Event, AccountId, Message};
     use serde_json::Value;
-    use sha2::{Digest, Sha256};
 
     #[test]
     fn test_log_serialization() {
@@ -157,7 +151,7 @@ mod tests {
     #[test]
     fn test_event_to_log_maps_source_name_and_contents() {
         let event = Event {
-            source: AccountId::new(42),
+            source: AccountId::from_u64(42),
             name: "Transfer".to_string(),
             contents: Message::from_bytes(vec![0xAB, 0xCD]),
         };
@@ -166,9 +160,7 @@ mod tests {
 
         let log = event_to_log(&event, 7, block_hash, tx_hash, 3, 2).expect("conversion must work");
 
-        let mut hasher = Sha256::new();
-        hasher.update(b"Transfer");
-        let expected_topic0 = B256::from_slice(&hasher.finalize());
+        let expected_topic0 = alloy_primitives::keccak256(b"Transfer");
 
         assert_eq!(log.address, crate::account_id_to_address(event.source));
         assert_eq!(log.topics, vec![expected_topic0]);

@@ -16,7 +16,7 @@
 //!
 //! # Example
 //!
-//! ```ignore
+//! ```text
 //! use evolve_evnode::{EvnodeServer, EvnodeServerConfig};
 //!
 //! // Create the server with your STF, storage, and account codes
@@ -32,6 +32,7 @@
 //! ```
 
 pub mod error;
+pub mod runner;
 pub mod server;
 pub mod service;
 
@@ -50,6 +51,7 @@ pub mod proto {
 
 // Re-export key types
 pub use error::EvnodeError;
+pub use runner::run_external_consensus_node_eth;
 pub use server::{
     start_evnode_server, start_evnode_server_with_mempool, EvnodeServer, EvnodeServerConfig,
 };

@@ -14,7 +14,7 @@ define_error!(ERR_OUT_OF_GAS, 0x1, "out of gas");
 /// Gas configuration is passed to the STF at construction time. To customize
 /// gas charges for your application:
 ///
-/// ```ignore
+/// ```text
 /// use evolve_stf::{Stf, StorageGasConfig};
 ///
 /// let gas_config = StorageGasConfig {

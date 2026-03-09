@@ -125,7 +125,7 @@ impl MessageRegistry for SimpleRegistry {
 /// Helper macro to register a borsh-serializable message type.
 ///
 /// Usage:
-/// ```ignore
+/// ```text
 /// register_message!(registry, "token/initialize", "Create a new token", TokenInitialize);
 /// ```
 #[macro_export]
