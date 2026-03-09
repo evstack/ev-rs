@@ -23,6 +23,11 @@ define_error!(
     0x17,
     "recovered sender does not match account address"
 );
+define_error!(
+    ERR_UNSUPPORTED_SENDER_TYPE,
+    0x1A,
+    "unsupported sender type {arg}"
+);
 define_error!(ERR_NONCE_OVERFLOW, 0x1B, "nonce overflow");
 
 // Nonce errors (0x18-0x1B range)

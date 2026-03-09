@@ -74,7 +74,7 @@ pub mod eth_eoa_account {
             expected_address: [u8; 20],
             env: &mut dyn Environment,
         ) -> SdkResult<()> {
-            let sender_address: [u8; 20] = tx.sender_address().into();
+            let sender_address: [u8; 20] = tx.sender_address().ok_or(ERR_SENDER_MISMATCH)?.into();
             if sender_address != expected_address {
                 return Err(ERR_SENDER_MISMATCH);
             }
@@ -142,6 +142,15 @@ pub mod eth_eoa_account {
             } else if let Ok(sender_id) = tx.get::<AccountId>() {
                 // Fast path: validator passes sender AccountId directly.
                 if sender_id != env.whoami() {
+                    return Err(ERR_SENDER_MISMATCH);
+                }
+            // Backward-compatible fallback for older validator payloads.
+            } else if let Ok(mempool_tx) = tx.get::<TxContext>() {
+                let sender_bytes: [u8; 20] = mempool_tx
+                    .sender_address()
+                    .ok_or(ERR_SENDER_MISMATCH)?
+                    .into();
+                if sender_bytes != expected_address {
                     return Err(ERR_SENDER_MISMATCH);
                 }
             }

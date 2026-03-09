@@ -6,7 +6,8 @@ use alloy_consensus::{SignableTransaction, TxEip1559, TxLegacy};
 use alloy_primitives::{Address, Bytes, B256, U256};
 use evolve_stf_traits::TxDecoder;
 use evolve_tx_eth::{
-    tx_type, EcdsaVerifier, SignatureVerifierRegistry, TxEnvelope, TypedTransaction, TypedTxDecoder,
+    sender_type, tx_type, EcdsaVerifier, SignatureVerifierRegistry, TxEnvelope, TxPayload,
+    TypedTransaction, TypedTxDecoder,
 };
 use k256::ecdsa::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
@@ -341,14 +342,19 @@ fn test_registry_verifies_correct_chain() {
     signed.rlp_encode(&mut encoded);
 
     let decoded = TxEnvelope::decode(&encoded).unwrap();
+    let payload = TxPayload::Eoa(Box::new(decoded.clone()));
 
     // Create registry for mainnet
     let registry = SignatureVerifierRegistry::ethereum(1);
-    assert!(registry.verify(&decoded).is_ok());
+    assert!(registry
+        .verify_payload(sender_type::EOA_SECP256K1, &payload)
+        .is_ok());
 
     // Create registry for different chain
     let registry_wrong = SignatureVerifierRegistry::ethereum(5);
-    assert!(registry_wrong.verify(&decoded).is_err());
+    assert!(registry_wrong
+        .verify_payload(sender_type::EOA_SECP256K1, &payload)
+        .is_err());
 }
 
 // ============================================================================

@@ -110,7 +110,7 @@ fn ethereum_tx_fields<Tx: Transaction + Any>(tx: &Tx) -> Option<EthereumIndexedT
     let tx = (tx as &dyn Any).downcast_ref::<TxContext>()?;
     let gas_price = U256::from(tx.effective_gas_price());
 
-    Some(match tx.envelope() {
+    Some(match tx.envelope()? {
         TxEnvelope::Legacy(legacy) => {
             let signature = legacy.signature();
             let chain_id = legacy.tx().chain_id;

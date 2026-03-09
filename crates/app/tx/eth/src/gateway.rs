@@ -5,13 +5,16 @@
 //! 2. Verifying signatures and chain ID
 //! 3. Producing verified `TxContext` ready for mempool insertion
 
+use evolve_core::encoding::Decodable;
 use evolve_stf_traits::TxDecoder;
 
 use crate::decoder::TypedTxDecoder;
 use crate::envelope::TxEnvelope;
 use crate::mempool::TxContext;
+use crate::payload::TxPayload;
+use crate::sender_type;
 use crate::traits::TypedTransaction;
-use crate::verifier::SignatureVerifierRegistry;
+use crate::verifier::{SignatureVerifierDyn, SignatureVerifierRegistry};
 
 /// Error type for gateway operations.
 #[derive(Debug, Clone)]
@@ -101,10 +104,30 @@ impl EthGateway {
         self.base_fee = base_fee;
     }
 
+    /// Register a payload verifier for a sender type.
+    pub fn register_payload_verifier(
+        &mut self,
+        sender_type: u16,
+        verifier: impl SignatureVerifierDyn + 'static,
+    ) {
+        self.verifier.register_dyn(sender_type, verifier);
+    }
+
+    /// Check whether a sender type is supported by ingress verification.
+    pub fn supports_sender_type(&self, sender_type: u16) -> bool {
+        self.verifier.supports(sender_type)
+    }
+
     /// Decode and verify a raw transaction.
     ///
     /// Returns a verified `TxContext` ready for mempool insertion.
     pub fn decode_and_verify(&self, raw: &[u8]) -> Result<TxContext, GatewayError> {
+        if TxContext::is_wire_encoded(raw) {
+            let context = TxContext::decode(raw)
+                .map_err(|e| GatewayError::DecodeFailed(format!("{:?}", e)))?;
+            return self.verify_context(context);
+        }
+
         // Decode the transaction with type filtering
         let mut input = raw;
         let envelope = self
@@ -119,22 +142,48 @@ impl EthGateway {
         self.verify_envelope(envelope)
     }
 
-    /// Verify an already-decoded envelope and create a TxContext.
-    pub fn verify_envelope(&self, envelope: TxEnvelope) -> Result<TxContext, GatewayError> {
-        // Verify chain ID and signature
-        self.verifier
-            .verify(&envelope)
-            .map_err(|_| match envelope.chain_id() {
-                Some(id) if id != self.chain_id => GatewayError::InvalidChainId {
+    /// Verify sender-type payload for a decoded context.
+    pub fn verify_context(&self, context: TxContext) -> Result<TxContext, GatewayError> {
+        if let Some(id) = context.chain_id() {
+            if id != self.chain_id {
+                return Err(GatewayError::InvalidChainId {
                     expected: self.chain_id,
                     actual: Some(id),
-                },
-                None => GatewayError::InvalidChainId {
+                });
+            }
+        }
+
+        self.verifier
+            .verify_payload(context.sender_type(), context.payload())
+            .map_err(|_| GatewayError::InvalidSignature)?;
+
+        Ok(context)
+    }
+
+    /// Verify an already-decoded envelope and create a TxContext.
+    pub fn verify_envelope(&self, envelope: TxEnvelope) -> Result<TxContext, GatewayError> {
+        match envelope.chain_id() {
+            Some(id) if id != self.chain_id => {
+                return Err(GatewayError::InvalidChainId {
+                    expected: self.chain_id,
+                    actual: Some(id),
+                });
+            }
+            None => {
+                return Err(GatewayError::InvalidChainId {
                     expected: self.chain_id,
                     actual: None,
-                },
-                _ => GatewayError::InvalidSignature,
-            })?;
+                });
+            }
+            _ => {}
+        }
+
+        let payload = TxPayload::Eoa(Box::new(envelope.clone()));
+
+        // Verify signature
+        self.verifier
+            .verify_payload(sender_type::EOA_SECP256K1, &payload)
+            .map_err(|_| GatewayError::InvalidSignature)?;
 
         // Create verified transaction context
         TxContext::new(envelope, self.base_fee).ok_or(GatewayError::ContractCreationNotSupported)
@@ -144,6 +193,60 @@ impl EthGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mempool::TxContextMeta;
+    use borsh::{BorshDeserialize, BorshSerialize};
+    use evolve_core::{AccountId, ErrorCode, InvokableMessage, InvokeRequest, Message, SdkResult};
+
+    #[derive(Clone, BorshSerialize, BorshDeserialize)]
+    struct DummyInvoke {
+        value: u8,
+    }
+
+    impl InvokableMessage for DummyInvoke {
+        const FUNCTION_IDENTIFIER: u64 = 90_001;
+        const FUNCTION_IDENTIFIER_NAME: &'static str = "dummy";
+    }
+
+    struct ExactPayloadVerifier {
+        expected: Vec<u8>,
+    }
+
+    impl SignatureVerifierDyn for ExactPayloadVerifier {
+        fn verify(&self, payload: &TxPayload) -> SdkResult<()> {
+            match payload {
+                TxPayload::Custom(bytes) if bytes == &self.expected => Ok(()),
+                _ => Err(ErrorCode::new(0xEE)),
+            }
+        }
+    }
+
+    fn build_custom_context(payload: Vec<u8>, chain_id: Option<u64>) -> TxContext {
+        let sender = AccountId::from_u64(7001);
+        let recipient = AccountId::from_u64(7002);
+        let request = InvokeRequest::new(&DummyInvoke { value: 7 }).expect("request should encode");
+        let auth_payload = Message::new(&[0xABu8, 0xCD]).expect("payload should encode");
+
+        TxContext::from_payload(
+            TxPayload::Custom(payload),
+            sender_type::CUSTOM,
+            TxContextMeta {
+                tx_hash: alloy_primitives::B256::repeat_byte(0x55),
+                gas_limit: 21_000,
+                nonce: 1,
+                chain_id,
+                effective_gas_price: 1,
+                invoke_request: request,
+                funds: vec![],
+                sender_account: sender,
+                recipient_account: Some(recipient),
+                sender_key: sender.as_bytes().to_vec(),
+                authentication_payload: auth_payload,
+                sender_eth_address: None,
+                recipient_eth_address: None,
+            },
+        )
+        .expect("context should build")
+    }
 
     #[test]
     fn test_gateway_with_base_fee() {
@@ -171,5 +274,48 @@ mod tests {
         let gateway = EthGateway::new(1337);
         let result = gateway.decode_and_verify(&[0xFF, 0xFF, 0xFF]);
         assert!(matches!(result, Err(GatewayError::DecodeFailed(_))));
+    }
+
+    #[test]
+    fn test_supports_sender_type_after_register() {
+        let mut gateway = EthGateway::new(1337);
+        assert!(gateway.supports_sender_type(sender_type::EOA_SECP256K1));
+        assert!(!gateway.supports_sender_type(sender_type::CUSTOM));
+
+        gateway.register_payload_verifier(
+            sender_type::CUSTOM,
+            ExactPayloadVerifier {
+                expected: b"ok".to_vec(),
+            },
+        );
+        assert!(gateway.supports_sender_type(sender_type::CUSTOM));
+    }
+
+    #[test]
+    fn test_verify_context_with_custom_verifier() {
+        let mut gateway = EthGateway::new(1337);
+        gateway.register_payload_verifier(
+            sender_type::CUSTOM,
+            ExactPayloadVerifier {
+                expected: b"ok".to_vec(),
+            },
+        );
+
+        let valid = build_custom_context(b"ok".to_vec(), Some(1337));
+        let invalid_sig = build_custom_context(b"bad".to_vec(), Some(1337));
+        let wrong_chain = build_custom_context(b"ok".to_vec(), Some(999));
+
+        assert!(gateway.verify_context(valid).is_ok());
+        assert!(matches!(
+            gateway.verify_context(invalid_sig),
+            Err(GatewayError::InvalidSignature)
+        ));
+        assert!(matches!(
+            gateway.verify_context(wrong_chain),
+            Err(GatewayError::InvalidChainId {
+                expected: 1337,
+                actual: Some(999)
+            })
+        ));
     }
 }

@@ -13,8 +13,8 @@ use evolve_core::ReadonlyKV;
 use evolve_mempool::{Mempool, SharedMempool};
 use evolve_stf::execution_state::ExecutionState;
 use evolve_stf::results::BlockResult;
-use evolve_stf_traits::{AccountsCodeStorage, StateChange};
-use evolve_tx_eth::{TxContext, TypedTransaction};
+use evolve_stf_traits::{AccountsCodeStorage, StateChange, Transaction};
+use evolve_tx_eth::TxContext;
 use prost_types::Timestamp;
 use tokio::sync::RwLock;
 use tonic::{Request, Response, Status};
@@ -300,7 +300,7 @@ where
 
     /// Estimate gas for a transaction.
     fn estimate_tx_gas(tx: &TxContext) -> u64 {
-        tx.envelope().gas_limit()
+        tx.gas_limit()
     }
 
     /// Handle produced state changes.
@@ -613,6 +613,7 @@ mod tests {
     use evolve_core::{InvokeResponse, Message};
     use evolve_mempool::shared_mempool_from;
     use evolve_stf::results::TxResult;
+    use evolve_stf_traits::Transaction;
     use k256::ecdsa::SigningKey;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
@@ -722,7 +723,7 @@ mod tests {
                 .take(executed_tx_count)
                 .map(|tx| TxResult {
                     events: vec![],
-                    gas_used: tx.envelope().gas_limit(),
+                    gas_used: tx.gas_limit(),
                     response: Ok(InvokeResponse::new(&()).expect("unit response should encode")),
                 })
                 .collect();
@@ -1164,7 +1165,7 @@ mod tests {
     async fn get_txs_filter_limits_and_finalize_interact_consistently() {
         let tx_bytes = sample_legacy_tx_bytes();
         let tx = TxContext::decode(&tx_bytes).expect("sample tx should decode");
-        let tx_gas = tx.envelope().gas_limit();
+        let tx_gas = tx.gas_limit();
         let tx_len = tx_bytes.len() as u64;
 
         let mut pool = Mempool::<TxContext>::new();
