@@ -105,6 +105,12 @@ pub struct StoredTransaction {
     pub tx_type: u8,
     /// Chain ID.
     pub chain_id: Option<u64>,
+    /// EIP-1559 max fee per gas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_fee_per_gas: Option<U256>,
+    /// EIP-1559 max priority fee per gas.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_priority_fee_per_gas: Option<U256>,
 }
 
 impl StoredTransaction {
@@ -121,8 +127,8 @@ impl StoredTransaction {
             value: self.value,
             gas: U64::from(self.gas),
             gas_price: Some(self.gas_price),
-            max_fee_per_gas: None,
-            max_priority_fee_per_gas: None,
+            max_fee_per_gas: self.max_fee_per_gas,
+            max_priority_fee_per_gas: self.max_priority_fee_per_gas,
             input: self.input.clone(),
             v: U64::from(self.v),
             r: self.r,
@@ -153,6 +159,8 @@ pub struct StoredReceipt {
     pub cumulative_gas_used: u64,
     /// Gas used by this transaction.
     pub gas_used: u64,
+    /// Effective gas price paid by this transaction.
+    pub effective_gas_price: U256,
     /// Contract address if this was a contract creation.
     pub contract_address: Option<Address>,
     /// Logs emitted by this transaction.
@@ -190,7 +198,7 @@ impl StoredReceipt {
             to: self.to,
             cumulative_gas_used: U64::from(self.cumulative_gas_used),
             gas_used: U64::from(self.gas_used),
-            effective_gas_price: U256::ZERO,
+            effective_gas_price: self.effective_gas_price,
             contract_address: self.contract_address,
             logs,
             logs_bloom: Bytes::new(),

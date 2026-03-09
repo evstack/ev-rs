@@ -3,7 +3,7 @@ use crate::{
     PLACEHOLDER_ACCOUNT,
 };
 use alloy_consensus::{SignableTransaction, TxEip1559};
-use alloy_primitives::{Bytes, PrimitiveSignature, TxKind, U256};
+use alloy_primitives::{Bytes, TxKind, U256};
 use evolve_core::{
     encoding::Decodable, AccountId, Environment, FungibleAsset, InvokableMessage, ReadonlyKV,
     SdkResult,
@@ -23,9 +23,10 @@ use evolve_testing::server_mocks::AccountStorageMock;
 use evolve_token::account::TokenRef;
 use evolve_tx_eth::{
     derive_eth_eoa_account_id, derive_runtime_contract_address, register_runtime_contract_account,
+    sign_hash, ETH_EOA_CODE_ID,
 };
 use evolve_tx_eth::{EthGateway, TxContext};
-use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
+use k256::ecdsa::{SigningKey, VerifyingKey};
 use std::collections::BTreeMap;
 use tiny_keccak::{Hasher, Keccak};
 
@@ -43,6 +44,7 @@ pub struct SimTestApp {
 
 const SIM_CHAIN_ID: u64 = 1337;
 const MAX_SIGNING_KEY_ATTEMPTS: usize = 16;
+const DEFAULT_TEST_BLOCK_GAS_LIMIT: u64 = 30_000_000;
 
 fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut keccak = Keccak::v256();
@@ -63,15 +65,6 @@ fn get_address(signing_key: &SigningKey) -> alloy_primitives::Address {
     let public_key_bytes = &public_key.as_bytes()[1..];
     let hash = keccak256(public_key_bytes);
     alloy_primitives::Address::from_slice(&hash[12..])
-}
-
-fn sign_hash(signing_key: &SigningKey, hash: alloy_primitives::B256) -> PrimitiveSignature {
-    let (sig, recovery_id): (k256::ecdsa::Signature, k256::ecdsa::RecoveryId) =
-        signing_key.sign_prehash(hash.as_ref()).unwrap();
-    let r = U256::from_be_slice(sig.r().to_bytes().as_slice());
-    let s = U256::from_be_slice(sig.s().to_bytes().as_slice());
-    let v = recovery_id.is_y_odd();
-    PrimitiveSignature::new(r, s, v)
 }
 
 fn create_signed_tx(
@@ -336,9 +329,9 @@ impl SimTestApp {
         let alice_id = derive_eth_eoa_account_id(alice_address);
         let bob_id = derive_eth_eoa_account_id(bob_address);
 
-        register_account_code_identifier(&mut sim, alice_id, "EthEoaAccount")
+        register_account_code_identifier(&mut sim, alice_id, ETH_EOA_CODE_ID)
             .expect("register alice code");
-        register_account_code_identifier(&mut sim, bob_id, "EthEoaAccount")
+        register_account_code_identifier(&mut sim, bob_id, ETH_EOA_CODE_ID)
             .expect("register bob code");
         init_eth_eoa_storage(&mut sim, alice_id, alice_address.into()).expect("init alice eoa");
         init_eth_eoa_storage(&mut sim, bob_id, bob_address.into()).expect("init bob eoa");
@@ -460,10 +453,10 @@ impl SimTestApp {
         Ok(alloy_primitives::B256::from(tx_id))
     }
 
-    fn take_mempool_batch(&mut self, max_txs: usize) -> (Vec<[u8; 32]>, Vec<TxContext>) {
+    fn propose_mempool_batch(&mut self, max_txs: usize) -> (Vec<[u8; 32]>, Vec<TxContext>) {
         let selected = {
             let mut pool = self.mempool.blocking_write();
-            pool.select(max_txs)
+            pool.propose(DEFAULT_TEST_BLOCK_GAS_LIMIT, max_txs).0
         };
 
         let mut tx_hashes = Vec::with_capacity(selected.len());
@@ -475,12 +468,19 @@ impl SimTestApp {
         (tx_hashes, transactions)
     }
 
-    fn remove_many_from_mempool(&mut self, tx_hashes: &[[u8; 32]]) {
-        if tx_hashes.is_empty() {
-            return;
-        }
+    fn finalize_mempool_batch(&mut self, executed_tx_hashes: &[[u8; 32]]) {
         let mut pool = self.mempool.blocking_write();
-        pool.remove_many(tx_hashes);
+        pool.finalize(executed_tx_hashes);
+    }
+
+    /// Finalize the mempool after block production, keeping only unexecuted txs.
+    fn finalize_proposed_batch(&mut self, tx_hashes: &[[u8; 32]], result: &BlockResult) {
+        let executed: Vec<_> = tx_hashes
+            .iter()
+            .copied()
+            .take(result.tx_results.len())
+            .collect();
+        self.finalize_mempool_batch(&executed);
     }
 
     fn produce_block_internal(
@@ -498,10 +498,10 @@ impl SimTestApp {
     }
 
     pub fn produce_block_from_mempool(&mut self, max_txs: usize) -> BlockResult {
-        let (tx_hashes, transactions) = self.take_mempool_batch(max_txs);
+        let (tx_hashes, transactions) = self.propose_mempool_batch(max_txs);
         let height = self.sim.time().block_height();
         let result = self.produce_block_internal(height, transactions, true);
-        self.remove_many_from_mempool(&tx_hashes);
+        self.finalize_proposed_batch(&tx_hashes, &result);
         result
     }
 
@@ -627,9 +627,9 @@ impl SimTestApp {
                 for raw_tx in &txs {
                     app.submit_raw_tx(raw_tx).expect("submit tx");
                 }
-                let (tx_hashes, transactions) = app.take_mempool_batch(max_txs);
+                let (tx_hashes, transactions) = app.propose_mempool_batch(max_txs);
                 let result = app.produce_block_internal(height, transactions, false);
-                app.remove_many_from_mempool(&tx_hashes);
+                app.finalize_proposed_batch(&tx_hashes, &result);
                 result
             },
             |app| app.sim.advance_block(),
@@ -651,9 +651,9 @@ impl SimTestApp {
                 for raw_tx in &txs {
                     app.submit_raw_tx(raw_tx).expect("submit tx");
                 }
-                let (tx_hashes, transactions) = app.take_mempool_batch(max_txs);
+                let (tx_hashes, transactions) = app.propose_mempool_batch(max_txs);
                 let result = app.produce_block_internal(height, transactions, false);
-                app.remove_many_from_mempool(&tx_hashes);
+                app.finalize_proposed_batch(&tx_hashes, &result);
                 result
             },
             |app| app.sim.advance_block(),
@@ -684,11 +684,10 @@ impl SimTestApp {
                     app.submit_raw_tx(raw_tx).expect("submit tx");
                 }
 
-                let (tx_hashes, transactions) = app.take_mempool_batch(max_txs);
+                let (tx_hashes, transactions) = app.propose_mempool_batch(max_txs);
                 let block = Block::for_testing(height, transactions);
                 let result = app.apply_block_with_trace(&block, &mut builder);
-
-                app.remove_many_from_mempool(&tx_hashes);
+                app.finalize_proposed_batch(&tx_hashes, &result);
                 result
             },
             |app| app.sim.advance_block(),
@@ -729,7 +728,7 @@ impl SimTestApp {
     /// Create an EOA with a specific Ethereum address.
     pub fn create_eoa_with_address(&mut self, eth_address: [u8; 20]) -> AccountId {
         let account_id = derive_eth_eoa_account_id(alloy_primitives::Address::from(eth_address));
-        register_account_code_identifier(&mut self.sim, account_id, "EthEoaAccount")
+        register_account_code_identifier(&mut self.sim, account_id, ETH_EOA_CODE_ID)
             .expect("register eoa code");
         init_eth_eoa_storage(&mut self.sim, account_id, eth_address).expect("init eoa storage");
         account_id
