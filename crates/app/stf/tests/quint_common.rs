@@ -271,7 +271,7 @@ pub fn expected_storage_from_itf(
 ) -> HashMap<Vec<u8>, Vec<u8>> {
     let mut expected = HashMap::new();
     for (account_id_itf, account_store_itf) in &itf_storage.entries {
-        if AccountId::new(account_id_itf.as_u64() as u128) != account {
+        if AccountId::from_u64(account_id_itf.as_u64()) != account {
             continue;
         }
         for (key_itf, value_itf) in &account_store_itf.entries {

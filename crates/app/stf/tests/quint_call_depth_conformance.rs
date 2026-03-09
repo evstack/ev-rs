@@ -143,8 +143,8 @@ impl AccountCode for RecursiveAccount {
     }
 }
 
-const RECURSIVE_ACCOUNT: u128 = 100;
-const TEST_SENDER: u128 = 200;
+const RECURSIVE_ACCOUNT: u64 = 100;
+const TEST_SENDER: u64 = 200;
 
 struct ConformanceCase {
     test_name: &'static str,
@@ -213,14 +213,18 @@ fn quint_itf_call_depth_conformance() {
         let mut storage = InMemoryStorage::default();
         let mut codes = CodeStore::new();
         codes.add_code(RecursiveAccount);
-        register_account(&mut storage, AccountId::new(RECURSIVE_ACCOUNT), "recursive");
+        register_account(
+            &mut storage,
+            AccountId::from_u64(RECURSIVE_ACCOUNT),
+            "recursive",
+        );
 
         let msg = RecurseMsg {
             remaining: case.requested_depth,
         };
         let tx = TestTx {
-            sender: AccountId::new(TEST_SENDER),
-            recipient: AccountId::new(RECURSIVE_ACCOUNT),
+            sender: AccountId::from_u64(TEST_SENDER),
+            recipient: AccountId::from_u64(RECURSIVE_ACCOUNT),
             request: InvokeRequest::new(&msg).unwrap(),
             gas_limit: 1_000_000,
             funds: vec![],

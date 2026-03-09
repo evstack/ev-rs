@@ -152,8 +152,8 @@ impl AccountCode for TestAccount {
     }
 }
 
-const TEST_ACCOUNT_ID: u128 = 100;
-const TEST_SENDER: u128 = 200;
+const TEST_ACCOUNT_ID: u64 = 100;
+const TEST_SENDER: u64 = 200;
 
 struct TxCase {
     key: Vec<u8>,
@@ -170,8 +170,8 @@ fn make_tx(tc: TxCase) -> TestTx {
         fail_after_write: tc.fail_execute,
     };
     TestTx {
-        sender: AccountId::new(TEST_SENDER),
-        recipient: AccountId::new(TEST_ACCOUNT_ID),
+        sender: AccountId::from_u64(TEST_SENDER),
+        recipient: AccountId::from_u64(TEST_ACCOUNT_ID),
         request: InvokeRequest::new(&msg).unwrap(),
         gas_limit: tc.gas_limit,
         funds: vec![],
@@ -295,7 +295,7 @@ fn quint_itf_post_tx_conformance() {
         codes.add_code(TestAccount);
         register_account(
             &mut storage,
-            AccountId::new(TEST_ACCOUNT_ID),
+            AccountId::from_u64(TEST_ACCOUNT_ID),
             "test_account",
         );
 
@@ -366,7 +366,7 @@ fn quint_itf_post_tx_conformance() {
         assert_storage_matches(
             &storage,
             &spec_state.storage,
-            AccountId::new(TEST_ACCOUNT_ID),
+            AccountId::from_u64(TEST_ACCOUNT_ID),
             case.test_name,
         );
     }

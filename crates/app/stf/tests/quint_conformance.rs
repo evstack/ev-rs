@@ -216,12 +216,12 @@ impl AccountCode for TestAccount {
 // Test case definitions (must match the Quint spec's run declarations)
 // ---------------------------------------------------------------------------
 
-const TEST_ACCOUNT: u128 = 100;
-const TEST_SENDER: u128 = 200;
+const TEST_ACCOUNT: u64 = 100;
+const TEST_SENDER: u64 = 200;
 
 struct TxCase {
-    sender: u128,
-    recipient: u128,
+    sender: u64,
+    recipient: u64,
     key: Vec<u8>,
     value: Vec<u8>,
     gas_limit: u64,
@@ -238,8 +238,8 @@ fn make_tx(tc: TxCase) -> TestTx {
         fail_after_write: tc.fail_execute,
     };
     TestTx {
-        sender: AccountId::new(tc.sender),
-        recipient: AccountId::new(tc.recipient),
+        sender: AccountId::from_u64(tc.sender),
+        recipient: AccountId::from_u64(tc.recipient),
         request: InvokeRequest::new(&msg).unwrap(),
         gas_limit: tc.gas_limit,
         funds: vec![],
@@ -597,7 +597,11 @@ fn quint_itf_conformance() {
         let mut storage = InMemoryStorage::default();
         let mut codes = CodeStore::new();
         codes.add_code(TestAccount);
-        register_account(&mut storage, AccountId::new(TEST_ACCOUNT), "test_account");
+        register_account(
+            &mut storage,
+            AccountId::from_u64(TEST_ACCOUNT),
+            "test_account",
+        );
 
         let mut real_result = None;
         for block in &case.blocks {
@@ -692,7 +696,10 @@ fn quint_itf_conformance() {
         );
 
         // 6. Storage
-        for account_id in [AccountId::new(TEST_ACCOUNT), AccountId::new(TEST_SENDER)] {
+        for account_id in [
+            AccountId::from_u64(TEST_ACCOUNT),
+            AccountId::from_u64(TEST_SENDER),
+        ] {
             assert_storage_matches(&storage, &spec_state.storage, account_id, case.test_name);
         }
 
