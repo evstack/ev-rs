@@ -47,17 +47,9 @@ Run `evd` only:
 docker compose up --build evd
 ```
 
-Run `evd` + `ev-node`:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.ev-node.yml up --build
-```
-
 Notes:
 - `evd` JSON-RPC is exposed on `http://localhost:8545`
 - `evd` gRPC is exposed on `localhost:50051`
-- `ev-node` gets `EVD_GRPC_ENDPOINT=evd:50051` in the compose network
-- if your `ev-node` image needs explicit startup flags, override `command` for the `ev-node` service with an extra compose override file
 
 ## Documentation
 

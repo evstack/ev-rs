@@ -40,6 +40,20 @@ jobs:
       - name: Install protoc
         run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
       - run: cargo test -p evolve_testapp --test simulation_long_tests -- --ignored
+  e2e-docker:
+    name: e2e (evd + ev-node docker)
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+      - name: Pull ev-node image
+        run: docker pull ghcr.io/evstack/ev-node-grpc:main
+      - name: Run e2e tests
+        run: cargo test -p evd --test external_consensus_e2e -- --ignored --nocapture
+        timeout-minutes: 10
   fmt:
     name: cargo fmt
     runs-on: ubuntu-latest
