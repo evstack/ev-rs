@@ -104,16 +104,16 @@ module stf {
   //
 
   val MC_ACCOUNTS: Set[AccountId] = Set(100, 101, 200, 201)
-  val MC_GAS_LIMITS: Set[int] = Set(1, 25, 100, 10000)
-  val MC_BLOCK_GAS_LIMITS: Set[int] = Set(30, 1000, 1000000)
+  val MC_GAS_LIMITS: Set[int] = Set(1, 40, 100, 10000)
+  val MC_BLOCK_GAS_LIMITS: Set[int] = Set(30, 70, 1000, 1000000)
 
   //
   // === Pure helpers ===
   //
 
-  /// AccountId is u128 in the Rust implementation = 16 bytes.
+  /// AccountId is canonical 32-byte storage in the Rust implementation.
   /// The real storage key is `account_id_bytes ++ user_key`.
-  val ACCOUNT_ID_BYTE_SIZE: int = 16
+  val ACCOUNT_ID_BYTE_SIZE: int = 32
   val ACCOUNT_CODE_PREFIX_SIZE: int = 1
   val BORSH_LEN_PREFIX_SIZE: int = 4
   val TEST_ACCOUNT_CODE_ID_LEN: int = 12 // "test_account"
@@ -126,7 +126,7 @@ module stf {
 
   /// Gas cost for sender bootstrap account-code registration.
   /// Real runtime charges storage set gas for:
-  /// key   = ACCOUNT_IDENTIFIER_PREFIX (1 byte) ++ account_id (16 bytes)
+  /// key   = ACCOUNT_IDENTIFIER_PREFIX (1 byte) ++ account_id (32 bytes)
   /// value = Borsh-encoded code id string ("test_account" => 4-byte len + 12 bytes)
   pure def bootstrap_gas_cost(config: GasConfig): int =
     config.set_charge * (
@@ -155,27 +155,40 @@ module stf {
     registered: Set[AccountId],
   ): { result: TxResult, store: AccountId -> (Key -> Value), accounts: Set[AccountId] } =
     // Phase 0: Bootstrap sender if needed
+    val bootstrap_gas = bootstrap_gas_cost(config)
     val bootstrap_result =
       if (tx.needs_bootstrap and not(registered.contains(tx.sender)))
-        if (tx.fail_bootstrap)
-          // Bootstrap failed
-          { ok: false, accounts: registered, gas: bootstrap_gas_cost(config) }
+        if (bootstrap_gas > tx.gas_limit)
+          // Bootstrap consumes storage gas first; if that exceeds the tx budget,
+          // the runtime returns out-of-gas before running account init.
+          { ok: false, err_code: ERR_OUT_OF_GAS, store: account_store, accounts: registered, gas: 0 }
+        else if (tx.fail_bootstrap)
+          // The runtime persists account registration before init runs, so an
+          // init failure still leaves the sender registered with empty storage.
+          {
+            ok: false,
+            err_code: ERR_BOOTSTRAP,
+            store: account_store.put(tx.sender, Map()),
+            accounts: registered.union(Set(tx.sender)),
+            gas: bootstrap_gas,
+          }
         else
-          // Bootstrap succeeds: register sender
-          { ok: true, accounts: registered.union(Set(tx.sender)), gas: bootstrap_gas_cost(config) }
+          // Bootstrap succeeds: register sender and expose an empty user-store.
+          { ok: true, err_code: 0, store: account_store.put(tx.sender, Map()), accounts: registered.union(Set(tx.sender)), gas: bootstrap_gas }
       else
         // No bootstrap needed or already registered
-        { ok: true, accounts: registered, gas: 0 }
+        { ok: true, err_code: 0, store: account_store, accounts: registered, gas: 0 }
 
     if (not(bootstrap_result.ok))
-      // Bootstrap failed -> return error, no state changes
+      // Bootstrap failed -> return the runtime-visible post-bootstrap state.
       {
-        result: { result: Err(ERR_BOOTSTRAP), gas_used: bootstrap_result.gas },
-        store: account_store,
-        accounts: registered,
+        result: { result: Err(bootstrap_result.err_code), gas_used: bootstrap_result.gas },
+        store: bootstrap_result.store,
+        accounts: bootstrap_result.accounts,
       }
     else
       val current_accounts = bootstrap_result.accounts
+      val current_store = bootstrap_result.store
       val gas_after_bootstrap = bootstrap_result.gas
 
       // Phase 1: Validation
@@ -185,7 +198,7 @@ module stf {
       if (tx.fail_validate or not(current_accounts.contains(tx.sender)))
         {
           result: { result: Err(ERR_VALIDATION), gas_used: gas_after_bootstrap },
-          store: account_store,
+          store: current_store,
           accounts: current_accounts,
         }
       else
@@ -198,25 +211,25 @@ module stf {
           // a failed consume_gas call. So gas_used stays at its pre-call value.
           {
             result: { result: Err(ERR_OUT_OF_GAS), gas_used: gas_after_bootstrap },
-            store: account_store,
+            store: current_store,
             accounts: current_accounts,
           }
         else if (tx.fail_execute)
           // Execution error after write -> rollback
           {
             result: { result: Err(ERR_EXECUTION), gas_used: total_gas },
-            store: account_store,
+            store: current_store,
             accounts: current_accounts,
           }
         else
           // Phase 3: Write succeeds -> apply to storage
           val recipient_store =
-            if (account_store.keys().contains(tx.recipient))
-              account_store.get(tx.recipient)
+            if (current_store.keys().contains(tx.recipient))
+              current_store.get(tx.recipient)
             else
               Map()
           val updated_recipient = recipient_store.put(tx.write_key, tx.write_value)
-          val updated_store = account_store.put(tx.recipient, updated_recipient)
+          val updated_store = current_store.put(tx.recipient, updated_recipient)
           {
             result: { result: OK, gas_used: total_gas },
             store: updated_store,
@@ -293,6 +306,40 @@ module stf {
       block_height'         = block.height,
       last_result'          = out.result,
       last_block_tx_count'  = block.txs.length(),
+    }
+
+  /// Driver-friendly block wrapper for `quint_connect`.
+  /// The STF can only execute against accounts with registered code, so this
+  /// wrapper aligns the model with the real runtime by requiring a registered recipient.
+  action apply_registered_block(
+    sender: AccountId,
+    recipient: AccountId,
+    gas_limit: int,
+    block_gas: int,
+    fail_v: bool,
+    fail_e: bool,
+    needs_b: bool,
+    fail_b: bool,
+  ): bool =
+    val tx: Tx = {
+      sender: sender,
+      recipient: recipient,
+      gas_limit: gas_limit,
+      write_key: K1,
+      write_value: V1,
+      fail_validate: fail_v,
+      fail_execute: fail_e,
+      needs_bootstrap: needs_b,
+      fail_bootstrap: fail_b,
+    }
+    all {
+      accounts.contains(recipient),
+      apply_block({
+        height: block_height + 1,
+        time: 0,
+        txs: [tx],
+        gas_limit: block_gas,
+      }),
     }
 
   /// Register an account (e.g., during genesis).
@@ -389,6 +436,24 @@ module stf {
         height: block_height + 1, time: 0,
         txs: [tx], gas_limit: block_gas,
       }),
+      register_account(id),
+    }
+  }
+
+  /// Alternate MBT step for `quint_connect`: keeps the same exploration
+  /// parameters, but only dispatches to runtime-valid block applications.
+  action qc_step = {
+    nondet id = MC_ACCOUNTS.oneOf()
+    nondet sender = MC_ACCOUNTS.oneOf()
+    nondet recipient = MC_ACCOUNTS.oneOf()
+    nondet gas_limit = MC_GAS_LIMITS.oneOf()
+    nondet block_gas = MC_BLOCK_GAS_LIMITS.oneOf()
+    nondet fail_v = Set(true, false).oneOf()
+    nondet fail_e = Set(true, false).oneOf()
+    nondet needs_b = Set(true, false).oneOf()
+    nondet fail_b = Set(true, false).oneOf()
+    any {
+      apply_registered_block(sender, recipient, gas_limit, block_gas, fail_v, fail_e, needs_b, fail_b),
       register_account(id),
     }
   }
@@ -517,26 +582,26 @@ module stf {
   }
 
   /// Test: block gas limit causes transactions to be skipped.
-  /// With Key=[1], Value=[11]: gas_cost = 1*(16+1+1+1+1) = 20 per tx.
-  /// tx1.gas_limit=25, tx2.gas_limit=25. Block gas_limit=30.
-  /// Pre-check: cumulative(0) + tx1.gas_limit(25) = 25 <= 30 -> execute tx1 (uses 20 gas).
-  /// Pre-check: cumulative(20) + tx2.gas_limit(25) = 45 > 30 -> skip tx2.
+  /// With Key=[1], Value=[11]: gas_cost = 1*(32+1+1+1+1) = 36 per tx.
+  /// tx1.gas_limit=40, tx2.gas_limit=40. Block gas_limit=70.
+  /// Pre-check: cumulative(0) + tx1.gas_limit(40) = 40 <= 70 -> execute tx1 (uses 36 gas).
+  /// Pre-check: cumulative(36) + tx2.gas_limit(40) = 76 > 70 -> skip tx2.
   run blockGasLimitTest = {
     val tx1: Tx = {
-      sender: 100, recipient: 100, gas_limit: 25,
+      sender: 100, recipient: 100, gas_limit: 40,
       write_key: K1, write_value: V1,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
     }
     val tx2: Tx = {
-      sender: 100, recipient: 100, gas_limit: 25,
+      sender: 100, recipient: 100, gas_limit: 40,
       write_key: K2, write_value: V2,
       fail_validate: false, fail_execute: false,
       needs_bootstrap: false, fail_bootstrap: false,
     }
     init
       .then(register_account(100))
-      .then(apply_block({ height: 1, time: 0, txs: [tx1, tx2], gas_limit: 30 }))
+      .then(apply_block({ height: 1, time: 0, txs: [tx1, tx2], gas_limit: 70 }))
       .then(all {
         assert(last_result.tx_results.length() == 1),
         assert(last_result.txs_skipped == 1),
@@ -633,8 +698,8 @@ module stf {
       .then(all {
         assert(last_result.tx_results[0].result.ok == false),
         assert(last_result.tx_results[0].result.err_code == ERR_BOOTSTRAP),
-        // Sender should NOT be registered
-        assert(not(accounts.contains(200))),
+        // Registration persists even though init failed.
+        assert(accounts.contains(200)),
         assert(result_completeness),
         stutter,
       })

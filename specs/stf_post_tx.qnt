@@ -58,7 +58,7 @@ module stf_post_tx {
   val MC_ACCOUNTS: Set[AccountId] = Set(100, 101)
 
   val gas_config: GasConfig = { set_charge: 1 }
-  val ACCOUNT_ID_BYTE_SIZE: int = 16
+  val ACCOUNT_ID_BYTE_SIZE: int = 32
 
   pure def write_gas_cost(config: GasConfig, key: Key, value: Value): int =
     config.set_charge * (ACCOUNT_ID_BYTE_SIZE + key.length() + 1 + value.length() + 1)
@@ -148,6 +148,26 @@ module stf_post_tx {
       last_result' = out.result,
     }
 
+  /// Driver-friendly wrapper for MBT: only execute txs against registered accounts.
+  action apply_registered_tx(
+    recipient: AccountId,
+    gas_limit: int,
+    fail_e: bool,
+    reject_pt: bool,
+  ): bool =
+    val tx: Tx = {
+      recipient: recipient,
+      gas_limit: gas_limit,
+      write_key: K1,
+      write_value: V1,
+      fail_execute: fail_e,
+      reject_post_tx: reject_pt,
+    }
+    all {
+      accounts.contains(recipient),
+      apply_txs([tx]),
+    }
+
   action stutter: bool = all {
     storage' = storage,
     accounts' = accounts,
@@ -173,6 +193,19 @@ module stf_post_tx {
     }
     any {
       apply_txs([tx]),
+      register_account(recipient),
+    }
+  }
+
+  /// Alternate MBT step for `quint_connect`: aligns with STF requirement that
+  /// execution targets a registered account code.
+  action qc_step = {
+    nondet recipient = MC_ACCOUNTS.oneOf()
+    nondet gas_limit = Set(1, 100, 10000).oneOf()
+    nondet fail_e = Set(true, false).oneOf()
+    nondet reject_pt = Set(true, false).oneOf()
+    any {
+      apply_registered_tx(recipient, gas_limit, fail_e, reject_pt),
       register_account(recipient),
     }
   }
@@ -219,6 +252,52 @@ module stf_post_tx {
   val V2: Value = [12]
 
   //
+  // === Named test expectation actions ===
+  //
+
+  action expect_post_tx_rejects_but_keeps_state: bool = all {
+    assert(last_result.tx_results.length() == 1),
+    assert(last_result.tx_results[0].result.ok == false),
+    assert(last_result.tx_results[0].result.err_code == ERR_POST_TX),
+    assert(storage.get(100).get(K1) == V1),
+    assert(gas_accounting),
+    stutter,
+  }
+
+  action expect_post_tx_does_not_mask_exec_failure: bool = all {
+    assert(last_result.tx_results.length() == 1),
+    assert(last_result.tx_results[0].result.ok == false),
+    assert(last_result.tx_results[0].result.err_code == ERR_EXECUTION),
+    assert(storage.get(100) == Map()),
+    assert(gas_accounting),
+    stutter,
+  }
+
+  action expect_happy_path: bool = all {
+    assert(last_result.tx_results[0].result.ok == true),
+    assert(storage.get(100).get(K1) == V1),
+    assert(gas_accounting),
+    stutter,
+  }
+
+  action expect_mixed_post_tx: bool = all {
+    assert(last_result.tx_results.length() == 2),
+    assert(last_result.tx_results[0].result.err_code == ERR_POST_TX),
+    assert(storage.get(100).get(K1) == V1),
+    assert(last_result.tx_results[1].result.ok == true),
+    assert(storage.get(100).get(K2) == V2),
+    assert(gas_accounting),
+    stutter,
+  }
+
+  action expect_out_of_gas_ignores_post_tx: bool = all {
+    assert(last_result.tx_results[0].result.err_code == ERR_OUT_OF_GAS),
+    assert(storage.get(100) == Map()),
+    assert(gas_accounting),
+    stutter,
+  }
+
+  //
   // === Tests ===
   //
 
@@ -236,15 +315,7 @@ module stf_post_tx {
     init
       .then(register_account(100))
       .then(apply_txs([tx]))
-      .then(all {
-        assert(last_result.tx_results.length() == 1),
-        assert(last_result.tx_results[0].result.ok == false),
-        assert(last_result.tx_results[0].result.err_code == ERR_POST_TX),
-        // State change persists despite post-tx error
-        assert(storage.get(100).get(K1) == V1),
-        assert(gas_accounting),
-        stutter,
-      })
+      .then(expect_post_tx_rejects_but_keeps_state)
   }
 
   /// Post-tx does not mask execution failure (exec error takes precedence).
@@ -260,16 +331,7 @@ module stf_post_tx {
     init
       .then(register_account(100))
       .then(apply_txs([tx]))
-      .then(all {
-        assert(last_result.tx_results.length() == 1),
-        assert(last_result.tx_results[0].result.ok == false),
-        // Execution error, NOT post-tx error
-        assert(last_result.tx_results[0].result.err_code == ERR_EXECUTION),
-        // No state changes (execution was rolled back)
-        assert(storage.get(100) == Map()),
-        assert(gas_accounting),
-        stutter,
-      })
+      .then(expect_post_tx_does_not_mask_exec_failure)
   }
 
   /// Happy path: no post-tx rejection, execution succeeds.
@@ -285,12 +347,7 @@ module stf_post_tx {
     init
       .then(register_account(100))
       .then(apply_txs([tx]))
-      .then(all {
-        assert(last_result.tx_results[0].result.ok == true),
-        assert(storage.get(100).get(K1) == V1),
-        assert(gas_accounting),
-        stutter,
-      })
+      .then(expect_happy_path)
   }
 
   /// Mixed block: one tx with post-tx rejection, one without.
@@ -314,17 +371,7 @@ module stf_post_tx {
     init
       .then(register_account(100))
       .then(apply_txs([tx_reject, tx_ok]))
-      .then(all {
-        assert(last_result.tx_results.length() == 2),
-        // First tx: post-tx rejected, but state persists
-        assert(last_result.tx_results[0].result.err_code == ERR_POST_TX),
-        assert(storage.get(100).get(K1) == V1),
-        // Second tx: fully succeeds
-        assert(last_result.tx_results[1].result.ok == true),
-        assert(storage.get(100).get(K2) == V2),
-        assert(gas_accounting),
-        stutter,
-      })
+      .then(expect_mixed_post_tx)
   }
 
   /// Out-of-gas: post-tx flag is irrelevant since execution never completes.
@@ -340,11 +387,6 @@ module stf_post_tx {
     init
       .then(register_account(100))
       .then(apply_txs([tx]))
-      .then(all {
-        assert(last_result.tx_results[0].result.err_code == ERR_OUT_OF_GAS),
-        assert(storage.get(100) == Map()),
-        assert(gas_accounting),
-        stutter,
-      })
+      .then(expect_out_of_gas_ignores_post_tx)
   }
 }

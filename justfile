@@ -230,13 +230,15 @@ spec-test-core:
     rm -f specs/traces/*.itf.json
     quint test specs/stf_core.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
     cargo test -p evolve_stf --test quint_conformance
+    cargo test -p evolve_stf --test quint_core_connect
 
-# Run extended STF model specs (currently Quint-only)
+# Run extended STF model specs (ITF + `quint_connect` where available)
 [group('spec')]
 spec-test-extended:
     quint test specs/stf_post_tx.qnt
     quint test specs/stf_post_tx.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
     cargo test -p evolve_stf --test quint_post_tx_conformance
+    cargo test -p evolve_stf --test quint_post_tx_connect
     quint test specs/stf_call_depth.qnt
     quint test specs/stf_call_depth.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
     cargo test -p evolve_stf --test quint_call_depth_conformance

@@ -321,14 +321,14 @@ fn known_test_cases() -> Vec<ConformanceCase> {
             blocks: vec![TestBlock {
                 height: 1,
                 time: 0,
-                gas_limit: 30,
+                gas_limit: 70,
                 txs: vec![
                     make_tx(TxCase {
                         sender: TEST_ACCOUNT,
                         recipient: TEST_ACCOUNT,
                         key: vec![1],
                         value: vec![11],
-                        gas_limit: 25,
+                        gas_limit: 40,
                         fail_validate: false,
                         fail_execute: false,
                         needs_bootstrap: false,
@@ -339,7 +339,7 @@ fn known_test_cases() -> Vec<ConformanceCase> {
                         recipient: TEST_ACCOUNT,
                         key: vec![2],
                         value: vec![12],
-                        gas_limit: 25,
+                        gas_limit: 40,
                         fail_validate: false,
                         fail_execute: false,
                         needs_bootstrap: false,
