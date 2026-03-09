@@ -1,0 +1,18 @@
+[package]
+name = "evolve-p2p"
+version = "0.1.0"
+edition = "2021"
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+commonware-cryptography = { workspace = true }
+commonware-p2p = { workspace = true }
+commonware-utils = { workspace = true }
+
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[lints]
+workspace = true

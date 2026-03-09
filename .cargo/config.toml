@@ -1,0 +1,6 @@
+[env]
+# QMDB 2026.2.0's into_merkleized() (MMR computation) requires >2 MiB of stack
+# when called multiple times on the same database instance. The default Rust test
+# thread stack size is 2 MiB, which is insufficient. Set 16 MiB to give QMDB
+# tests adequate headroom without affecting production code.
+RUST_MIN_STACK = "16777216"
