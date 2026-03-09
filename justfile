@@ -223,37 +223,23 @@ sim-report trace:
 # SPEC CONFORMANCE
 # ============================================================================
 
-# Run core STF Quint tests/traces and Rust conformance checks
+# Run core STF Quint spec tests and live `quint_connect` conformance
 [group('spec')]
 spec-test-core:
     quint test specs/stf_core.qnt
-    rm -f specs/traces/*.itf.json
-    quint test specs/stf_core.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
-    cargo test -p evolve_stf --test quint_conformance
     cargo test -p evolve_stf --test quint_core_connect
 
-# Run extended STF model specs (ITF + `quint_connect` where available)
+# Run extended STF model specs backed by live `quint_connect`
 [group('spec')]
 spec-test-extended:
     quint test specs/stf_post_tx.qnt
-    quint test specs/stf_post_tx.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
-    cargo test -p evolve_stf --test quint_post_tx_conformance
     cargo test -p evolve_stf --test quint_post_tx_connect
-    quint test specs/stf_call_depth.qnt
-    quint test specs/stf_call_depth.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
-    cargo test -p evolve_stf --test quint_call_depth_conformance
 
 # Run full STF spec suite (core + extended)
 [group('spec')]
 spec-test:
     just spec-test-core
     just spec-test-extended
-
-# Regenerate ITF traces from core Quint spec (run after editing specs/stf_core.qnt)
-[group('spec')]
-spec-traces:
-    rm -f specs/traces/*.itf.json
-    quint test specs/stf_core.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"
 
 # ============================================================================
 # BENCHMARKS

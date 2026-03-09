@@ -12,61 +12,6 @@ use evolve_stf_traits::{
     WritableKV,
 };
 use hashbrown::HashMap;
-use serde::de::DeserializeOwned;
-use serde::Deserialize;
-use std::io::BufReader;
-use std::path::Path;
-
-// ---------------------------------------------------------------------------
-// ITF deserialization types
-// ---------------------------------------------------------------------------
-
-#[derive(Deserialize, Clone, Debug)]
-pub struct ItfBigInt {
-    #[serde(rename = "#bigint")]
-    value: String,
-}
-
-impl ItfBigInt {
-    pub fn as_i64(&self) -> i64 {
-        self.value.parse().unwrap()
-    }
-    pub fn as_u64(&self) -> u64 {
-        self.value.parse().unwrap()
-    }
-}
-
-#[derive(Deserialize)]
-pub struct ItfMap<K, V> {
-    #[serde(rename = "#map")]
-    pub entries: Vec<(K, V)>,
-}
-
-#[derive(Deserialize)]
-pub struct ItfBlockResult {
-    pub gas_used: ItfBigInt,
-    pub tx_results: Vec<ItfTxResult>,
-    pub txs_skipped: Option<ItfBigInt>,
-}
-
-#[derive(Deserialize)]
-pub struct ItfTxResult {
-    pub gas_used: ItfBigInt,
-    pub result: ItfResult,
-}
-
-#[derive(Deserialize)]
-pub struct ItfResult {
-    pub ok: bool,
-    pub err_code: ItfBigInt,
-}
-
-// ---------------------------------------------------------------------------
-// Spec error constants (shared across conformance tests)
-// ---------------------------------------------------------------------------
-
-pub const SPEC_ERR_OUT_OF_GAS: i64 = 0x01;
-pub const SPEC_ERR_EXECUTION: i64 = 200;
 
 // ---------------------------------------------------------------------------
 // Shared test message (used by core and post-tx conformance tests)
@@ -82,44 +27,6 @@ pub struct TestMsg {
 impl InvokableMessage for TestMsg {
     const FUNCTION_IDENTIFIER: u64 = 1;
     const FUNCTION_IDENTIFIER_NAME: &'static str = "test_msg";
-}
-
-// ---------------------------------------------------------------------------
-// Trace file utilities
-// ---------------------------------------------------------------------------
-
-pub fn find_single_trace_file(traces_dir: &Path, test_name: &str) -> std::path::PathBuf {
-    let prefix = format!("out_{}_", test_name);
-    let trace_files: Vec<_> = std::fs::read_dir(traces_dir)
-        .unwrap_or_else(|e| {
-            panic!(
-                "Cannot read traces directory {}: {e}. \
-                 Regenerate traces with: quint test specs/stf_*.qnt \
-                 --out-itf \"specs/traces/out_{{test}}_{{seq}}.itf.json\"",
-                traces_dir.display()
-            )
-        })
-        .filter_map(|e| e.ok())
-        .filter(|e| {
-            let name = e.file_name();
-            let name = name.to_string_lossy();
-            name.starts_with(&prefix) && name.ends_with(".itf.json")
-        })
-        .collect();
-
-    assert_eq!(
-        trace_files.len(),
-        1,
-        "{}: expected exactly 1 trace file, found {}",
-        test_name,
-        trace_files.len()
-    );
-    trace_files[0].path()
-}
-
-pub fn read_itf_trace<T: DeserializeOwned>(trace_path: &Path) -> T {
-    let file = std::fs::File::open(trace_path).unwrap();
-    serde_json::from_reader(BufReader::new(file)).unwrap()
 }
 
 // ---------------------------------------------------------------------------
@@ -281,37 +188,4 @@ pub fn extract_account_storage(
         }
     }
     result
-}
-
-pub fn expected_storage_from_itf(
-    itf_storage: &ItfMap<ItfBigInt, ItfMap<Vec<ItfBigInt>, Vec<ItfBigInt>>>,
-    account: AccountId,
-) -> HashMap<Vec<u8>, Vec<u8>> {
-    let mut expected = HashMap::new();
-    for (account_id_itf, account_store_itf) in &itf_storage.entries {
-        if AccountId::from_u64(account_id_itf.as_u64()) != account {
-            continue;
-        }
-        for (key_itf, value_itf) in &account_store_itf.entries {
-            let key: Vec<u8> = key_itf.iter().map(|b| b.as_u64() as u8).collect();
-            let value: Vec<u8> = value_itf.iter().map(|b| b.as_u64() as u8).collect();
-            expected.insert(key, value);
-        }
-    }
-    expected
-}
-
-pub fn assert_storage_matches(
-    storage: &InMemoryStorage,
-    itf_storage: &ItfMap<ItfBigInt, ItfMap<Vec<ItfBigInt>, Vec<ItfBigInt>>>,
-    account: AccountId,
-    test_name: &str,
-) {
-    let expected = expected_storage_from_itf(itf_storage, account);
-    let actual = extract_account_storage(storage, account);
-    assert_eq!(
-        actual, expected,
-        "{}: storage mismatch for account {:?}",
-        test_name, account
-    );
 }
