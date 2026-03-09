@@ -3,6 +3,7 @@ use commonware_consensus::simplex::types::Activity;
 use commonware_consensus::Reporter;
 use commonware_cryptography::certificate::Scheme;
 use commonware_cryptography::sha256::Digest as Sha256Digest;
+use evolve_mempool::{Mempool, MempoolTx, SharedMempool};
 use evolve_stf_traits::Transaction;
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -15,21 +16,24 @@ use crate::block::ConsensusBlock;
 ///
 /// The automaton exposes these via `last_hash()` and `height_atomic()`.
 /// Pass them to the reporter so finalization events update chain linkage.
-pub struct ChainState<Tx: Send + 'static> {
+pub struct ChainState<Tx: MempoolTx + Send + 'static> {
     /// The hash of the most recently finalized block.
     pub last_hash: Arc<TokioRwLock<B256>>,
     /// The current chain height.
     pub height: Arc<AtomicU64>,
     /// Pending blocks cache (shared with automaton).
     pub pending_blocks: Arc<RwLock<BTreeMap<[u8; 32], ConsensusBlock<Tx>>>>,
+    /// Shared mempool to confirm executed transactions and requeue dropped ones.
+    pub mempool: SharedMempool<Mempool<Tx>>,
 }
 
-impl<Tx: Send + 'static> Clone for ChainState<Tx> {
+impl<Tx: MempoolTx + Send + 'static> Clone for ChainState<Tx> {
     fn clone(&self) -> Self {
         Self {
             last_hash: self.last_hash.clone(),
             height: self.height.clone(),
             pending_blocks: self.pending_blocks.clone(),
+            mempool: self.mempool.clone(),
         }
     }
 }
@@ -43,12 +47,12 @@ impl<Tx: Send + 'static> Clone for ChainState<Tx> {
 /// In production, the marshal sits between simplex and this reporter,
 /// delivering ordered `Update<B>` events. For direct (non-marshal) usage,
 /// this reporter receives raw `Activity<S, D>` events.
-pub struct EvolveReporter<A, Tx: Send + 'static = Vec<u8>> {
+pub struct EvolveReporter<A, Tx: MempoolTx + Send + 'static> {
     chain_state: Option<ChainState<Tx>>,
     _phantom: std::marker::PhantomData<fn() -> A>,
 }
 
-impl<A, Tx: Send + 'static> Clone for EvolveReporter<A, Tx> {
+impl<A, Tx: MempoolTx + Send + 'static> Clone for EvolveReporter<A, Tx> {
     fn clone(&self) -> Self {
         Self {
             chain_state: self.chain_state.clone(),
@@ -57,7 +61,7 @@ impl<A, Tx: Send + 'static> Clone for EvolveReporter<A, Tx> {
     }
 }
 
-impl<A, Tx: Send + 'static> EvolveReporter<A, Tx> {
+impl<A, Tx: MempoolTx + Send + 'static> EvolveReporter<A, Tx> {
     /// Create a reporter without chain state (logging only).
     pub fn new() -> Self {
         Self {
@@ -75,7 +79,7 @@ impl<A, Tx: Send + 'static> EvolveReporter<A, Tx> {
     }
 }
 
-impl<A, Tx: Send + 'static> Default for EvolveReporter<A, Tx> {
+impl<A, Tx: MempoolTx + Send + 'static> Default for EvolveReporter<A, Tx> {
     fn default() -> Self {
         Self::new()
     }
@@ -84,7 +88,7 @@ impl<A, Tx: Send + 'static> Default for EvolveReporter<A, Tx> {
 impl<S, Tx> Reporter for EvolveReporter<Activity<S, Sha256Digest>, Tx>
 where
     S: Scheme + Clone + Send + 'static,
-    Tx: Clone + Transaction + Send + Sync + 'static,
+    Tx: Clone + Transaction + MempoolTx + Send + Sync + 'static,
 {
     type Activity = Activity<S, Sha256Digest>;
 
@@ -122,6 +126,17 @@ where
         };
 
         let finalized_hash = block.block_hash();
+        let executed: Vec<_> = block
+            .inner
+            .transactions
+            .iter()
+            .map(|tx| tx.tx_id())
+            .collect();
+        if !executed.is_empty() {
+            let mut mempool = state.mempool.write().await;
+            mempool.finalize(&executed);
+        }
+
         *state.last_hash.write().await = finalized_hash;
         state.height.fetch_max(
             block.inner.header.number.saturating_add(1),
@@ -147,6 +162,7 @@ mod tests {
     use commonware_parallel::Sequential;
     use commonware_utils::ordered::Set;
     use evolve_core::{AccountId, FungibleAsset, InvokeRequest, Message};
+    use evolve_mempool::{new_shared_mempool, FifoOrdering};
     use evolve_server::{Block, BlockHeader};
     use std::sync::Arc;
 
@@ -169,11 +185,11 @@ mod tests {
 
     impl Transaction for TestTx {
         fn sender(&self) -> AccountId {
-            AccountId::new(1)
+            AccountId::from_u64(1)
         }
 
         fn recipient(&self) -> AccountId {
-            AccountId::new(2)
+            AccountId::from_u64(2)
         }
 
         fn request(&self) -> &InvokeRequest {
@@ -190,6 +206,22 @@ mod tests {
 
         fn compute_identifier(&self) -> [u8; 32] {
             self.id
+        }
+    }
+
+    impl MempoolTx for TestTx {
+        type OrderingKey = FifoOrdering;
+
+        fn tx_id(&self) -> [u8; 32] {
+            self.id
+        }
+
+        fn ordering_key(&self) -> Self::OrderingKey {
+            FifoOrdering::new(u64::from(self.id[0]))
+        }
+
+        fn gas_limit(&self) -> u64 {
+            Transaction::gas_limit(self)
         }
     }
 
@@ -223,6 +255,7 @@ mod tests {
         let pending_blocks = Arc::new(RwLock::new(
             BTreeMap::<[u8; 32], ConsensusBlock<TestTx>>::new(),
         ));
+        let mempool = new_shared_mempool::<TestTx>();
 
         let block = Block::new(
             BlockHeader::new(1, 1_000, B256::ZERO),
@@ -240,6 +273,7 @@ mod tests {
             last_hash: last_hash.clone(),
             height: height.clone(),
             pending_blocks: pending_blocks.clone(),
+            mempool,
         };
         let mut reporter =
             EvolveReporter::<Activity<ed25519::Scheme, Sha256Digest>, TestTx>::with_chain_state(
@@ -266,11 +300,13 @@ mod tests {
         let pending_blocks = Arc::new(RwLock::new(
             BTreeMap::<[u8; 32], ConsensusBlock<TestTx>>::new(),
         ));
+        let mempool = new_shared_mempool::<TestTx>();
 
         let chain_state = ChainState {
             last_hash: last_hash.clone(),
             height: height.clone(),
             pending_blocks: pending_blocks.clone(),
+            mempool,
         };
         let mut reporter =
             EvolveReporter::<Activity<ed25519::Scheme, Sha256Digest>, TestTx>::with_chain_state(
@@ -300,11 +336,13 @@ mod tests {
         let pending_blocks = Arc::new(RwLock::new(
             BTreeMap::<[u8; 32], ConsensusBlock<TestTx>>::new(),
         ));
+        let mempool = new_shared_mempool::<TestTx>();
 
         let chain_state = ChainState {
             last_hash: last_hash.clone(),
             height: height.clone(),
             pending_blocks: pending_blocks.clone(),
+            mempool,
         };
         let mut reporter =
             EvolveReporter::<Activity<ed25519::Scheme, Sha256Digest>, TestTx>::with_chain_state(
@@ -322,5 +360,53 @@ mod tests {
         assert_eq!(*last_hash.read().await, B256::repeat_byte(0xBB));
         assert_eq!(height.load(Ordering::SeqCst), 7);
         assert!(pending_blocks.read().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn finalization_confirms_transactions_in_mempool() {
+        let last_hash = Arc::new(TokioRwLock::new(B256::ZERO));
+        let height = Arc::new(AtomicU64::new(1));
+        let pending_blocks = Arc::new(RwLock::new(
+            BTreeMap::<[u8; 32], ConsensusBlock<TestTx>>::new(),
+        ));
+        let mempool = new_shared_mempool::<TestTx>();
+        let tx = TestTx::new([0x11; 32]);
+        mempool
+            .write()
+            .await
+            .add(tx.clone())
+            .expect("tx should enter mempool");
+        let proposed = mempool.write().await.propose(0, 1).0;
+        assert_eq!(proposed.len(), 1, "proposal should pull the test tx");
+
+        let block = Block::new(BlockHeader::new(1, 1_000, B256::ZERO), vec![tx.clone()]);
+        let consensus_block = ConsensusBlock::new(block);
+        let digest = consensus_block.digest_value();
+        pending_blocks
+            .write()
+            .unwrap()
+            .insert(consensus_block.digest_value().0, consensus_block);
+
+        let chain_state = ChainState {
+            last_hash,
+            height,
+            pending_blocks,
+            mempool: mempool.clone(),
+        };
+        let mut reporter =
+            EvolveReporter::<Activity<ed25519::Scheme, Sha256Digest>, TestTx>::with_chain_state(
+                chain_state,
+            );
+
+        let scheme = test_scheme();
+        reporter
+            .report(finalization_activity_for_digest(&scheme, digest))
+            .await;
+
+        let pool = mempool.read().await;
+        assert!(
+            !pool.contains(&tx.tx_id()),
+            "finalized transactions should be removed from the mempool"
+        );
     }
 }

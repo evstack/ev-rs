@@ -1,9 +1,10 @@
 use crate::block::ConsensusBlock;
 use crate::config::ConsensusConfig;
 use alloy_primitives::B256;
+use commonware_consensus::simplex::types::Context as SimplexContext;
 use commonware_consensus::types::Epoch;
 use commonware_consensus::{Automaton, CertifiableAutomaton};
-use commonware_cryptography::{Hasher, Sha256};
+use commonware_cryptography::{Hasher, PublicKey, Sha256};
 use commonware_utils::channel::oneshot;
 use evolve_core::ReadonlyKV;
 use evolve_mempool::{Mempool, MempoolTx, SharedMempool};
@@ -15,6 +16,19 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use tokio::sync::RwLock as TokioRwLock;
+
+trait ProposalContext {
+    fn parent_digest(&self) -> commonware_cryptography::sha256::Digest;
+}
+
+impl<P> ProposalContext for SimplexContext<commonware_cryptography::sha256::Digest, P>
+where
+    P: PublicKey,
+{
+    fn parent_digest(&self) -> commonware_cryptography::sha256::Digest {
+        self.parent.1
+    }
+}
 
 /// EvolveAutomaton bridges Evolve's STF and mempool with commonware's consensus.
 ///
@@ -122,7 +136,7 @@ where
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + Clone + 'static,
-    Ctx: Clone + Send + 'static,
+    Ctx: ProposalContext + Clone + Send + 'static,
 {
     type Context = Ctx;
     type Digest = commonware_cryptography::sha256::Digest;
@@ -145,6 +159,7 @@ where
 
         // Store genesis in pending blocks.
         self.pending_blocks.write().unwrap().insert(digest.0, cb);
+        *self.last_hash.write().await = digest_to_hash(digest);
 
         digest
     }
@@ -152,21 +167,21 @@ where
     // SystemTime::now() is used here for block timestamps only. This is acceptable
     // in a consensus proposer context — the timestamp is validated by verifiers.
     #[allow(clippy::disallowed_types)]
-    async fn propose(&mut self, _context: Self::Context) -> oneshot::Receiver<Self::Digest> {
+    async fn propose(&mut self, context: Self::Context) -> oneshot::Receiver<Self::Digest> {
         let (sender, receiver) = oneshot::channel();
 
         let height = self.height.clone();
-        let last_hash = self.last_hash.clone();
         let gas_limit = self.config.gas_limit;
         let mempool = self.mempool.clone();
         let pending_blocks = self.pending_blocks.clone();
+        let parent_hash = digest_to_hash(context.parent_digest());
 
         // Spawn block building onto a background task.
         tokio::spawn(async move {
             // Pull transactions from mempool.
             let selected = {
                 let mut pool = mempool.write().await;
-                pool.select(1000) // max txs per block
+                pool.propose(gas_limit, 1000).0
             };
 
             let transactions: Vec<Tx> = selected
@@ -179,8 +194,6 @@ where
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
-
-            let parent_hash = *last_hash.read().await;
 
             // Build first, then consume the height counter so a failed build
             // cannot permanently skip a height.
@@ -212,13 +225,13 @@ where
 
     async fn verify(
         &mut self,
-        _context: Self::Context,
+        context: Self::Context,
         payload: Self::Digest,
     ) -> oneshot::Receiver<bool> {
         let (sender, receiver) = oneshot::channel();
 
         let pending_blocks = self.pending_blocks.clone();
-        let last_hash = self.last_hash.clone();
+        let expected_parent = digest_to_hash(context.parent_digest());
 
         tokio::spawn(async move {
             // Look up the block by digest.
@@ -237,7 +250,6 @@ where
             };
 
             // Validate parent hash chain.
-            let expected_parent = *last_hash.read().await;
             if block.inner.header.parent_hash != expected_parent {
                 tracing::warn!(
                     expected = ?expected_parent,
@@ -271,13 +283,17 @@ fn compute_transactions_root<Tx: Transaction>(transactions: &[Tx]) -> B256 {
     B256::from_slice(&hasher.finalize().0)
 }
 
+fn digest_to_hash(digest: commonware_cryptography::sha256::Digest) -> B256 {
+    B256::from_slice(&digest.0)
+}
+
 impl<Stf, S, Codes, Tx, Ctx> CertifiableAutomaton for EvolveAutomaton<Stf, S, Codes, Tx, Ctx>
 where
     Tx: Transaction + MempoolTx + Clone + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Clone + Send + Sync + 'static,
     Stf: StfExecutor<Tx, S, Codes> + Send + Sync + Clone + 'static,
-    Ctx: Clone + Send + 'static,
+    Ctx: ProposalContext + Clone + Send + 'static,
 {
     // Use the default implementation which always certifies.
 }

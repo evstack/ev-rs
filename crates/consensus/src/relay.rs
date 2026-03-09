@@ -1,23 +1,96 @@
 use crate::block::ConsensusBlock;
 use commonware_consensus::Relay;
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
+
+type BlockStore<Tx> = Arc<RwLock<BTreeMap<[u8; 32], ConsensusBlock<Tx>>>>;
+type BlockStoreWeak<Tx> = Weak<RwLock<BTreeMap<[u8; 32], ConsensusBlock<Tx>>>>;
+
+/// Shared in-memory fanout used by [`EvolveRelay`] instances in the same test/process.
+///
+/// Each validator should be constructed with the same network handle so `broadcast()`
+/// can copy the full block into every peer's pending-block store.
+#[derive(Debug)]
+pub struct InMemoryRelayNetwork<Tx> {
+    peers: Mutex<Vec<BlockStoreWeak<Tx>>>,
+}
+
+impl<Tx> InMemoryRelayNetwork<Tx> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn register(&self, blocks: &BlockStore<Tx>) {
+        let mut peers = self
+            .peers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        peers.retain(|peer| peer.strong_count() > 0);
+
+        let already_registered = peers.iter().any(|peer| {
+            peer.upgrade()
+                .is_some_and(|registered| Arc::ptr_eq(&registered, blocks))
+        });
+        if !already_registered {
+            peers.push(Arc::downgrade(blocks));
+        }
+    }
+
+    fn fanout(&self, source: &BlockStore<Tx>, block: &ConsensusBlock<Tx>) -> usize
+    where
+        Tx: Clone,
+    {
+        let digest = block.digest_value().0;
+        let mut delivered = 0;
+        let mut peers = self
+            .peers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner());
+        peers.retain(|peer| {
+            let Some(store) = peer.upgrade() else {
+                return false;
+            };
+            if Arc::ptr_eq(&store, source) {
+                return true;
+            }
+            store
+                .write()
+                .unwrap_or_else(|poison| {
+                    tracing::warn!("relay: recovered from poisoned write lock");
+                    poison.into_inner()
+                })
+                .insert(digest, block.clone());
+            delivered += 1;
+            true
+        });
+        delivered
+    }
+}
+
+impl<Tx> Default for InMemoryRelayNetwork<Tx> {
+    fn default() -> Self {
+        Self {
+            peers: Mutex::new(Vec::new()),
+        }
+    }
+}
 
 /// A local in-memory relay for block broadcast.
 ///
 /// Stores proposed blocks so that other participants (or the local verifier)
-/// can look them up by digest. In production, this would broadcast full blocks
-/// over the P2P network. For now, it serves as a shared cache between the
-/// automaton (proposer) and verifier.
+/// can look them up by digest. Validators that should exchange proposals must
+/// share the same [`InMemoryRelayNetwork`].
 #[derive(Clone)]
 pub struct EvolveRelay<Tx> {
     /// Shared storage of blocks indexed by their digest.
-    blocks: Arc<RwLock<BTreeMap<[u8; 32], ConsensusBlock<Tx>>>>,
+    blocks: BlockStore<Tx>,
+    network: Arc<InMemoryRelayNetwork<Tx>>,
 }
 
 impl<Tx> EvolveRelay<Tx> {
-    pub fn new(blocks: Arc<RwLock<BTreeMap<[u8; 32], ConsensusBlock<Tx>>>>) -> Self {
-        Self { blocks }
+    pub fn new(network: Arc<InMemoryRelayNetwork<Tx>>, blocks: BlockStore<Tx>) -> Self {
+        network.register(&blocks);
+        Self { blocks, network }
     }
 
     /// Retrieve a block by its digest.
@@ -58,12 +131,20 @@ where
     type Digest = commonware_cryptography::sha256::Digest;
 
     async fn broadcast(&mut self, payload: Self::Digest) {
-        // In production, this would broadcast the full block to all peers.
-        // For now, the block is already stored in the shared pending_blocks map
-        // by the automaton's propose() method. We just log the broadcast.
+        let block = self.get_block(&payload.0);
+        let Some(block) = block else {
+            tracing::warn!(
+                digest = ?payload,
+                "relay: cannot broadcast missing block"
+            );
+            return;
+        };
+
+        let recipients = self.network.fanout(&self.blocks, &block);
         tracing::debug!(
             digest = ?payload,
-            "relay: broadcasting block digest (local relay, no-op)"
+            recipients,
+            "relay: broadcast block to registered peers"
         );
     }
 }
@@ -96,11 +177,11 @@ mod tests {
 
     impl Transaction for TestTx {
         fn sender(&self) -> AccountId {
-            AccountId::new(1)
+            AccountId::from_u64(1)
         }
 
         fn recipient(&self) -> AccountId {
-            AccountId::new(2)
+            AccountId::from_u64(2)
         }
 
         fn request(&self) -> &InvokeRequest {
@@ -122,8 +203,9 @@ mod tests {
 
     #[test]
     fn insert_and_get_block_by_digest() {
+        let network = Arc::new(InMemoryRelayNetwork::new());
         let store = Arc::new(RwLock::new(BTreeMap::new()));
-        let relay = EvolveRelay::new(store);
+        let relay = EvolveRelay::new(network, store);
         let block = evolve_server::Block::new(
             evolve_server::BlockHeader::new(1, 100, B256::ZERO),
             vec![TestTx::new([7u8; 32])],
@@ -136,5 +218,29 @@ mod tests {
         let fetched = relay.get_block(&digest).expect("block should exist");
         assert_eq!(fetched.digest_value(), consensus_block.digest_value());
         assert_eq!(fetched.inner.header.number, 1);
+    }
+
+    #[tokio::test]
+    async fn broadcast_copies_block_to_other_registered_relays() {
+        let network = Arc::new(InMemoryRelayNetwork::new());
+        let store_a = Arc::new(RwLock::new(BTreeMap::new()));
+        let store_b = Arc::new(RwLock::new(BTreeMap::new()));
+        let mut relay_a = EvolveRelay::new(network.clone(), store_a);
+        let relay_b = EvolveRelay::new(network, store_b);
+
+        let block = evolve_server::Block::new(
+            evolve_server::BlockHeader::new(1, 100, B256::ZERO),
+            vec![TestTx::new([9u8; 32])],
+        );
+        let consensus_block = ConsensusBlock::new(block);
+        let digest = consensus_block.digest_value();
+        relay_a.insert_block(consensus_block.clone());
+
+        relay_a.broadcast(digest).await;
+
+        let fetched = relay_b
+            .get_block(&digest.0)
+            .expect("peer relay should receive the broadcast block");
+        assert_eq!(fetched.digest_value(), consensus_block.digest_value());
     }
 }

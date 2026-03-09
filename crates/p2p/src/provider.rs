@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, RwLock};
 
 /// Convenience alias for the subscriber notification payload.
 ///
-/// `(epoch_id, new_peer_set, all_tracked_peers)`
+/// `(published_id, new_peer_set, all_tracked_peers)`
 type Notification = (u64, Set<ed25519::PublicKey>, Set<ed25519::PublicKey>);
 const SUBSCRIBER_CHANNEL_CAPACITY: usize = 64;
 
@@ -21,18 +21,25 @@ const SUBSCRIBER_CHANNEL_CAPACITY: usize = 64;
 struct ProviderState {
     /// Peer sets indexed by epoch. BTreeMap for deterministic iteration.
     peer_sets: BTreeMap<u64, Set<ed25519::PublicKey>>,
+    /// Latest synthetic snapshot published to subscribers when no real epoch ID
+    /// can carry the update (for example after pruning old epochs).
+    synthetic_snapshot: Option<(u64, Set<ed25519::PublicKey>)>,
     /// Active subscriber channels. Dead senders are pruned on each notify.
     subscribers: Vec<mpsc::Sender<Notification>>,
     /// Union of all currently tracked peer sets.
     all_peers: Set<ed25519::PublicKey>,
+    /// Last published notification ID.
+    last_notification_id: Option<u64>,
 }
 
 impl ProviderState {
     fn new() -> Self {
         Self {
             peer_sets: BTreeMap::new(),
+            synthetic_snapshot: None,
             subscribers: Vec::new(),
             all_peers: Set::default(),
+            last_notification_id: None,
         }
     }
 
@@ -45,21 +52,50 @@ impl ProviderState {
         self.all_peers = Set::from_iter_dedup(all_peers);
     }
 
+    fn latest_snapshot(&self) -> Option<Notification> {
+        self.synthetic_snapshot
+            .as_ref()
+            .map(|(id, peers)| (*id, peers.clone(), self.all_peers.clone()))
+            .or_else(|| {
+                self.peer_sets
+                    .iter()
+                    .next_back()
+                    .map(|(id, peers)| (*id, peers.clone(), self.all_peers.clone()))
+            })
+    }
+
+    fn publish_notification(
+        &mut self,
+        preferred_id: u64,
+        peers: Set<ed25519::PublicKey>,
+    ) -> Notification {
+        let id = match self.last_notification_id {
+            Some(last) if preferred_id <= last => last.saturating_add(1),
+            _ => preferred_id,
+        };
+        self.last_notification_id = Some(id);
+        self.synthetic_snapshot = if self.peer_sets.contains_key(&id) {
+            None
+        } else {
+            Some((id, peers.clone()))
+        };
+        (id, peers, self.all_peers.clone())
+    }
+
     /// Notify live subscribers and prune dead channels.
-    fn notify(&mut self, epoch: u64, peers: Set<ed25519::PublicKey>) {
-        self.subscribers.retain(|tx| {
-            match tx.try_send((epoch, peers.clone(), self.all_peers.clone())) {
+    fn notify(&mut self, notification: Notification) {
+        self.subscribers
+            .retain(|tx| match tx.try_send(notification.clone()) {
                 Ok(()) => true,
                 Err(mpsc::error::TrySendError::Full(_)) => {
                     tracing::warn!(
-                        epoch,
+                        peer_set_id = notification.0,
                         "provider: dropping peer-set notification for slow subscriber"
                     );
                     true
                 }
                 Err(mpsc::error::TrySendError::Closed(_)) => false,
-            }
-        });
+            });
     }
 }
 
@@ -94,8 +130,9 @@ impl EpochPeerProvider {
     /// Register a peer set for the given epoch and notify all subscribers.
     ///
     /// If a peer set for `epoch` already exists it is replaced. Subscribers
-    /// receive the new set and the updated union of all tracked peers. Dead
-    /// subscriber channels are pruned automatically.
+    /// receive the new set and the updated union of all tracked peers. The
+    /// notification ID is monotonic and may be newer than `epoch` when a
+    /// previous prune already published a synthetic snapshot.
     ///
     /// # Note
     ///
@@ -106,27 +143,32 @@ impl EpochPeerProvider {
         let mut state = self.inner.write().await;
         state.peer_sets.insert(epoch, peers.clone());
         state.recompute_all_peers();
+        let notification = state.publish_notification(epoch, peers);
 
-        state.notify(epoch, peers);
+        state.notify(notification);
     }
 
     /// Remove all epoch entries older than `min_epoch`.
     ///
     /// Recomputes `all_peers` from the remaining sets and notifies subscribers
-    /// with the highest retained epoch's peer set (if one exists).
+    /// with a fresh, monotonic snapshot ID so consumers observe the prune even
+    /// when the highest retained epoch does not change.
     pub async fn retain_epochs(&self, min_epoch: u64) {
         let mut state = self.inner.write().await;
         state.peer_sets.retain(|&e, _| e >= min_epoch);
         state.recompute_all_peers();
-
-        if let Some((epoch, peers)) = state
+        let notification = if let Some((epoch, peers)) = state
             .peer_sets
             .iter()
             .next_back()
             .map(|(e, p)| (*e, p.clone()))
         {
-            state.notify(epoch, peers);
-        }
+            state.publish_notification(epoch, peers)
+        } else {
+            state.publish_notification(min_epoch, Set::default())
+        };
+
+        state.notify(notification);
     }
 }
 
@@ -144,7 +186,15 @@ impl Provider for EpochPeerProvider {
         id: u64,
     ) -> impl std::future::Future<Output = Option<Set<Self::PublicKey>>> + Send {
         let inner = self.inner.clone();
-        async move { inner.read().await.peer_sets.get(&id).cloned() }
+        async move {
+            let state = inner.read().await;
+            state
+                .synthetic_snapshot
+                .as_ref()
+                .filter(|(snapshot_id, _)| *snapshot_id == id)
+                .map(|(_, peers)| peers.clone())
+                .or_else(|| state.peer_sets.get(&id).cloned())
+        }
     }
 
     fn subscribe(
@@ -156,8 +206,16 @@ impl Provider for EpochPeerProvider {
         async move {
             let (bounded_tx, mut bounded_rx) = mpsc::channel(SUBSCRIBER_CHANNEL_CAPACITY);
             let (unbounded_tx, unbounded_rx) = mpsc::unbounded_channel();
+            let snapshot = {
+                let mut state = inner.write().await;
+                let snapshot = state.latest_snapshot();
+                state.subscribers.push(bounded_tx.clone());
+                snapshot
+            };
 
-            inner.write().await.subscribers.push(bounded_tx);
+            if let Some(notification) = snapshot {
+                let _ = bounded_tx.try_send(notification);
+            }
 
             tokio::spawn(async move {
                 while let Some(notification) = bounded_rx.recv().await {
@@ -229,6 +287,20 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn subscriber_receives_latest_snapshot_immediately() {
+        let provider = EpochPeerProvider::new();
+        provider.update_epoch(2, peer_set(&[2, 3])).await;
+
+        let mut subscriber = provider.clone();
+        let mut rx = subscriber.subscribe().await;
+
+        let (epoch, new_set, all) = rx.recv().await.expect("snapshot expected");
+        assert_eq!(epoch, 2);
+        assert_eq!(new_set, peer_set(&[2, 3]));
+        assert_eq!(all, peer_set(&[2, 3]));
+    }
+
+    #[tokio::test]
     async fn all_peers_is_union_of_tracked_sets() {
         let provider = EpochPeerProvider::new();
         let mut subscriber = provider.clone();
@@ -282,21 +354,24 @@ mod tests {
         provider.retain_epochs(1).await;
         let (epoch, retained_set, retained_all) =
             rx.recv().await.expect("retain notification expected");
-        assert_eq!(epoch, 2);
+        assert_eq!(epoch, 3);
         assert_eq!(retained_set, peer_set(&[4]));
         assert_eq!(retained_all.len(), 2);
         assert!(has_key(&retained_all, &make_key(3)));
         assert!(has_key(&retained_all, &make_key(4)));
+        assert_eq!(provider.peer_set(epoch).await, Some(peer_set(&[4])));
         assert!(provider.peer_set(0).await.is_none());
         assert!(provider.peer_set(1).await.is_some());
         assert!(provider.peer_set(2).await.is_some());
 
         provider.update_epoch(3, peer_set(&[5])).await;
-        let (_, _, all) = rx.recv().await.expect("notification expected");
+        let (epoch, _, all) = rx.recv().await.expect("notification expected");
+        assert_eq!(epoch, 4);
         assert_eq!(all.len(), 3);
         assert!(has_key(&all, &make_key(3)));
         assert!(has_key(&all, &make_key(4)));
         assert!(has_key(&all, &make_key(5)));
+        assert_eq!(provider.peer_set(epoch).await, Some(peer_set(&[5])));
         assert!(!has_key(&all, &make_key(1)));
         assert!(!has_key(&all, &make_key(2)));
     }
@@ -313,18 +388,26 @@ mod tests {
         let _ = rx.recv().await;
 
         provider.retain_epochs(0).await;
-        let _ = rx.recv().await;
+        let (epoch, latest_set, all) = rx.recv().await.expect("retain notification expected");
+        assert_eq!(epoch, 6);
+        assert_eq!(latest_set, peer_set(&[5]));
+        assert_eq!(all, peer_set(&[1, 5]));
 
         provider.retain_epochs(6).await;
+        let (epoch, new_set, all) = rx.recv().await.expect("empty notification expected");
+        assert_eq!(epoch, 7);
+        assert!(new_set.is_empty());
+        assert!(all.is_empty());
         assert!(provider.peer_set(1).await.is_none());
         assert!(provider.peer_set(5).await.is_none());
 
         provider.update_epoch(6, peer_set(&[6])).await;
         let (epoch, new_set, all) = rx.recv().await.expect("notification expected");
-        assert_eq!(epoch, 6);
+        assert_eq!(epoch, 8);
         assert_eq!(new_set, peer_set(&[6]));
         assert_eq!(all.len(), 1);
         assert!(has_key(&all, &make_key(6)));
+        assert_eq!(provider.peer_set(epoch).await, Some(peer_set(&[6])));
     }
 
     #[tokio::test]

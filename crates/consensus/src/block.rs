@@ -226,11 +226,11 @@ mod tests {
 
     impl Transaction for TestTx {
         fn sender(&self) -> AccountId {
-            AccountId::new(1)
+            AccountId::from_u64(1)
         }
 
         fn recipient(&self) -> AccountId {
-            AccountId::new(2)
+            AccountId::from_u64(2)
         }
 
         fn request(&self) -> &InvokeRequest {
