@@ -13,6 +13,7 @@ const EOA_ADDR_TO_ID_PREFIX: &[u8] = b"registry/eoa/eth/a2i/";
 const EOA_ID_TO_ADDR_PREFIX: &[u8] = b"registry/eoa/eth/i2a/";
 const CONTRACT_ADDR_TO_ID_PREFIX: &[u8] = b"registry/contract/runtime/a2i/";
 const CONTRACT_ID_TO_ADDR_PREFIX: &[u8] = b"registry/contract/runtime/i2a/";
+/// Code identifier for Ethereum externally owned accounts.
 pub const ETH_EOA_CODE_ID: &str = "EthEoaAccount";
 
 fn addr_to_id_key(address: Address) -> Vec<u8> {

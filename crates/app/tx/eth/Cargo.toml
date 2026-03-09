@@ -10,6 +10,7 @@ description = "Ethereum-compatible transaction types for Evolve"
 [features]
 default = []
 error-decode = ["linkme", "evolve_core/error-decode"]
+testing = ["dep:k256"]
 
 [dependencies]
 evolve_core = { workspace = true }
@@ -33,6 +34,9 @@ rayon = "1.10"
 # Hashing
 sha2 = { workspace = true }
 sha3 = { workspace = true }
+
+# Testing utilities (optional)
+k256 = { version = "0.13", features = ["ecdsa"], optional = true }
 
 [dev-dependencies]
 # For testing with real signatures

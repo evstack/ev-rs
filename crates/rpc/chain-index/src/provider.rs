@@ -102,6 +102,9 @@ impl IngressVerifier {
     }
 }
 
+/// Default protocol version reported by the RPC server.
+pub const DEFAULT_PROTOCOL_VERSION: &str = "0x1";
+
 /// State provider configuration.
 #[derive(Debug, Clone)]
 pub struct ChainStateProviderConfig {
@@ -850,6 +853,8 @@ mod tests {
             s: U256::from(2u64),
             tx_type: 0,
             chain_id: Some(1),
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
         }
     }
 
@@ -868,6 +873,7 @@ mod tests {
             to: Some(Address::repeat_byte(0x42)),
             cumulative_gas_used: 21_000,
             gas_used: 21_000,
+            effective_gas_price: U256::from(1u64),
             contract_address: None,
             logs: vec![],
             status: 1,

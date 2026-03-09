@@ -3,12 +3,15 @@
 //! This module provides utilities to bridge the STF execution output with the
 //! chain indexer, converting blocks, transactions, and events into storable formats.
 
-use alloy_primitives::{Address, Bytes, B256, U256};
+use std::any::Any;
+
+use alloy_primitives::{keccak256, Address, Bytes, B256, U256};
 use evolve_core::events_api::Event;
 use evolve_core::AccountId;
 use evolve_rpc_types::account_id_to_address;
 use evolve_stf::results::{BlockResult, TxResult};
 use evolve_stf_traits::{Block, Transaction};
+use evolve_tx_eth::{TxContext, TxEnvelope};
 use sha2::{Digest, Sha256};
 
 use crate::types::{StoredBlock, StoredLog, StoredReceipt, StoredTransaction};
@@ -79,6 +82,73 @@ impl BlockMetadata {
     }
 }
 
+#[derive(Debug, Clone)]
+struct EthereumIndexedTransaction {
+    value: U256,
+    gas_price: U256,
+    input: Bytes,
+    nonce: u64,
+    v: u64,
+    r: U256,
+    s: U256,
+    tx_type: u8,
+    chain_id: Option<u64>,
+    max_fee_per_gas: Option<U256>,
+    max_priority_fee_per_gas: Option<U256>,
+}
+
+fn legacy_signature_v(y_parity: bool, chain_id: Option<u64>) -> u64 {
+    match chain_id {
+        Some(chain_id) => 35u64
+            .saturating_add(chain_id.saturating_mul(2))
+            .saturating_add(u64::from(y_parity)),
+        None => 27 + u64::from(y_parity),
+    }
+}
+
+fn ethereum_tx_fields<Tx: Transaction + Any>(tx: &Tx) -> Option<EthereumIndexedTransaction> {
+    let tx = (tx as &dyn Any).downcast_ref::<TxContext>()?;
+    let gas_price = U256::from(tx.effective_gas_price());
+
+    Some(match tx.envelope()? {
+        TxEnvelope::Legacy(legacy) => {
+            let signature = legacy.signature();
+            let chain_id = legacy.tx().chain_id;
+
+            EthereumIndexedTransaction {
+                value: legacy.tx().value,
+                gas_price,
+                input: Bytes::copy_from_slice(legacy.tx().input.as_ref()),
+                nonce: legacy.tx().nonce,
+                v: legacy_signature_v(signature.v(), chain_id),
+                r: signature.r(),
+                s: signature.s(),
+                tx_type: 0,
+                chain_id,
+                max_fee_per_gas: None,
+                max_priority_fee_per_gas: None,
+            }
+        }
+        TxEnvelope::Eip1559(eip1559) => {
+            let signature = eip1559.signature();
+
+            EthereumIndexedTransaction {
+                value: eip1559.tx().value,
+                gas_price,
+                input: Bytes::copy_from_slice(eip1559.tx().input.as_ref()),
+                nonce: eip1559.tx().nonce,
+                v: u64::from(signature.v()),
+                r: signature.r(),
+                s: signature.s(),
+                tx_type: 2,
+                chain_id: Some(eip1559.tx().chain_id),
+                max_fee_per_gas: Some(U256::from(eip1559.tx().max_fee_per_gas)),
+                max_priority_fee_per_gas: Some(U256::from(eip1559.tx().max_priority_fee_per_gas)),
+            }
+        }
+    })
+}
+
 /// Convert an STF Event to a StoredLog.
 ///
 /// Events in the Evolve system have:
@@ -90,12 +160,7 @@ pub fn event_to_stored_log(event: &Event) -> StoredLog {
     let address = account_id_to_address(event.source);
 
     // Create topic[0] from event name hash
-    let name_hash = {
-        let mut hasher = Sha256::new();
-        hasher.update(event.name.as_bytes());
-        let result = hasher.finalize();
-        B256::from_slice(&result)
-    };
+    let name_hash = keccak256(event.name.as_bytes());
 
     // Event contents become the data
     let data = Bytes::from(event.contents.as_vec().unwrap_or_default());
@@ -118,7 +183,7 @@ pub fn build_index_data<B, Tx>(
 ) -> (StoredBlock, Vec<StoredTransaction>, Vec<StoredReceipt>)
 where
     B: Block<Tx>,
-    Tx: Transaction,
+    Tx: Transaction + Any,
 {
     let block_number = block.context().height;
     let block_hash = metadata.hash;
@@ -128,15 +193,15 @@ where
     let total_gas_used: u64 = result.tx_results.iter().map(|r| r.gas_used).sum();
 
     // Build stored transactions and receipts
-    let mut stored_txs = Vec::with_capacity(txs.len());
-    let mut stored_receipts = Vec::with_capacity(txs.len());
+    let mut stored_txs = Vec::with_capacity(result.tx_results.len());
+    let mut stored_receipts = Vec::with_capacity(result.tx_results.len());
     let mut cumulative_gas = 0u64;
 
     for (idx, (tx, tx_result)) in txs.iter().zip(result.tx_results.iter()).enumerate() {
         let tx_hash = B256::from(tx.compute_identifier());
         cumulative_gas += tx_result.gas_used;
+        let eth_fields = ethereum_tx_fields(tx);
 
-        // Build stored transaction
         let stored_tx = build_stored_transaction(
             tx,
             tx_hash,
@@ -144,10 +209,10 @@ where
             block_hash,
             idx as u32,
             metadata.chain_id,
+            &eth_fields,
         );
         stored_txs.push(stored_tx);
 
-        // Build stored receipt
         let stored_receipt = build_stored_receipt(
             tx,
             tx_result,
@@ -156,6 +221,7 @@ where
             block_hash,
             idx as u32,
             cumulative_gas,
+            &eth_fields,
         );
         stored_receipts.push(stored_receipt);
     }
@@ -175,7 +241,7 @@ where
         timestamp: metadata.timestamp,
         gas_used: total_gas_used,
         gas_limit: metadata.gas_limit,
-        transaction_count: txs.len() as u32,
+        transaction_count: stored_txs.len() as u32,
         miner: metadata.miner,
         extra_data: metadata.extra_data.clone(),
     };
@@ -191,17 +257,38 @@ fn build_stored_transaction<Tx: Transaction>(
     block_hash: B256,
     transaction_index: u32,
     chain_id: u64,
+    eth_fields: &Option<EthereumIndexedTransaction>,
 ) -> StoredTransaction {
     let from = resolve_sender_address(tx);
     let to = resolve_recipient_address(tx);
 
-    // Extract value from funds (sum of all fungible assets as a simple approach)
+    if let Some(f) = eth_fields {
+        return StoredTransaction {
+            hash: tx_hash,
+            block_number,
+            block_hash,
+            transaction_index,
+            from,
+            to,
+            value: f.value,
+            gas: tx.gas_limit(),
+            gas_price: f.gas_price,
+            input: f.input.clone(),
+            nonce: f.nonce,
+            v: f.v,
+            r: f.r,
+            s: f.s,
+            tx_type: f.tx_type,
+            chain_id: f.chain_id,
+            max_fee_per_gas: f.max_fee_per_gas,
+            max_priority_fee_per_gas: f.max_priority_fee_per_gas,
+        };
+    }
+
     let value = tx
         .funds()
         .iter()
         .fold(U256::ZERO, |acc, fa| acc + U256::from(fa.amount));
-
-    // Serialize the request as input data
     let input = Bytes::from(borsh::to_vec(tx.request()).unwrap_or_default());
 
     StoredTransaction {
@@ -213,18 +300,21 @@ fn build_stored_transaction<Tx: Transaction>(
         to,
         value,
         gas: tx.gas_limit(),
-        gas_price: U256::ZERO, // TODO: Support gas pricing
+        gas_price: U256::ZERO,
         input,
-        nonce: 0, // TODO: Track nonces if needed
+        nonce: 0,
         v: 0,
         r: U256::ZERO,
         s: U256::ZERO,
-        tx_type: 0, // Legacy type
+        tx_type: 0,
         chain_id: Some(chain_id),
+        max_fee_per_gas: None,
+        max_priority_fee_per_gas: None,
     }
 }
 
 /// Build a StoredReceipt from an STF TxResult.
+#[allow(clippy::too_many_arguments)]
 fn build_stored_receipt<Tx: Transaction>(
     tx: &Tx,
     tx_result: &TxResult,
@@ -233,14 +323,11 @@ fn build_stored_receipt<Tx: Transaction>(
     block_hash: B256,
     transaction_index: u32,
     cumulative_gas_used: u64,
+    eth_fields: &Option<EthereumIndexedTransaction>,
 ) -> StoredReceipt {
     let from = resolve_sender_address(tx);
     let to = resolve_recipient_address(tx);
-
-    // Convert events to logs
     let logs: Vec<StoredLog> = tx_result.events.iter().map(event_to_stored_log).collect();
-
-    // Determine status (1 = success, 0 = failure)
     let status = if tx_result.response.is_ok() { 1 } else { 0 };
 
     StoredReceipt {
@@ -252,10 +339,14 @@ fn build_stored_receipt<Tx: Transaction>(
         to,
         cumulative_gas_used,
         gas_used: tx_result.gas_used,
+        effective_gas_price: eth_fields
+            .as_ref()
+            .map(|f| f.gas_price)
+            .unwrap_or(U256::ZERO),
         contract_address: None, // TODO: Detect contract creation
         logs,
         status,
-        tx_type: 0,
+        tx_type: eth_fields.as_ref().map(|f| f.tx_type).unwrap_or(0),
     }
 }
 
@@ -317,7 +408,7 @@ pub fn index_block<B, Tx, I>(
 ) -> crate::error::ChainIndexResult<()>
 where
     B: Block<Tx>,
-    Tx: Transaction,
+    Tx: Transaction + Any,
     I: crate::index::ChainIndex,
 {
     let (stored_block, stored_txs, stored_receipts) = build_index_data(block, result, metadata);
@@ -341,8 +432,8 @@ mod tests {
 
         // Address should be derived from AccountId
         assert_eq!(log.address, account_id_to_address(AccountId::from_u64(42)));
-        // Should have one topic (the name hash)
-        assert_eq!(log.topics.len(), 1);
+        // Topic[0] should match the Ethereum-compatible event-name hash.
+        assert_eq!(log.topics, vec![keccak256(b"Transfer")]);
         // Data should match contents
         assert_eq!(log.data.as_ref(), &[1, 2, 3, 4]);
     }

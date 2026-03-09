@@ -45,6 +45,11 @@ pub mod sender_type;
 pub mod traits;
 pub mod verifier;
 
+#[cfg(any(test, feature = "testing"))]
+mod test_utils;
+#[cfg(any(test, feature = "testing"))]
+pub use test_utils::sign_hash;
+
 // Re-export main types
 pub use decoder::TypedTxDecoder;
 pub use envelope::{tx_type, TxEnvelope};
@@ -52,7 +57,7 @@ pub use eoa_registry::{
     lookup_account_id_in_env, lookup_account_id_in_storage, lookup_address_in_env,
     lookup_address_in_storage, lookup_contract_account_id_in_env,
     lookup_contract_account_id_in_storage, register_runtime_contract_account,
-    resolve_or_create_eoa_account,
+    resolve_or_create_eoa_account, ETH_EOA_CODE_ID,
 };
 pub use error::*;
 pub use ethereum::{SignedEip1559Tx, SignedLegacyTx};

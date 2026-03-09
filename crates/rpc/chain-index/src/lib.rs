@@ -41,6 +41,8 @@ pub use cache::ChainCache;
 pub use error::{ChainIndexError, ChainIndexResult};
 pub use index::{ChainIndex, PersistentChainIndex};
 pub use integration::{build_index_data, event_to_stored_log, index_block, BlockMetadata};
-pub use provider::{ChainStateProvider, ChainStateProviderConfig, NoopAccountCodes};
+pub use provider::{
+    ChainStateProvider, ChainStateProviderConfig, NoopAccountCodes, DEFAULT_PROTOCOL_VERSION,
+};
 pub use querier::{StateQuerier, StorageStateQuerier};
 pub use types::*;

@@ -3,23 +3,16 @@
 //! These tests use real Ethereum transaction data to verify correct behavior.
 
 use alloy_consensus::{SignableTransaction, TxEip1559, TxLegacy};
-use alloy_primitives::{Address, Bytes, PrimitiveSignature, B256, U256};
+use alloy_primitives::{Address, Bytes, B256, U256};
 use evolve_stf_traits::TxDecoder;
 use evolve_tx_eth::{
     sender_type, tx_type, EcdsaVerifier, SignatureVerifierRegistry, TxEnvelope, TxPayload,
     TypedTransaction, TypedTxDecoder,
 };
-use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey, VerifyingKey};
+use k256::ecdsa::{SigningKey, VerifyingKey};
 use rand::rngs::OsRng;
 
-/// Helper to sign a transaction hash and create an alloy signature
-fn sign_hash(signing_key: &SigningKey, hash: B256) -> PrimitiveSignature {
-    let (sig, recovery_id) = signing_key.sign_prehash(hash.as_ref()).unwrap();
-    let r = U256::from_be_slice(&sig.r().to_bytes());
-    let s = U256::from_be_slice(&sig.s().to_bytes());
-    let v = recovery_id.is_y_odd();
-    PrimitiveSignature::new(r, s, v)
-}
+use evolve_tx_eth::sign_hash;
 
 /// Get address from signing key (Ethereum address derivation)
 fn get_address(signing_key: &SigningKey) -> Address {

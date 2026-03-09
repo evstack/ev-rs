@@ -29,7 +29,8 @@ mod persistence;
 
 pub use block::{ArchivedBlock, Block, BlockBuilder, BlockHeader};
 pub use dev::{
-    DevConfig, DevConsensus, NoopChainIndex, OnBlockArchive, ProducedBlock, StfExecutor,
+    compute_block_hash, state_changes_to_operations, DevConfig, DevConsensus, NoopChainIndex,
+    OnBlockArchive, ProducedBlock, StfExecutor,
 };
 pub use error::ServerError;
 pub use evolve_mempool::{

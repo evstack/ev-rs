@@ -39,5 +39,6 @@ workspace = true
 tempfile = "3.8"
 alloy-consensus = { workspace = true }
 evolve_stf = { workspace = true }
+evolve_tx_eth = { workspace = true, features = ["testing"] }
 k256 = { version = "0.13", features = ["ecdsa"] }
 rand = "0.8"

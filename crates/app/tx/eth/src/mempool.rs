@@ -401,10 +401,8 @@ impl Transaction for TxContext {
 
 impl AuthenticationPayload for TxContext {
     fn authentication_payload(&self) -> SdkResult<Message> {
-        if self.sender_type == sender_type::EOA_SECP256K1 {
-            return Ok(self.authentication_payload.clone());
-        }
-
+        // Pass the canonical transaction context through authentication so EOAs
+        // can verify both the recovered sender and the transaction nonce.
         Message::new(self)
     }
 }
@@ -526,7 +524,7 @@ mod tests {
     use crate::eoa_registry::{lookup_account_id_in_env, register_runtime_contract_account};
     use crate::traits::{derive_eth_eoa_account_id, derive_runtime_contract_account_id};
     use alloy_consensus::{SignableTransaction, TxLegacy};
-    use alloy_primitives::{Bytes, PrimitiveSignature, TxKind, U256};
+    use alloy_primitives::{Bytes, TxKind, U256};
     use evolve_core::runtime_api::{
         RegisterAccountAtIdRequest, RegisterAccountAtIdResponse, ACCOUNT_IDENTIFIER_PREFIX,
         RUNTIME_ACCOUNT_ID,
@@ -538,7 +536,7 @@ mod tests {
     use evolve_core::{
         BlockContext, EnvironmentQuery, InvokableMessage, InvokeResponse, ERR_UNKNOWN_FUNCTION,
     };
-    use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
+    use k256::ecdsa::SigningKey;
     use rand::rngs::OsRng;
     use std::collections::BTreeMap;
 
@@ -635,13 +633,7 @@ mod tests {
         }
     }
 
-    fn sign_hash(signing_key: &SigningKey, hash: B256) -> PrimitiveSignature {
-        let (sig, recovery_id) = signing_key.sign_prehash(hash.as_ref()).unwrap();
-        let r = U256::from_be_slice(&sig.r().to_bytes());
-        let s = U256::from_be_slice(&sig.s().to_bytes());
-        let v = recovery_id.is_y_odd();
-        PrimitiveSignature::new(r, s, v)
-    }
+    use crate::sign_hash;
 
     fn build_tx_context(to: Address) -> TxContext {
         let signing_key = SigningKey::random(&mut OsRng);

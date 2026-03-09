@@ -21,7 +21,7 @@ use commonware_runtime::tokio::{Config as TokioConfig, Context as TokioContext, 
 use commonware_runtime::{Runner as RunnerTrait, Spawner};
 use evolve_chain_index::{
     ChainStateProvider, ChainStateProviderConfig, PersistentChainIndex, StateQuerier,
-    StorageStateQuerier,
+    StorageStateQuerier, DEFAULT_PROTOCOL_VERSION,
 };
 use evolve_core::encoding::Encodable;
 use evolve_core::{AccountId, ReadonlyKV};
@@ -30,7 +30,8 @@ use evolve_grpc::{GrpcServer, GrpcServerConfig};
 use evolve_mempool::{new_shared_mempool, Mempool, MempoolTx, SharedMempool};
 use evolve_rpc_types::SyncStatus;
 use evolve_server::{
-    load_chain_state, save_chain_state, ChainState, DevConfig, DevConsensus, CHAIN_STATE_KEY,
+    load_chain_state, save_chain_state, state_changes_to_operations, ChainState, DevConfig,
+    DevConsensus, CHAIN_STATE_KEY,
 };
 use evolve_server::{OnBlockArchive, StfExecutor};
 use evolve_stf_traits::{AccountsCodeStorage, StateChange, Transaction};
@@ -123,6 +124,12 @@ pub struct RpcConfig {
     /// Optional gRPC server address. When set, a gRPC server is started
     /// alongside JSON-RPC, sharing the same state provider and subscriptions.
     pub grpc_addr: Option<SocketAddr>,
+    /// Enable gzip compression for the gRPC server.
+    pub grpc_enable_gzip: bool,
+    /// Maximum gRPC request/response size in bytes.
+    pub grpc_max_message_size: usize,
+    /// Graceful shutdown timeout in seconds.
+    pub shutdown_timeout_secs: u64,
 }
 
 impl Default for RpcConfig {
@@ -133,6 +140,9 @@ impl Default for RpcConfig {
             enabled: true,
             enable_block_indexing: true,
             grpc_addr: None,
+            grpc_enable_gzip: true,
+            grpc_max_message_size: 4 * 1024 * 1024,
+            shutdown_timeout_secs: 10,
         }
     }
 }
@@ -167,6 +177,19 @@ impl RpcConfig {
     /// Enable the gRPC server on the given address.
     pub fn with_grpc(mut self, addr: SocketAddr) -> Self {
         self.grpc_addr = Some(addr);
+        self
+    }
+
+    /// Configure gRPC compression and message sizing.
+    pub fn with_grpc_settings(mut self, enable_gzip: bool, max_message_size: usize) -> Self {
+        self.grpc_enable_gzip = enable_gzip;
+        self.grpc_max_message_size = max_message_size;
+        self
+    }
+
+    /// Set the graceful shutdown timeout in seconds.
+    pub fn with_shutdown_timeout_secs(mut self, shutdown_timeout_secs: u64) -> Self {
+        self.shutdown_timeout_secs = shutdown_timeout_secs;
         self
     }
 }
@@ -228,6 +251,41 @@ async fn build_block_archive(context: TokioContext) -> OnBlockArchive {
             );
         }
     })
+}
+
+fn grpc_server_config(rpc_config: &RpcConfig, addr: SocketAddr) -> GrpcServerConfig {
+    GrpcServerConfig {
+        addr,
+        chain_id: rpc_config.chain_id,
+        enable_gzip: rpc_config.grpc_enable_gzip,
+        max_message_size: rpc_config.grpc_max_message_size,
+    }
+}
+
+fn shutdown_timeout(rpc_config: &RpcConfig) -> Duration {
+    Duration::from_secs(rpc_config.shutdown_timeout_secs)
+}
+
+#[derive(Clone, Copy)]
+enum EthRunnerMode {
+    PersistentSidecars,
+    EphemeralSidecars,
+}
+
+impl EthRunnerMode {
+    fn enable_block_archive(self) -> bool {
+        matches!(self, Self::PersistentSidecars)
+    }
+
+    fn persistent_chain_index_path(self, data_dir: &Path) -> Option<std::path::PathBuf> {
+        matches!(self, Self::PersistentSidecars).then(|| data_dir.join("chain-index.sqlite"))
+    }
+}
+
+#[derive(Clone)]
+struct EthRunnerConfig {
+    rpc: RpcConfig,
+    runner_mode: EthRunnerMode,
 }
 
 /// Run the dev node with default settings (RPC enabled).
@@ -428,7 +486,7 @@ pub fn run_dev_node_with_rpc<
                 let codes_for_rpc = Arc::new(build_codes());
                 let state_provider_config = ChainStateProviderConfig {
                     chain_id: rpc_config.chain_id,
-                    protocol_version: "0x1".to_string(),
+                    protocol_version: DEFAULT_PROTOCOL_VERSION.to_string(),
                     gas_price: U256::ZERO,
                     sync_status: SyncStatus::NotSyncing(false),
                 };
@@ -465,11 +523,7 @@ pub fn run_dev_node_with_rpc<
                         codes_for_rpc,
                     )
                     .with_state_querier(state_querier);
-                    let grpc_config = GrpcServerConfig {
-                        addr: grpc_addr,
-                        chain_id: rpc_config.chain_id,
-                        ..Default::default()
-                    };
+                    let grpc_config = grpc_server_config(&rpc_config, grpc_addr);
                     tracing::info!("Starting gRPC server on {}", grpc_addr);
                     let grpc_server = GrpcServer::with_subscription_manager(
                         grpc_config,
@@ -516,7 +570,7 @@ pub fn run_dev_node_with_rpc<
                     _ = tokio::signal::ctrl_c() => {
                         tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                         context_for_shutdown
-                            .stop(0, Some(Duration::from_secs(10)))
+                            .stop(0, Some(shutdown_timeout(&rpc_config)))
                             .await
                             .expect("shutdown failed");
                     }
@@ -560,7 +614,7 @@ pub fn run_dev_node_with_rpc<
                     _ = tokio::signal::ctrl_c() => {
                         tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                         context_for_shutdown
-                            .stop(0, Some(Duration::from_secs(10)))
+                            .stop(0, Some(shutdown_timeout(&rpc_config)))
                             .await
                             .expect("shutdown failed");
                     }
@@ -741,7 +795,7 @@ pub fn run_dev_node_with_rpc_and_mempool<
                 _ = tokio::signal::ctrl_c() => {
                     tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                     context_for_shutdown
-                        .stop(0, Some(Duration::from_secs(10)))
+                        .stop(0, Some(shutdown_timeout(&rpc_config)))
                         .await
                         .expect("shutdown failed");
                 }
@@ -810,6 +864,62 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
     BuildStorageFut:
         Future<Output = Result<S, Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
 {
+    run_dev_node_with_rpc_and_mempool_eth_impl(
+        data_dir,
+        build_genesis_stf,
+        build_stf,
+        build_codes,
+        run_genesis,
+        build_storage,
+        EthRunnerConfig {
+            rpc: rpc_config,
+            runner_mode: EthRunnerMode::PersistentSidecars,
+        },
+    )
+}
+
+fn run_dev_node_with_rpc_and_mempool_eth_impl<
+    Stf,
+    Codes,
+    G,
+    S,
+    BuildGenesisStf,
+    BuildStf,
+    BuildCodes,
+    RunGenesis,
+    BuildStorage,
+    BuildStorageFut,
+>(
+    data_dir: impl AsRef<Path>,
+    build_genesis_stf: BuildGenesisStf,
+    build_stf: BuildStf,
+    build_codes: BuildCodes,
+    run_genesis: RunGenesis,
+    build_storage: BuildStorage,
+    runner_config: EthRunnerConfig,
+) where
+    Codes: AccountsCodeStorage + Send + Sync + 'static,
+    S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
+    Stf: StfExecutor<TxContext, S, Codes> + Send + Sync + 'static,
+    G: BorshSerialize
+        + BorshDeserialize
+        + Clone
+        + Debug
+        + HasTokenAccountId
+        + Send
+        + Sync
+        + 'static,
+    BuildGenesisStf: Fn() -> Stf + Send + Sync + 'static,
+    BuildStf: Fn(&G) -> Stf + Send + Sync + 'static,
+    BuildCodes: Fn() -> Codes + Clone + Send + Sync + 'static,
+    RunGenesis: Fn(&Stf, &Codes, &S) -> Result<GenesisOutput<G>, Box<dyn std::error::Error + Send + Sync>>
+        + Send
+        + Sync
+        + 'static,
+    BuildStorage: Fn(RuntimeContext, StorageConfig) -> BuildStorageFut + Send + Sync + 'static,
+    BuildStorageFut:
+        Future<Output = Result<S, Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
+{
     tracing::info!("=== Evolve Dev Node (ETH mempool) ===");
     let data_dir = data_dir.as_ref();
     std::fs::create_dir_all(data_dir).expect("failed to create data directory");
@@ -818,7 +928,9 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
         path: data_dir.to_path_buf(),
         ..Default::default()
     };
-    let chain_index_db_path = data_dir.join("chain-index.sqlite");
+    let chain_index_db_path = runner_config
+        .runner_mode
+        .persistent_chain_index_path(data_dir);
 
     let runtime_config = TokioConfig::default()
         .with_storage_directory(data_dir)
@@ -838,8 +950,9 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
         let build_codes = Arc::clone(&build_codes);
         let run_genesis = Arc::clone(&run_genesis);
         let build_storage = Arc::clone(&build_storage);
-        let rpc_config = rpc_config.clone();
+        let rpc_config = runner_config.rpc.clone();
         let chain_index_db_path = chain_index_db_path.clone();
+        let runner_mode = runner_config.runner_mode;
 
         async move {
             let context_for_shutdown = context.clone();
@@ -884,13 +997,22 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
 
             let mempool: SharedMempool<Mempool<TxContext>> = new_shared_mempool();
 
-            // Build block archive callback (always on)
-            let archive_cb = build_block_archive(context_for_archive).await;
+            let archive_cb = if runner_mode.enable_block_archive() {
+                Some(build_block_archive(context_for_archive).await)
+            } else {
+                tracing::info!(
+                    "Block archive disabled for mock-storage runner to keep sidecars ephemeral"
+                );
+                None
+            };
 
             let rpc_handle = if rpc_config.enabled {
                 let chain_index = Arc::new(
-                    PersistentChainIndex::new(&chain_index_db_path)
-                        .expect("failed to open chain index database"),
+                    match chain_index_db_path.as_ref() {
+                        Some(path) => PersistentChainIndex::new(path),
+                        None => PersistentChainIndex::in_memory(),
+                    }
+                    .expect("failed to open chain index database"),
                 );
 
                 if let Err(e) = chain_index.initialize() {
@@ -902,7 +1024,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                 let codes_for_rpc = Arc::new(build_codes());
                 let state_provider_config = ChainStateProviderConfig {
                     chain_id: rpc_config.chain_id,
-                    protocol_version: "0x1".to_string(),
+                    protocol_version: DEFAULT_PROTOCOL_VERSION.to_string(),
                     gas_price: U256::ZERO,
                     sync_status: SyncStatus::NotSyncing(false),
                 };
@@ -946,11 +1068,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                         mempool.clone(),
                     )
                     .with_state_querier(state_querier);
-                    let grpc_config = GrpcServerConfig {
-                        addr: grpc_addr,
-                        chain_id: rpc_config.chain_id,
-                        ..Default::default()
-                    };
+                    let grpc_config = grpc_server_config(&rpc_config, grpc_addr);
                     tracing::info!("Starting gRPC server on {}", grpc_addr);
                     let grpc_server = GrpcServer::with_subscription_manager(
                         grpc_config,
@@ -974,8 +1092,11 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                     subscriptions,
                     mempool.clone(),
                 )
-                .with_indexing_enabled(rpc_config.enable_block_indexing)
-                .with_block_archive(archive_cb);
+                .with_indexing_enabled(rpc_config.enable_block_indexing);
+                let consensus = match archive_cb {
+                    Some(archive_cb) => consensus.with_block_archive(archive_cb),
+                    None => consensus,
+                };
                 let dev: Arc<DevConsensus<Stf, S, Codes, TxContext, PersistentChainIndex>> =
                     Arc::new(consensus);
 
@@ -994,7 +1115,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                     _ = tokio::signal::ctrl_c() => {
                         tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                         context_for_shutdown
-                            .stop(0, Some(Duration::from_secs(10)))
+                            .stop(0, Some(shutdown_timeout(&rpc_config)))
                             .await
                             .expect("shutdown failed");
                     }
@@ -1015,8 +1136,11 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
 
                 Some((handle, grpc_handle))
             } else {
-                let consensus = DevConsensus::with_mempool(stf, storage, codes, dev_config, mempool)
-                    .with_block_archive(archive_cb);
+                let consensus = DevConsensus::with_mempool(stf, storage, codes, dev_config, mempool);
+                let consensus = match archive_cb {
+                    Some(archive_cb) => consensus.with_block_archive(archive_cb),
+                    None => consensus,
+                };
                 let dev: Arc<DevConsensus<Stf, S, Codes, TxContext, evolve_server::NoopChainIndex>> =
                     Arc::new(consensus);
 
@@ -1035,7 +1159,7 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
                     _ = tokio::signal::ctrl_c() => {
                         tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
                         context_for_shutdown
-                            .stop(0, Some(Duration::from_secs(10)))
+                            .stop(0, Some(shutdown_timeout(&rpc_config)))
                             .await
                             .expect("shutdown failed");
                     }
@@ -1110,14 +1234,17 @@ pub fn run_dev_node_with_rpc_and_mempool_mock_storage<
         + Sync
         + 'static,
 {
-    run_dev_node_with_rpc_and_mempool_eth(
+    run_dev_node_with_rpc_and_mempool_eth_impl(
         data_dir,
         build_genesis_stf,
         build_stf,
         build_codes,
         run_genesis,
         |_context, _config| async { Ok(MockStorage::new()) },
-        rpc_config,
+        EthRunnerConfig {
+            rpc: rpc_config,
+            runner_mode: EthRunnerMode::EphemeralSidecars,
+        },
     )
 }
 
@@ -1232,31 +1359,21 @@ async fn commit_genesis<G: BorshSerialize + Clone, S: Storage>(
     Ok(())
 }
 
-fn state_changes_to_operations(changes: Vec<StateChange>) -> Vec<Operation> {
-    changes
-        .into_iter()
-        .map(|change| match change {
-            StateChange::Set { key, value } => Operation::Set { key, value },
-            StateChange::Remove { key } => Operation::Remove { key },
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use alloy_consensus::{SignableTransaction, TxLegacy};
-    use alloy_primitives::{Address, Bytes, PrimitiveSignature, U256, U64};
+    use alloy_primitives::{Address, Bytes, U256, U64};
     use evolve_chain_index::NoopAccountCodes;
     use evolve_eth_jsonrpc::StateProvider;
     use evolve_mempool::MempoolTx;
     use evolve_rpc_types::block::BlockTransactions;
     use evolve_rpc_types::SyncStatus;
-    use evolve_server::{Block, DevConsensus, StfExecutor};
+    use evolve_server::{Block, DevConsensus, NoopChainIndex, StfExecutor};
     use evolve_stf::execution_state::ExecutionState;
     use evolve_stf::results::{BlockResult, TxResult};
     use evolve_stf_traits::{AccountsCodeStorage, Block as _};
-    use k256::ecdsa::{signature::hazmat::PrehashSigner, SigningKey};
+    use k256::ecdsa::SigningKey;
     use rand::rngs::OsRng;
     use tokio::time::{sleep, timeout, Duration};
 
@@ -1310,21 +1427,19 @@ mod tests {
         }
     }
 
-    fn sign_hash(signing_key: &SigningKey, hash: alloy_primitives::B256) -> PrimitiveSignature {
-        let (sig, recovery_id) = signing_key.sign_prehash(hash.as_ref()).unwrap();
-        let r = U256::from_be_slice(&sig.r().to_bytes());
-        let s = U256::from_be_slice(&sig.s().to_bytes());
-        let v = recovery_id.is_y_odd();
-        PrimitiveSignature::new(r, s, v)
-    }
+    use evolve_tx_eth::sign_hash;
 
     fn make_signed_legacy_tx(chain_id: u64) -> Vec<u8> {
+        make_signed_legacy_tx_with_gas(chain_id, 21_000)
+    }
+
+    fn make_signed_legacy_tx_with_gas(chain_id: u64, gas_limit: u64) -> Vec<u8> {
         let signing_key = SigningKey::random(&mut OsRng);
         let tx = TxLegacy {
             chain_id: Some(chain_id),
             nonce: 0,
             gas_price: 1,
-            gas_limit: 21_000,
+            gas_limit,
             to: alloy_primitives::TxKind::Call(Address::repeat_byte(0x11)),
             value: U256::from(1u64),
             input: Bytes::new(),
@@ -1408,6 +1523,11 @@ mod tests {
             .expect("transaction should be indexed");
         assert_eq!(tx.hash, tx_hash);
         assert_eq!(tx.block_number, Some(U64::from(1u64)));
+        assert_eq!(tx.nonce, U64::ZERO);
+        assert_eq!(tx.gas_price, Some(U256::from(1u64)));
+        assert_eq!(tx.tx_type, U64::ZERO);
+        assert_ne!(tx.r, U256::ZERO);
+        assert_ne!(tx.s, U256::ZERO);
 
         let receipt = provider
             .get_transaction_receipt(tx_hash)
@@ -1417,6 +1537,8 @@ mod tests {
         assert_eq!(receipt.transaction_hash, tx_hash);
         assert_eq!(receipt.block_number, U64::from(1u64));
         assert_eq!(receipt.status, U64::from(1u64));
+        assert_eq!(receipt.effective_gas_price, U256::from(1u64));
+        assert_eq!(receipt.tx_type, U64::ZERO);
 
         let block = provider
             .get_block_by_number(1, false)
@@ -1427,6 +1549,75 @@ mod tests {
             Some(BlockTransactions::Hashes(hashes)) => assert_eq!(hashes, vec![tx_hash]),
             _ => panic!("expected block transaction hashes"),
         }
+    }
+
+    #[tokio::test]
+    async fn produce_block_from_mempool_keeps_over_budget_transactions_queued() {
+        let chain_index = Arc::new(PersistentChainIndex::in_memory().expect("in-memory index"));
+        let mempool = new_shared_mempool::<TxContext>();
+        let provider = ChainStateProvider::with_mempool(
+            Arc::clone(&chain_index),
+            test_provider_config(),
+            Arc::new(NoopAccountCodes),
+            mempool.clone(),
+        );
+
+        let low_gas_dev: DevConsensus<_, _, _, _, NoopChainIndex> = DevConsensus::with_mempool(
+            MockStf,
+            MockStorage::new(),
+            MockCodes,
+            DevConfig {
+                gas_limit: 21_000,
+                ..DevConfig::manual()
+            },
+            mempool.clone(),
+        );
+        let high_gas_dev: DevConsensus<_, _, _, _, NoopChainIndex> = DevConsensus::with_mempool(
+            MockStf,
+            MockStorage::new(),
+            MockCodes,
+            DevConfig {
+                gas_limit: 30_000,
+                ..DevConfig::manual()
+            },
+            mempool.clone(),
+        );
+
+        let executed_hash = provider
+            .send_raw_transaction(&make_signed_legacy_tx_with_gas(1, 21_000))
+            .await
+            .expect("21k tx should be accepted into mempool");
+        let deferred_hash = provider
+            .send_raw_transaction(&make_signed_legacy_tx_with_gas(1, 30_000))
+            .await
+            .expect("30k tx should be accepted into mempool");
+
+        assert_eq!(mempool.read().await.len(), 2);
+
+        let first_block = low_gas_dev
+            .produce_block_from_mempool(100)
+            .await
+            .expect("low-gas block production should succeed");
+        assert_eq!(first_block.tx_count, 1);
+        assert_eq!(first_block.gas_used, 21_000);
+
+        let pool = mempool.read().await;
+        assert_eq!(pool.len(), 1);
+        assert!(!pool.contains(&executed_hash.0));
+        assert!(pool.contains(&deferred_hash.0));
+        drop(pool);
+
+        let second_block = high_gas_dev
+            .produce_block_from_mempool(100)
+            .await
+            .expect("higher-gas block production should execute the deferred tx");
+        assert_eq!(second_block.tx_count, 1);
+        assert_eq!(second_block.gas_used, 30_000);
+
+        let pool = mempool.read().await;
+        assert_eq!(pool.len(), 0);
+        assert!(!pool.contains(&executed_hash.0));
+        assert!(!pool.contains(&deferred_hash.0));
     }
 
     #[tokio::test]
@@ -1509,6 +1700,11 @@ mod tests {
                 assert_eq!(txs.len(), 1);
                 assert_eq!(txs[0].hash, tx_hash);
                 assert_eq!(txs[0].block_number, Some(U64::from(1u64)));
+                assert_eq!(txs[0].gas_price, Some(U256::from(1u64)));
+                assert_eq!(txs[0].nonce, U64::ZERO);
+                assert_eq!(txs[0].tx_type, U64::ZERO);
+                assert_ne!(txs[0].r, U256::ZERO);
+                assert_ne!(txs[0].s, U256::ZERO);
             }
             _ => panic!("expected full transactions in block"),
         }
