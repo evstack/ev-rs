@@ -1,8 +1,10 @@
 #![allow(dead_code)]
 
+use borsh::{BorshDeserialize, BorshSerialize};
 use evolve_core::runtime_api::ACCOUNT_IDENTIFIER_PREFIX;
 use evolve_core::{
-    AccountCode, AccountId, Environment, ErrorCode, InvokeResponse, ReadonlyKV, SdkResult,
+    AccountCode, AccountId, Environment, ErrorCode, InvokableMessage, InvokeResponse, ReadonlyKV,
+    SdkResult,
 };
 use evolve_stf::gas::StorageGasConfig;
 use evolve_stf_traits::{
@@ -65,6 +67,22 @@ pub struct ItfResult {
 
 pub const SPEC_ERR_OUT_OF_GAS: i64 = 0x01;
 pub const SPEC_ERR_EXECUTION: i64 = 200;
+
+// ---------------------------------------------------------------------------
+// Shared test message (used by core and post-tx conformance tests)
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
+pub struct TestMsg {
+    pub key: Vec<u8>,
+    pub value: Vec<u8>,
+    pub fail_after_write: bool,
+}
+
+impl InvokableMessage for TestMsg {
+    const FUNCTION_IDENTIFIER: u64 = 1;
+    const FUNCTION_IDENTIFIER_NAME: &'static str = "test_msg";
+}
 
 // ---------------------------------------------------------------------------
 // Trace file utilities

@@ -4,11 +4,10 @@
 //! `quint test specs/stf_post_tx.qnt --out-itf "specs/traces/out_{test}_{seq}.itf.json"`
 //! `cargo test -p evolve_stf --test quint_post_tx_conformance`
 
-use borsh::{BorshDeserialize, BorshSerialize};
 use evolve_core::storage_api::{StorageSetRequest, STORAGE_ACCOUNT_ID};
 use evolve_core::{
     AccountCode, AccountId, BlockContext, Environment, EnvironmentQuery, ErrorCode, FungibleAsset,
-    InvokableMessage, InvokeRequest, InvokeResponse, Message, SdkResult,
+    InvokeRequest, InvokeResponse, Message, SdkResult,
 };
 use evolve_stf::Stf;
 use evolve_stf_traits::{Block as BlockTrait, PostTxExecution, Transaction, WritableKV};
@@ -18,7 +17,7 @@ use std::path::Path;
 mod quint_common;
 use quint_common::{
     assert_storage_matches, find_single_trace_file, read_itf_trace, register_account, CodeStore,
-    InMemoryStorage, ItfBigInt, ItfBlockResult, ItfMap, NoopBegin, NoopEnd, NoopValidator,
+    InMemoryStorage, ItfBigInt, ItfBlockResult, ItfMap, NoopBegin, NoopEnd, NoopValidator, TestMsg,
     SPEC_ERR_EXECUTION, SPEC_ERR_OUT_OF_GAS,
 };
 
@@ -34,18 +33,6 @@ struct ItfState {
 }
 
 const SPEC_ERR_POST_TX: i64 = 999;
-
-#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
-struct TestMsg {
-    key: Vec<u8>,
-    value: Vec<u8>,
-    fail_after_write: bool,
-}
-
-impl InvokableMessage for TestMsg {
-    const FUNCTION_IDENTIFIER: u64 = 1;
-    const FUNCTION_IDENTIFIER_NAME: &'static str = "test_exec";
-}
 
 #[derive(Clone, Debug)]
 struct TestTx {

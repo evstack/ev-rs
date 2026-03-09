@@ -12,11 +12,11 @@ use borsh::{BorshDeserialize, BorshSerialize};
 use evolve_core::storage_api::{StorageSetRequest, STORAGE_ACCOUNT_ID};
 use evolve_core::{
     AccountCode, AccountId, BlockContext, Environment, EnvironmentQuery, ErrorCode, FungibleAsset,
-    InvokableMessage, InvokeRequest, InvokeResponse, Message, SdkResult,
+    InvokeRequest, InvokeResponse, Message, SdkResult,
 };
 use evolve_stf::Stf;
 use evolve_stf_traits::{
-    Block as BlockTrait, PostTxExecution, SenderBootstrap, Transaction, TxValidator, WritableKV,
+    Block as BlockTrait, SenderBootstrap, Transaction, TxValidator, WritableKV,
 };
 use serde::Deserialize;
 use std::path::Path;
@@ -24,8 +24,8 @@ use std::path::Path;
 mod quint_common;
 use quint_common::{
     assert_storage_matches, find_single_trace_file, read_itf_trace, register_account, CodeStore,
-    InMemoryStorage, ItfBigInt, ItfBlockResult, ItfMap, NoopBegin, NoopEnd, SPEC_ERR_EXECUTION,
-    SPEC_ERR_OUT_OF_GAS,
+    InMemoryStorage, ItfBigInt, ItfBlockResult, ItfMap, NoopBegin, NoopEnd, NoopPostTx, TestMsg,
+    SPEC_ERR_EXECUTION, SPEC_ERR_OUT_OF_GAS,
 };
 
 // ---------------------------------------------------------------------------
@@ -50,18 +50,6 @@ struct ItfState {
 
 const SPEC_ERR_VALIDATION: i64 = 100;
 const SPEC_ERR_BOOTSTRAP: i64 = 300;
-
-#[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
-struct TestMsg {
-    key: Vec<u8>,
-    value: Vec<u8>,
-    fail_after_write: bool,
-}
-
-impl InvokableMessage for TestMsg {
-    const FUNCTION_IDENTIFIER: u64 = 1;
-    const FUNCTION_IDENTIFIER_NAME: &'static str = "test_msg";
-}
 
 #[derive(Clone, Debug)]
 struct TestTx {
@@ -144,19 +132,6 @@ impl TxValidator<TestTx> for Validator {
         };
         env.do_query(tx.sender(), &InvokeRequest::new(&probe).unwrap())
             .map_err(|_| ErrorCode::new(SPEC_ERR_VALIDATION as u16))?;
-        Ok(())
-    }
-}
-
-#[derive(Default)]
-struct NoopPostTx;
-impl PostTxExecution<TestTx> for NoopPostTx {
-    fn after_tx_executed(
-        _tx: &TestTx,
-        _gas_consumed: u64,
-        _tx_result: &SdkResult<InvokeResponse>,
-        _env: &mut dyn Environment,
-    ) -> SdkResult<()> {
         Ok(())
     }
 }
@@ -590,7 +565,7 @@ fn quint_itf_conformance() {
             NoopBegin::<TestBlock>::default(),
             NoopEnd,
             Validator,
-            NoopPostTx,
+            NoopPostTx::<TestTx>::default(),
             quint_common::default_gas_config(),
         );
 
