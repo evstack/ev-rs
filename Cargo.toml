@@ -70,11 +70,11 @@ evolve_testapp = { path = "bin/testapp" }
 
 # outside deps
 linkme = { version = "0.3", default-features = false }
-commonware-cryptography = "0.0.65"
-commonware-runtime = "0.0.65"
-commonware-storage = "0.0.65"
-commonware-utils = "0.0.65"
-commonware-codec = "0.0.65"
+commonware-cryptography = "2026.3.0"
+commonware-runtime = "2026.3.0"
+commonware-storage = "2026.3.0"
+commonware-utils = "2026.3.0"
+commonware-codec = "2026.3.0"
 borsh = { features = ["derive"], version = "1.5.5" }
 clap = { version = "4.5.31", features = ["derive"] }
 fixed = { version = "1.29", features = ["borsh", "serde"] }

@@ -95,20 +95,28 @@ impl ExternalConsensusCommitSink {
                 .expect("failed to build commit sink runtime");
 
             while let Ok(info) = receiver.recv() {
-                let state_root = info.state_root;
                 let operations = state_changes_to_operations(info.state_changes);
-                runtime.block_on(async {
+                let commit_hash = runtime.block_on(async {
                     storage
                         .batch(operations)
                         .await
                         .expect("storage batch failed");
                     storage.commit().await.expect("storage commit failed")
                 });
+                let committed_state_root = B256::from_slice(commit_hash.as_bytes());
+                if committed_state_root != info.state_root {
+                    tracing::warn!(
+                        height = info.height,
+                        preview_state_root = %info.state_root,
+                        committed_state_root = %committed_state_root,
+                        "execution state root differed from committed storage root"
+                    );
+                }
                 let block_hash = compute_block_hash(info.height, info.timestamp, parent_hash);
                 let metadata = BlockMetadata::new(
                     block_hash,
                     parent_hash,
-                    state_root,
+                    committed_state_root,
                     info.timestamp,
                     config.max_gas,
                     Address::ZERO,
@@ -134,7 +142,7 @@ impl ExternalConsensusCommitSink {
                                 "Indexed block {} (hash={}, state_root={})",
                                 info.height,
                                 block_hash,
-                                state_root
+                                committed_state_root
                             );
                         }
                     }

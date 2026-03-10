@@ -45,7 +45,7 @@ where
         })?;
 
         // Compute a simple state root from changes
-        let state_root = compute_state_root(&changes);
+        let state_root = compute_state_root(B256::ZERO, &changes);
 
         tracing::info!(
             "Genesis completed: scheduler={:?}, alice={:?}, bob={:?}",

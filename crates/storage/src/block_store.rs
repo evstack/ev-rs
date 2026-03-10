@@ -32,7 +32,9 @@
 
 use crate::types::{BlockHash, BlockStorageConfig};
 use commonware_codec::RangeCfg;
-use commonware_runtime::{buffer::PoolRef, Clock, Metrics, Storage as RStorage};
+use commonware_runtime::{
+    buffer::paged::CacheRef, BufferPooler, Clock, Metrics, Storage as RStorage,
+};
 use commonware_storage::{
     archive::{
         prunable::{Archive, Config as ArchiveConfig},
@@ -74,14 +76,14 @@ const KEY_JOURNAL_CACHE_PAGES: usize = 64;
 /// should be wrapped in a lock (`tokio::sync::Mutex`) when shared across tasks.
 pub struct BlockStorage<C>
 where
-    C: RStorage + Clock + Metrics + Clone + Send + Sync + 'static,
+    C: RStorage + BufferPooler + Clock + Metrics + Clone + Send + Sync + 'static,
 {
     archive: Archive<EightCap, C, BlockHash, bytes::Bytes>,
 }
 
 impl<C> BlockStorage<C>
 where
-    C: RStorage + Clock + Metrics + Clone + Send + Sync + 'static,
+    C: RStorage + BufferPooler + Clock + Metrics + Clone + Send + Sync + 'static,
 {
     /// Initialize block storage using the provided runtime context and config.
     ///
@@ -108,12 +110,12 @@ where
         // Buffer pool for the key journal.
         let page_size = std::num::NonZeroU16::new(KEY_JOURNAL_PAGE_SIZE).unwrap();
         let cache_pages = std::num::NonZeroUsize::new(KEY_JOURNAL_CACHE_PAGES).unwrap();
-        let key_buffer_pool = PoolRef::new(page_size, cache_pages);
+        let key_page_cache = CacheRef::from_pooler(&context, page_size, cache_pages);
 
         let cfg = ArchiveConfig {
             translator: EightCap,
             key_partition: format!("{}-block-index", config.partition_prefix),
-            key_buffer_pool,
+            key_page_cache,
             value_partition: format!("{}-block-data", config.partition_prefix),
             // No compression by default. Blocks are often already compressed (gzip/zstd
             // at the application layer), so double-compression wastes CPU.

@@ -27,18 +27,20 @@ use crate::proto::evnode::v1::{
     SetFinalResponse,
 };
 
-/// Compute a state root from changes.
+/// Compute a projected state root from a base root plus pending changes.
 ///
-/// This is a simple hash of all changes for MVP.
-/// In production, this would be a proper Merkle root.
-pub fn compute_state_root(changes: &[StateChange]) -> B256 {
+/// This is not the storage engine's Merkle root. It is a deterministic hash used
+/// to track pending execution state between `execute_txs` calls until the storage
+/// backend commits the changes.
+pub fn compute_state_root(base_state_root: B256, changes: &[StateChange]) -> B256 {
     use alloy_primitives::keccak256;
 
     if changes.is_empty() {
-        return B256::ZERO;
+        return base_state_root;
     }
 
-    let mut data = Vec::new();
+    let mut data = Vec::with_capacity(B256::len_bytes());
+    data.extend_from_slice(base_state_root.as_slice());
     for change in changes {
         match change {
             StateChange::Set { key, value } => {
@@ -169,7 +171,7 @@ pub struct BlockExecutedInfo {
     pub state_changes: Vec<StateChange>,
     /// Full block execution result.
     pub block_result: BlockResult,
-    /// State root computed from changes (keccak-based).
+    /// Projected state root computed from prior state plus pending changes.
     pub state_root: B256,
     /// Transactions that were included in the block.
     pub transactions: Vec<TxContext>,
@@ -313,6 +315,32 @@ where
         // Store pending changes
         self.state.pending_changes.write().await.extend(changes);
     }
+
+    async fn resolve_prev_state_root(&self, prev_state_root: &[u8]) -> Result<B256, EvnodeError> {
+        let last_state_root = *self.state.last_state_root.read().await;
+
+        if prev_state_root.is_empty() {
+            return Ok(last_state_root);
+        }
+
+        if prev_state_root.len() != B256::len_bytes() {
+            return Err(EvnodeError::InvalidArgument(format!(
+                "prev_state_root must be {} bytes, got {}",
+                B256::len_bytes(),
+                prev_state_root.len()
+            )));
+        }
+
+        let provided_prev_state_root = B256::from_slice(prev_state_root);
+        if provided_prev_state_root != last_state_root {
+            return Err(EvnodeError::InvalidArgument(format!(
+                "prev_state_root mismatch: expected {}, got {}",
+                last_state_root, provided_prev_state_root
+            )));
+        }
+
+        Ok(provided_prev_state_root)
+    }
 }
 
 #[async_trait]
@@ -349,7 +377,7 @@ where
             .map_err(|e| Status::internal(format!("genesis failed: {}", e)))?;
 
         // Compute state root
-        let state_root = compute_state_root(&changes);
+        let state_root = compute_state_root(B256::ZERO, &changes);
 
         // Handle state changes (store pending, call callback)
         self.handle_state_changes(changes).await;
@@ -458,8 +486,13 @@ where
             .into_changes()
             .map_err(|e| Status::internal(format!("failed to get state changes: {:?}", e)))?;
 
-        // Compute updated state root
-        let updated_state_root = compute_state_root(&changes);
+        let prev_state_root = self
+            .resolve_prev_state_root(&req.prev_state_root)
+            .await
+            .map_err(Status::from)?;
+
+        // Compute updated state root over the previous pending root.
+        let updated_state_root = compute_state_root(prev_state_root, &changes);
 
         // Log execution results (before moving ownership)
         let executed_tx_count = result.tx_results.len();
@@ -864,7 +897,7 @@ mod tests {
             key: b"k".to_vec(),
             value: b"v".to_vec(),
         }];
-        let expected_root = compute_state_root(&changes);
+        let expected_root = compute_state_root(B256::ZERO, &changes);
         let service = mk_service(true);
         let req = InitChainRequest {
             genesis_time: Some(Timestamp {
@@ -1015,7 +1048,7 @@ mod tests {
                 key: b"gone".to_vec(),
             },
         ];
-        let expected_root = compute_state_root(&expected_changes);
+        let expected_root = compute_state_root(B256::ZERO, &expected_changes);
         let service = mk_service_with_execute_changes(expected_changes);
         init_test_chain(&service).await;
 
@@ -1063,6 +1096,44 @@ mod tests {
         assert_eq!(observed.timestamp, 777);
         assert_eq!(observed.tx_count, 1, "invalid tx bytes should be skipped");
         assert_eq!(observed.tx_hashes, vec![valid_tx_hash]);
+    }
+
+    #[tokio::test]
+    async fn execute_txs_rejects_invalid_prev_state_root_length() {
+        let service = mk_service_with_execute_changes(Vec::new());
+        init_test_chain(&service).await;
+
+        let err = service
+            .execute_txs(Request::new(ExecuteTxsRequest {
+                block_height: 2,
+                timestamp: None,
+                prev_state_root: vec![0xaa; 31],
+                txs: vec![sample_legacy_tx_bytes()],
+            }))
+            .await
+            .expect_err("execute_txs should reject malformed prev_state_root");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("prev_state_root must be 32 bytes"));
+    }
+
+    #[tokio::test]
+    async fn execute_txs_rejects_mismatched_prev_state_root() {
+        let service = mk_service_with_execute_changes(Vec::new());
+        init_test_chain(&service).await;
+
+        let err = service
+            .execute_txs(Request::new(ExecuteTxsRequest {
+                block_height: 2,
+                timestamp: None,
+                prev_state_root: vec![0x11; 32],
+                txs: vec![sample_legacy_tx_bytes()],
+            }))
+            .await
+            .expect_err("execute_txs should reject mismatched prev_state_root");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("prev_state_root mismatch"));
     }
 
     #[tokio::test]
@@ -1119,7 +1190,7 @@ mod tests {
             key: b"payload".to_vec(),
             value: b"ok".to_vec(),
         }];
-        let expected_root = compute_state_root(&execute_changes);
+        let expected_root = compute_state_root(B256::ZERO, &execute_changes);
         let callback_snapshot = Arc::new(Mutex::new(None::<(u64, u64, usize, usize, B256)>));
         let service = mk_service_with_execute_changes(execute_changes).with_on_block_executed({
             let snapshot = Arc::clone(&callback_snapshot);
@@ -1290,5 +1361,50 @@ mod tests {
             remaining_hash, expected_remaining_hash,
             "only the unexecuted tail should be re-proposed"
         );
+    }
+
+    #[tokio::test]
+    async fn execute_txs_chains_projected_state_root_from_previous_root() {
+        let execute_changes = vec![StateChange::Set {
+            key: b"next".to_vec(),
+            value: b"value".to_vec(),
+        }];
+        let genesis_root = compute_state_root(
+            B256::ZERO,
+            &[StateChange::Set {
+                key: b"k".to_vec(),
+                value: b"v".to_vec(),
+            }],
+        );
+        let expected_root = compute_state_root(genesis_root, &execute_changes);
+
+        let service = ExecutorServiceImpl::new(
+            MockStf::new(true, execute_changes),
+            MockStorage,
+            MockCodes,
+            ExecutorServiceConfig::default(),
+        );
+        service
+            .init_chain(Request::new(InitChainRequest {
+                genesis_time: None,
+                initial_height: 1,
+                chain_id: "chain-root".to_string(),
+            }))
+            .await
+            .expect("init should succeed");
+
+        let response = service
+            .execute_txs(Request::new(ExecuteTxsRequest {
+                block_height: 2,
+                timestamp: None,
+                prev_state_root: genesis_root.to_vec(),
+                txs: vec![sample_legacy_tx_bytes()],
+            }))
+            .await
+            .expect("execute_txs should succeed")
+            .into_inner();
+
+        assert_eq!(response.updated_state_root, expected_root.to_vec());
+        assert_eq!(*service.state.last_state_root.read().await, expected_root);
     }
 }
