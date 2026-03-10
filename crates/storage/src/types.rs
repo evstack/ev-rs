@@ -143,12 +143,9 @@ pub const MAX_KEY_SIZE: usize = evolve_core::MAX_STORAGE_KEY_SIZE;
 const _: () = assert!(MAX_KEY_SIZE + KEY_LENGTH_PREFIX_SIZE == STORAGE_KEY_SIZE);
 pub const MAX_BATCH_SIZE: usize = 10_000; // 10k operations
 
-// For commonware integration, we use fixed-size types
-// Keys are 256 bytes (padded with zeros if needed)
+// For commonware integration, keys use a fixed-size envelope while values stay variable-sized.
+// Keys are 256 bytes (padded with zeros if needed).
 pub type StorageKey = FixedBytes<STORAGE_KEY_SIZE>;
-// Values are stored in 4KB chunks
-pub const STORAGE_VALUE_SIZE: usize = 4096;
-pub type StorageValueChunk = FixedBytes<STORAGE_VALUE_SIZE>;
 
 /// Helper functions for creating storage keys
 pub fn create_storage_key(key: &[u8]) -> Result<StorageKey, ErrorCode> {
@@ -164,47 +161,8 @@ pub fn create_storage_key(key: &[u8]) -> Result<StorageKey, ErrorCode> {
     Ok(StorageKey::new(data))
 }
 
-/// Length prefix size for value storage (4 bytes for u32 length)
-pub const VALUE_LENGTH_PREFIX_SIZE: usize = 4;
-
-/// Maximum actual value size (chunk size minus length prefix)
-pub const MAX_VALUE_DATA_SIZE: usize = STORAGE_VALUE_SIZE - VALUE_LENGTH_PREFIX_SIZE;
 /// Maximum value size accepted by the storage layer.
-pub const MAX_VALUE_SIZE: usize = MAX_VALUE_DATA_SIZE;
-
-/// Helper function for creating storage value chunks
 ///
-/// Stores value with a 4-byte length prefix to preserve exact data semantics.
-/// Format: [len_u32_le][data][padding]
-pub fn create_storage_value_chunk(value: &[u8]) -> Result<StorageValueChunk, ErrorCode> {
-    if value.len() > MAX_VALUE_DATA_SIZE {
-        return Err(ERR_VALUE_TOO_LARGE);
-    }
-
-    let mut data = [0u8; STORAGE_VALUE_SIZE];
-    // Store length as 4-byte little-endian prefix
-    let len_bytes = (value.len() as u32).to_le_bytes();
-    data[..VALUE_LENGTH_PREFIX_SIZE].copy_from_slice(&len_bytes);
-    // Store actual value after length prefix
-    data[VALUE_LENGTH_PREFIX_SIZE..VALUE_LENGTH_PREFIX_SIZE + value.len()].copy_from_slice(value);
-
-    Ok(StorageValueChunk::new(data))
-}
-
-/// Extract value from storage chunk by reading length prefix
-///
-/// Returns the exact bytes that were stored, preserving trailing zeros.
-pub fn extract_value_from_chunk(chunk: &StorageValueChunk) -> Option<Vec<u8>> {
-    let data = chunk.as_ref();
-    // Read length from 4-byte little-endian prefix
-    let len_bytes: [u8; 4] = data[..VALUE_LENGTH_PREFIX_SIZE].try_into().ok()?;
-    let len = u32::from_le_bytes(len_bytes) as usize;
-
-    // Validate length
-    if len > MAX_VALUE_DATA_SIZE {
-        return None;
-    }
-
-    // Extract exactly 'len' bytes of actual data
-    Some(data[VALUE_LENGTH_PREFIX_SIZE..VALUE_LENGTH_PREFIX_SIZE + len].to_vec())
-}
+/// We keep the existing 4092-byte limit to preserve bounded memory usage even though the
+/// underlying QMDB encoding is now variable-sized.
+pub const MAX_VALUE_SIZE: usize = 4092;
