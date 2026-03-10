@@ -32,10 +32,11 @@ use evolve_server::{
 use evolve_stf_traits::AccountsCodeStorage;
 use evolve_storage::{Operation, Storage, StorageConfig};
 use evolve_tx_eth::TxContext;
+use tokio::sync::oneshot;
 
 use crate::{
-    BlockExecutedInfo, EvnodeServer, EvnodeServerConfig, EvnodeStfExecutor, ExecutorServiceConfig,
-    OnBlockExecuted,
+    BlockExecutedInfo, EvnodeError, EvnodeServer, EvnodeServerConfig, EvnodeStfExecutor,
+    ExecutorServiceConfig, OnBlockExecuted,
 };
 
 type SharedChainIndex = Arc<PersistentChainIndex>;
@@ -66,9 +67,14 @@ struct ExternalConsensusSinkConfig {
 }
 
 struct ExternalConsensusCommitSink {
-    sender: Option<mpsc::SyncSender<BlockExecutedInfo>>,
+    sender: Option<mpsc::SyncSender<QueuedBlockExecution>>,
     worker: Option<JoinHandle<()>>,
     current_height: Arc<AtomicU64>,
+}
+
+struct QueuedBlockExecution {
+    info: BlockExecutedInfo,
+    result_tx: oneshot::Sender<Result<B256, EvnodeError>>,
 }
 
 impl ExternalConsensusCommitSink {
@@ -82,7 +88,7 @@ impl ExternalConsensusCommitSink {
     {
         const MAX_PENDING_BLOCKS: usize = 16;
 
-        let (sender, receiver) = mpsc::sync_channel::<BlockExecutedInfo>(MAX_PENDING_BLOCKS);
+        let (sender, receiver) = mpsc::sync_channel::<QueuedBlockExecution>(MAX_PENDING_BLOCKS);
         let current_height = Arc::new(AtomicU64::new(config.initial_height));
         let current_height_for_worker = Arc::clone(&current_height);
 
@@ -94,54 +100,78 @@ impl ExternalConsensusCommitSink {
                 .build()
                 .expect("failed to build commit sink runtime");
 
-            while let Ok(info) = receiver.recv() {
-                let state_root = info.state_root;
+            while let Ok(queued) = receiver.recv() {
+                let QueuedBlockExecution { info, result_tx } = queued;
                 let operations = state_changes_to_operations(info.state_changes);
-                runtime.block_on(async {
-                    storage
-                        .batch(operations)
-                        .await
-                        .expect("storage batch failed");
-                    storage.commit().await.expect("storage commit failed")
+                let result = runtime.block_on(async {
+                    storage.batch(operations).await.map_err(|err| {
+                        EvnodeError::Storage(format!("storage batch failed: {err:?}"))
+                    })?;
+                    storage.commit().await.map_err(|err| {
+                        EvnodeError::Storage(format!("storage commit failed: {err:?}"))
+                    })
                 });
-                let block_hash = compute_block_hash(info.height, info.timestamp, parent_hash);
-                let metadata = BlockMetadata::new(
-                    block_hash,
-                    parent_hash,
-                    state_root,
-                    info.timestamp,
-                    config.max_gas,
-                    Address::ZERO,
-                    config.chain_id,
-                );
 
-                let block = BlockBuilder::<TxContext>::new()
-                    .number(info.height)
-                    .timestamp(info.timestamp)
-                    .transactions(info.transactions)
-                    .build();
-                let (stored_block, stored_txs, stored_receipts) =
-                    build_index_data(&block, &info.block_result, &metadata);
-
-                if config.indexing_enabled {
-                    if let Some(ref index) = chain_index {
-                        if let Err(err) =
-                            index.store_block(stored_block, stored_txs, stored_receipts)
-                        {
-                            tracing::warn!("Failed to index block {}: {:?}", info.height, err);
-                        } else {
-                            tracing::debug!(
-                                "Indexed block {} (hash={}, state_root={})",
-                                info.height,
-                                block_hash,
-                                state_root
+                match result {
+                    Ok(commit_hash) => {
+                        let committed_state_root = B256::from_slice(commit_hash.as_bytes());
+                        if committed_state_root != info.state_root {
+                            tracing::warn!(
+                                height = info.height,
+                                preview_state_root = %info.state_root,
+                                committed_state_root = %committed_state_root,
+                                "execution state root differed from committed storage root"
                             );
                         }
+                        let block_hash =
+                            compute_block_hash(info.height, info.timestamp, parent_hash);
+                        let metadata = BlockMetadata::new(
+                            block_hash,
+                            parent_hash,
+                            committed_state_root,
+                            info.timestamp,
+                            config.max_gas,
+                            Address::ZERO,
+                            config.chain_id,
+                        );
+
+                        let block = BlockBuilder::<TxContext>::new()
+                            .number(info.height)
+                            .timestamp(info.timestamp)
+                            .transactions(info.transactions)
+                            .build();
+                        let (stored_block, stored_txs, stored_receipts) =
+                            build_index_data(&block, &info.block_result, &metadata);
+
+                        if config.indexing_enabled {
+                            if let Some(ref index) = chain_index {
+                                if let Err(err) =
+                                    index.store_block(stored_block, stored_txs, stored_receipts)
+                                {
+                                    tracing::warn!(
+                                        "Failed to index block {}: {:?}",
+                                        info.height,
+                                        err
+                                    );
+                                } else {
+                                    tracing::debug!(
+                                        "Indexed block {} (hash={}, state_root={})",
+                                        info.height,
+                                        block_hash,
+                                        committed_state_root
+                                    );
+                                }
+                            }
+                        }
+
+                        parent_hash = block_hash;
+                        current_height_for_worker.store(info.height, Ordering::SeqCst);
+                        let _ = result_tx.send(Ok(committed_state_root));
+                    }
+                    Err(err) => {
+                        let _ = result_tx.send(Err(err));
                     }
                 }
-
-                parent_hash = block_hash;
-                current_height_for_worker.store(info.height, Ordering::SeqCst);
             }
         });
 
@@ -160,9 +190,23 @@ impl ExternalConsensusCommitSink {
             .clone();
 
         Arc::new(move |info| {
-            sender
-                .send(info)
-                .expect("external consensus commit sink stopped unexpectedly");
+            let sender = sender.clone();
+            Box::pin(async move {
+                let (result_tx, result_rx) = oneshot::channel();
+                sender
+                    .send(QueuedBlockExecution { info, result_tx })
+                    .map_err(|_| {
+                        EvnodeError::Unavailable(
+                            "external consensus commit sink stopped unexpectedly".to_string(),
+                        )
+                    })?;
+                result_rx.await.map_err(|_| {
+                    EvnodeError::Unavailable(
+                        "external consensus commit sink stopped before returning a root"
+                            .to_string(),
+                    )
+                })?
+            })
         })
     }
 

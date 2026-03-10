@@ -1,21 +1,12 @@
-//! QmdbStorage implementation using commonware's QMDB
+//! QmdbStorage implementation using commonware's Current QMDB.
 //!
 //! QMDB (Quick Merkle Database) provides:
 //! - Historical proofs for any value ever associated with a key
 //! - Efficient Merkle root computation
 //! - Pruning support for storage management
 //!
-//! ## State Machine
-//!
-//! QMDB uses a state machine pattern:
-//! - Clean (Merkleized, Durable) - ready for proofs, has root hash
-//! - Mutable (Unmerkleized, NonDurable) - can update/delete keys
-//!
-//! Transitions:
-//! - init() → Clean
-//! - into_mutable() → Mutable
-//! - commit(metadata) → (Durable, Range) - returns tuple
-//! - into_merkleized() → Clean
+//! Mutations are expressed as speculative
+//! batches that are merkleized before they are applied to the live database.
 
 // Instant is used for performance metrics, not consensus-affecting logic.
 #![allow(clippy::disallowed_types)]
@@ -28,13 +19,14 @@ use crate::types::{
 };
 use async_trait::async_trait;
 use commonware_cryptography::sha256::Sha256;
-use commonware_runtime::{utils::buffer::pool::PoolRef, Clock, Metrics, Storage as RStorage};
-use commonware_storage::qmdb::{
-    current::{unordered::fixed::Db, FixedConfig},
-    store::{Durable, NonDurable},
-    Merkleized, Unmerkleized,
+use commonware_runtime::{
+    buffer::paged::CacheRef, BufferPooler, Clock, Metrics, Storage as RStorage,
 };
 use commonware_storage::translator::EightCap;
+use commonware_storage::{
+    qmdb::current::{unordered::fixed::Db, FixedConfig},
+    Persistable,
+};
 use evolve_core::{ErrorCode, ReadonlyKV};
 use std::num::{NonZeroU16, NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
@@ -43,27 +35,17 @@ use thiserror::Error;
 use tokio::runtime::RuntimeFlavor;
 use tokio::sync::RwLock;
 
-/// Type alias for QMDB in Clean state (Merkleized, Durable)
-/// N = 64 because SHA256 digest is 32 bytes, and N must be 2 * digest_size
-type QmdbClean<C> =
-    Db<C, StorageKey, StorageValueChunk, Sha256, EightCap, 64, Merkleized<Sha256>, Durable>;
+/// Type alias for QMDB in Current state.
+/// `N = 64` because SHA256 digests are 32 bytes and QMDB expects `2 * digest_size`.
+type QmdbCurrent<C> = Db<C, StorageKey, StorageValueChunk, Sha256, EightCap, 64>;
 
-/// Type alias for QMDB in Mutable state (Unmerkleized, NonDurable)
-type QmdbMutable<C> =
-    Db<C, StorageKey, StorageValueChunk, Sha256, EightCap, 64, Unmerkleized, NonDurable>;
-
-/// Type alias for QMDB in Durable/Unmerkleized state (after commit, before merkleize)
-type QmdbDurable<C> =
-    Db<C, StorageKey, StorageValueChunk, Sha256, EightCap, 64, Unmerkleized, Durable>;
-
-/// Internal state enum to track QMDB state machine transitions
-enum QmdbState<C: RStorage + Clock + Metrics + Clone + Send + Sync + 'static> {
-    /// Clean state - ready for proofs, durable
-    Clean(QmdbClean<C>),
-    /// Mutable state - can perform updates/deletes
-    Mutable(QmdbMutable<C>),
-    /// Transitional state for ownership management
-    Transitioning,
+#[derive(Debug)]
+struct PreparedBatch {
+    updates: Vec<(StorageKey, Option<StorageValueChunk>)>,
+    keys_to_invalidate: Vec<Vec<u8>>,
+    ops_count: usize,
+    sets: usize,
+    deletes: usize,
 }
 
 /// Error types for QmdbStorage
@@ -94,38 +76,44 @@ impl From<ErrorCode> for StorageError {
     }
 }
 
-/// Maps QMDB errors to evolve error codes
-fn map_qmdb_error(err: impl std::fmt::Display) -> ErrorCode {
-    tracing::error!("QMDB error: {err}");
-    crate::types::ERR_ADB_ERROR
+fn map_qmdb_error(err: impl std::fmt::Display) -> StorageError {
+    StorageError::Qmdb(err.to_string())
 }
 
-/// Maps concurrency errors to evolve error codes
-fn map_concurrency_error(err: impl std::fmt::Display) -> ErrorCode {
-    tracing::error!("Concurrency error: {err}");
-    crate::types::ERR_CONCURRENCY_ERROR
+fn map_storage_error(err: StorageError) -> ErrorCode {
+    match err {
+        StorageError::Key(code) => code,
+        StorageError::ValueTooLarge { .. } => crate::types::ERR_VALUE_TOO_LARGE,
+        StorageError::InvalidState(_) => crate::types::ERR_CONCURRENCY_ERROR,
+        StorageError::Qmdb(err) => {
+            tracing::error!("QMDB error: {err}");
+            crate::types::ERR_ADB_ERROR
+        }
+        StorageError::Io(err) => {
+            tracing::error!("Storage IO error: {err}");
+            crate::types::ERR_STORAGE_IO
+        }
+        StorageError::InvalidConfig(err) => {
+            tracing::error!("Invalid storage config: {err}");
+            crate::types::ERR_STORAGE_IO
+        }
+    }
 }
 
-/// QmdbStorage implements evolve's storage traits using commonware's QMDB
-///
-/// Provides:
-/// - Synchronous read via `ReadonlyKV::get()` (uses block_on internally)
-/// - Async batch operations via `Storage::batch()`
-/// - Async commit with Merkle root via `Storage::commit()`
-/// - In-memory read cache (ShardedDbCache) for reduced lock contention
-///
-/// ## State Machine Management
-///
-/// The wrapper automatically manages QMDB state transitions:
-/// - `batch()` ensures the DB is in Mutable state before applying operations
-/// - `commit()` transitions through: Mutable → Durable → Clean (with Merkle root)
+fn root_to_commit_hash(root: impl AsRef<[u8]>) -> Result<crate::types::CommitHash, StorageError> {
+    let bytes: [u8; 32] = root
+        .as_ref()
+        .try_into()
+        .map_err(|_| StorageError::Qmdb("invalid root hash size".to_string()))?;
+    Ok(crate::types::CommitHash::new(bytes))
+}
+
+/// QmdbStorage implements evolve's storage traits using commonware's QMDB.
 pub struct QmdbStorage<C>
 where
-    C: RStorage + Clock + Metrics + Clone + Send + Sync + 'static,
+    C: RStorage + BufferPooler + Clock + Metrics + Clone + Send + Sync + 'static,
 {
-    #[allow(dead_code)]
-    context: Arc<C>,
-    state: Arc<RwLock<QmdbState<C>>>,
+    db: Arc<RwLock<QmdbCurrent<C>>>,
     /// Read cache for fast synchronous lookups
     cache: Arc<ShardedDbCache>,
     /// Optional metrics for monitoring storage performance
@@ -134,12 +122,11 @@ where
 
 impl<C> Clone for QmdbStorage<C>
 where
-    C: RStorage + Clock + Metrics + Clone + Send + Sync + 'static,
+    C: RStorage + BufferPooler + Clock + Metrics + Clone + Send + Sync + 'static,
 {
     fn clone(&self) -> Self {
         Self {
-            context: self.context.clone(),
-            state: self.state.clone(),
+            db: self.db.clone(),
             cache: self.cache.clone(),
             metrics: self.metrics.clone(),
         }
@@ -148,7 +135,7 @@ where
 
 impl<C> QmdbStorage<C>
 where
-    C: RStorage + Clock + Metrics + Clone + Send + Sync + 'static,
+    C: RStorage + BufferPooler + Clock + Metrics + Clone + Send + Sync + 'static,
 {
     /// Create a new QmdbStorage instance
     pub async fn new(
@@ -193,20 +180,21 @@ where
             mmr_items_per_blob: NonZeroU64::new(1000).unwrap(),
             mmr_write_buffer: write_buffer_size,
             mmr_metadata_partition: format!("{}_mmr-metadata", config.partition_prefix),
-            bitmap_metadata_partition: format!("{}_bitmap-metadata", config.partition_prefix),
+            grafted_mmr_metadata_partition: format!(
+                "{}_grafted-mmr-metadata",
+                config.partition_prefix
+            ),
             translator: EightCap,
             thread_pool: None,
-            buffer_pool: PoolRef::new(page_size, capacity),
+            page_cache: CacheRef::from_pooler(&context, page_size, capacity),
         };
 
-        // Initialize QMDB - starts in Clean state (Merkleized, Durable)
-        let db: QmdbClean<C> = Db::init(context.clone(), qmdb_config)
+        let db = Db::init(context, qmdb_config)
             .await
-            .map_err(|e| StorageError::Qmdb(e.to_string()))?;
+            .map_err(map_qmdb_error)?;
 
         Ok(Self {
-            context: Arc::new(context),
-            state: Arc::new(RwLock::new(QmdbState::Clean(db))),
+            db: Arc::new(RwLock::new(db)),
             cache: Arc::new(ShardedDbCache::with_defaults()),
             metrics,
         })
@@ -234,92 +222,88 @@ where
         self.get_async_uncached(key).await
     }
 
-    /// Commit the current state and generate a commit hash
-    ///
-    /// State transition: Mutable → Durable → Clean (Merkleized)
-    pub async fn commit_state(&self) -> Result<crate::types::CommitHash, StorageError> {
+    /// Async batch get that resolves multiple keys while taking the QMDB read lock once.
+    pub async fn get_many_async(
+        &self,
+        keys: &[Vec<u8>],
+    ) -> Result<Vec<Option<Vec<u8>>>, ErrorCode> {
+        if keys.len() > crate::types::MAX_BATCH_SIZE {
+            return Err(crate::types::ERR_BATCH_TOO_LARGE);
+        }
+
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut results = vec![None; keys.len()];
+        let mut misses = Vec::with_capacity(keys.len());
+
+        for (idx, key) in keys.iter().enumerate() {
+            if let Some(cached) = self.cache.get(key) {
+                self.metrics.record_cache_hit();
+                match cached {
+                    CachedValue::Present(data) => results[idx] = Some(data),
+                    CachedValue::Absent => {}
+                }
+                continue;
+            }
+
+            self.metrics.record_cache_miss();
+            misses.push((idx, key.clone(), create_storage_key(key)?));
+        }
+
+        if misses.is_empty() {
+            return Ok(results);
+        }
+
         let start = Instant::now();
-        let mut state_guard = self.state.write().await;
+        let miss_values = self.get_many_async_uncached(&misses).await?;
+        self.metrics
+            .record_read_latency(start.elapsed().as_secs_f64());
 
-        // Take ownership to perform state transitions
-        let current_state = std::mem::replace(&mut *state_guard, QmdbState::Transitioning);
-
-        let clean_db = match current_state {
-            QmdbState::Clean(db) => {
-                // Already clean, just return current root
-                db
+        for (miss, value) in misses.into_iter().zip(miss_values) {
+            let (idx, key, _) = miss;
+            match &value {
+                Some(data) => self.cache.insert_present(key, data.clone()),
+                None => self.cache.insert_absent(key),
             }
-            QmdbState::Mutable(db) => {
-                // Mutable → commit() → (Durable, Range)
-                let (durable_db, _range): (QmdbDurable<C>, _) = db
-                    .commit(None)
-                    .await
-                    .map_err(|e| StorageError::Qmdb(e.to_string()))?;
+            results[idx] = value;
+        }
 
-                // Durable → into_merkleized() → Clean
-                let clean: QmdbClean<C> = durable_db
-                    .into_merkleized()
-                    .await
-                    .map_err(|e| StorageError::Qmdb(e.to_string()))?;
-
-                clean
-            }
-            QmdbState::Transitioning => {
-                return Err(StorageError::InvalidState(
-                    "Storage in transitioning state".to_string(),
-                ));
-            }
-        };
-
-        // Get the root hash
-        let root = clean_db.root();
-        let hash = match root.as_ref().try_into() {
-            Ok(bytes) => crate::types::CommitHash::new(bytes),
-            Err(_) => {
-                *state_guard = QmdbState::Clean(clean_db);
-                return Err(StorageError::Qmdb("Invalid root hash size".to_string()));
-            }
-        };
-
-        // Store clean state back
-        *state_guard = QmdbState::Clean(clean_db);
-
-        // Record commit latency
-        self.metrics.record_commit(start.elapsed().as_secs_f64());
-
-        Ok(hash)
+        Ok(results)
     }
 
-    /// Apply a batch of operations
-    pub async fn apply_batch(
-        &self,
+    /// Synchronous wrapper for batched reads.
+    pub fn get_many(&self, keys: &[Vec<u8>]) -> Result<Vec<Option<Vec<u8>>>, ErrorCode> {
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            return match handle.runtime_flavor() {
+                RuntimeFlavor::MultiThread => {
+                    tokio::task::block_in_place(|| handle.block_on(self.get_many_async(keys)))
+                }
+                RuntimeFlavor::CurrentThread => Err(crate::types::ERR_RUNTIME_ERROR),
+                _ => tokio::task::block_in_place(|| handle.block_on(self.get_many_async(keys))),
+            };
+        }
+
+        futures::executor::block_on(self.get_many_async(keys))
+    }
+
+    fn prepare_batch(
         operations: Vec<crate::types::Operation>,
-    ) -> Result<(), StorageError> {
-        // Validate batch size against MAX_BATCH_SIZE
+    ) -> Result<PreparedBatch, StorageError> {
         if operations.len() > crate::types::MAX_BATCH_SIZE {
             return Err(StorageError::Key(crate::types::ERR_BATCH_TOO_LARGE));
         }
 
-        if operations.is_empty() {
-            return Ok(());
-        }
-
-        let start = Instant::now();
         let ops_count = operations.len();
         let mut sets = 0usize;
         let mut deletes = 0usize;
-
-        // Collect keys for cache invalidation
-        let mut keys_to_invalidate = Vec::with_capacity(operations.len());
-
-        // Pre-compute all storage keys and values before acquiring the lock
-        let mut prepared_updates: Vec<(StorageKey, Option<StorageValueChunk>)> =
-            Vec::with_capacity(operations.len());
+        let mut keys_to_invalidate = Vec::with_capacity(ops_count);
+        let mut updates = Vec::with_capacity(ops_count);
 
         for op in operations {
             match op {
                 crate::types::Operation::Set { key, value } => {
-                    // Validate value size before processing (must fit with length prefix)
                     if value.len() > MAX_VALUE_DATA_SIZE {
                         return Err(StorageError::ValueTooLarge {
                             size: value.len(),
@@ -331,63 +315,92 @@ where
                     let storage_key = create_storage_key(&key)?;
                     let storage_value = create_storage_value_chunk(&value)?;
                     keys_to_invalidate.push(key);
-                    prepared_updates.push((storage_key, Some(storage_value)));
+                    updates.push((storage_key, Some(storage_value)));
                 }
                 crate::types::Operation::Remove { key } => {
                     deletes += 1;
                     let storage_key = create_storage_key(&key)?;
                     keys_to_invalidate.push(key);
-                    prepared_updates.push((storage_key, None));
+                    updates.push((storage_key, None));
                 }
             }
         }
 
-        let mut state_guard = self.state.write().await;
+        Ok(PreparedBatch {
+            updates,
+            keys_to_invalidate,
+            ops_count,
+            sets,
+            deletes,
+        })
+    }
 
-        // Take ownership to perform state transition if needed
-        let current_state = std::mem::replace(&mut *state_guard, QmdbState::Transitioning);
+    /// Commit the current state and generate a commit hash.
+    pub async fn commit_state(&self) -> Result<crate::types::CommitHash, StorageError> {
+        let start = Instant::now();
+        let db = self.db.read().await;
+        db.commit().await.map_err(map_qmdb_error)?;
+        let hash = root_to_commit_hash(db.root())?;
+        self.metrics.record_commit(start.elapsed().as_secs_f64());
+        Ok(hash)
+    }
 
-        let mut mutable_db: QmdbMutable<C> = match current_state {
-            QmdbState::Clean(db) => {
-                // Clean → into_mutable() → Mutable (sync method)
-                db.into_mutable()
-            }
-            QmdbState::Mutable(db) => db,
-            QmdbState::Transitioning => {
-                return Err(StorageError::InvalidState(
-                    "Storage in transitioning state".to_string(),
-                ));
-            }
-        };
+    /// Preview the state root produced by applying a batch without mutating the database.
+    pub async fn preview_batch_root(
+        &self,
+        operations: &[crate::types::Operation],
+    ) -> Result<crate::types::CommitHash, StorageError> {
+        let prepared = Self::prepare_batch(operations.to_vec())?;
+        let db = self.db.read().await;
 
-        // Apply all updates
-        for (storage_key, maybe_value) in prepared_updates {
-            match maybe_value {
-                Some(storage_value) => {
-                    if let Err(e) = mutable_db.update(storage_key, storage_value).await {
-                        *state_guard = QmdbState::Mutable(mutable_db);
-                        return Err(StorageError::Qmdb(e.to_string()));
-                    }
-                }
-                None => {
-                    // Delete the key
-                    if let Err(e) = mutable_db.delete(storage_key).await {
-                        *state_guard = QmdbState::Mutable(mutable_db);
-                        return Err(StorageError::Qmdb(e.to_string()));
-                    }
-                }
-            }
+        if prepared.updates.is_empty() {
+            return root_to_commit_hash(db.root());
         }
 
-        // Store mutable state back
-        *state_guard = QmdbState::Mutable(mutable_db);
+        let mut batch = db.new_batch();
+        for (storage_key, maybe_value) in prepared.updates {
+            batch.write(storage_key, maybe_value);
+        }
+        let merkleized = batch.merkleize(None).await.map_err(map_qmdb_error)?;
+        root_to_commit_hash(merkleized.root())
+    }
 
-        // Invalidate cache entries for modified keys
+    /// Apply a batch of operations.
+    pub async fn apply_batch(
+        &self,
+        operations: Vec<crate::types::Operation>,
+    ) -> Result<(), StorageError> {
+        let prepared = Self::prepare_batch(operations)?;
+        if prepared.updates.is_empty() {
+            return Ok(());
+        }
+
+        let start = Instant::now();
+        let PreparedBatch {
+            updates,
+            keys_to_invalidate,
+            ops_count,
+            sets,
+            deletes,
+        } = prepared;
+
+        {
+            let mut db = self.db.write().await;
+            let changeset = {
+                let mut batch = db.new_batch();
+                for (storage_key, maybe_value) in updates {
+                    batch.write(storage_key, maybe_value);
+                }
+                let merkleized = batch.merkleize(None).await.map_err(map_qmdb_error)?;
+                merkleized.finalize()
+            };
+            db.apply_batch(changeset).await.map_err(map_qmdb_error)?;
+        }
+
         for key in keys_to_invalidate {
             self.cache.invalidate(&key);
         }
 
-        // Record batch metrics
         self.metrics
             .record_batch(start.elapsed().as_secs_f64(), ops_count, sets, deletes);
 
@@ -397,50 +410,44 @@ where
     /// Internal async get implementation - bypasses cache, hits QMDB directly.
     async fn get_async_uncached(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
         let storage_key = create_storage_key(key)?;
-        let state = self.state.clone();
+        let db = self.db.read().await;
+        Self::decode_storage_value(db.get(&storage_key).await)
+    }
 
-        let result: Result<Option<StorageValueChunk>, _> = {
-            let state_guard = state.read().await;
-            let state_name = match &*state_guard {
-                QmdbState::Clean(_) => "Clean",
-                QmdbState::Mutable(_) => "Mutable",
-                QmdbState::Transitioning => "Transitioning",
-            };
-            tracing::debug!(
-                "get_async_uncached: state={}, key_len={}",
-                state_name,
-                key.len()
-            );
+    async fn get_many_async_uncached(
+        &self,
+        misses: &[(usize, Vec<u8>, StorageKey)],
+    ) -> Result<Vec<Option<Vec<u8>>>, ErrorCode> {
+        let db = self.db.read().await;
+        let mut values = Vec::with_capacity(misses.len());
 
-            match &*state_guard {
-                QmdbState::Clean(db) => db.get(&storage_key).await,
-                QmdbState::Mutable(db) => db.get(&storage_key).await,
-                QmdbState::Transitioning => {
-                    return Err(crate::types::ERR_CONCURRENCY_ERROR);
-                }
-            }
-        };
+        for (_, _, storage_key) in misses {
+            values.push(Self::decode_storage_value(db.get(storage_key).await)?);
+        }
 
+        Ok(values)
+    }
+
+    fn decode_storage_value(
+        result: Result<Option<StorageValueChunk>, impl std::fmt::Display>,
+    ) -> Result<Option<Vec<u8>>, ErrorCode> {
         match result {
-            Ok(Some(value_chunk)) => {
-                // Extract value using length prefix
-                match extract_value_from_chunk(&value_chunk) {
-                    Some(data) if data.is_empty() => Ok(None), // Empty value treated as absent
-                    Some(data) => Ok(Some(data)),
-                    None => {
-                        // Invalid length prefix - treat as corrupted/absent
-                        tracing::warn!("Invalid value chunk format, treating as absent");
-                        Ok(None)
-                    }
+            Ok(Some(value_chunk)) => match extract_value_from_chunk(&value_chunk) {
+                Some(data) if data.is_empty() => Ok(None),
+                Some(data) => Ok(Some(data)),
+                None => {
+                    tracing::warn!("Invalid value chunk format, treating as absent");
+                    Ok(None)
                 }
-            }
+            },
             Ok(None) => Ok(None),
             Err(e) => {
                 let err_str = e.to_string();
                 if err_str.contains("not found") {
                     Ok(None)
                 } else {
-                    Err(map_qmdb_error(err_str))
+                    tracing::error!("QMDB read error: {err_str}");
+                    Err(crate::types::ERR_ADB_ERROR)
                 }
             }
         }
@@ -450,7 +457,7 @@ where
 // Implement ReadonlyKV for QmdbStorage
 impl<C> ReadonlyKV for QmdbStorage<C>
 where
-    C: RStorage + Clock + Metrics + Clone + Send + Sync + 'static,
+    C: RStorage + BufferPooler + Clock + Metrics + Clone + Send + Sync + 'static,
 {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
         // Fast path: check cache first (synchronous, no async overhead)
@@ -498,18 +505,16 @@ where
 #[async_trait(?Send)]
 impl<C> crate::Storage for QmdbStorage<C>
 where
-    C: RStorage + Clock + Metrics + Clone + Send + Sync + 'static,
+    C: RStorage + BufferPooler + Clock + Metrics + Clone + Send + Sync + 'static,
 {
     async fn commit(&self) -> Result<crate::types::CommitHash, ErrorCode> {
-        self.commit_state()
-            .await
-            .map_err(|_| crate::types::ERR_STORAGE_IO)
+        self.commit_state().await.map_err(map_storage_error)
     }
 
     async fn batch(&self, operations: Vec<crate::types::Operation>) -> Result<(), ErrorCode> {
         self.apply_batch(operations)
             .await
-            .map_err(map_concurrency_error)
+            .map_err(map_storage_error)
     }
 }
 
@@ -1317,6 +1322,135 @@ mod tests {
                 retrieved.len()
             );
             assert_eq!(retrieved, value, "Value must be identical after commit");
+        })
+    }
+
+    #[test]
+    fn test_preview_batch_root_matches_eventual_commit_hash() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = QmdbStorage::new(context, config).await.unwrap();
+            storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: b"base".to_vec(),
+                    value: b"value1".to_vec(),
+                }])
+                .await
+                .unwrap();
+            let committed_base_hash = storage.commit_state().await.unwrap();
+
+            let preview_operations = vec![
+                crate::types::Operation::Remove {
+                    key: b"base".to_vec(),
+                },
+                crate::types::Operation::Set {
+                    key: b"next".to_vec(),
+                    value: b"value2".to_vec(),
+                },
+            ];
+            let preview_hash = storage
+                .preview_batch_root(&preview_operations)
+                .await
+                .unwrap();
+
+            assert_ne!(preview_hash, committed_base_hash);
+            assert_eq!(storage.get(b"base").unwrap(), Some(b"value1".to_vec()));
+            assert_eq!(storage.get(b"next").unwrap(), None);
+
+            storage.apply_batch(preview_operations).await.unwrap();
+            let committed_hash = storage.commit_state().await.unwrap();
+
+            assert_eq!(preview_hash, committed_hash);
+            assert_eq!(storage.get(b"base").unwrap(), None);
+            assert_eq!(storage.get(b"next").unwrap(), Some(b"value2".to_vec()));
+        })
+    }
+
+    #[test]
+    fn test_get_many_returns_results_in_order() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = QmdbStorage::new(context, config).await.unwrap();
+            storage
+                .apply_batch(vec![
+                    crate::types::Operation::Set {
+                        key: b"key1".to_vec(),
+                        value: b"value1".to_vec(),
+                    },
+                    crate::types::Operation::Set {
+                        key: b"key2".to_vec(),
+                        value: b"value2".to_vec(),
+                    },
+                ])
+                .await
+                .unwrap();
+
+            let values = storage
+                .get_many(&[b"missing".to_vec(), b"key2".to_vec(), b"key1".to_vec()])
+                .unwrap();
+
+            assert_eq!(
+                values,
+                vec![None, Some(b"value2".to_vec()), Some(b"value1".to_vec())]
+            );
+        })
+    }
+
+    #[test]
+    fn test_get_many_uses_cache_for_present_and_absent_values() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let storage = QmdbStorage::new(context, config).await.unwrap();
+            storage
+                .apply_batch(vec![crate::types::Operation::Set {
+                    key: b"key".to_vec(),
+                    value: b"value".to_vec(),
+                }])
+                .await
+                .unwrap();
+
+            let first = storage
+                .get_many(&[b"key".to_vec(), b"missing".to_vec()])
+                .unwrap();
+            let second = storage
+                .get_many(&[b"key".to_vec(), b"missing".to_vec()])
+                .unwrap();
+
+            assert_eq!(first, second);
+            assert_eq!(first, vec![Some(b"value".to_vec()), None]);
         })
     }
 }
