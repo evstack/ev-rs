@@ -1439,6 +1439,53 @@ mod tests {
     }
 
     #[test]
+    fn test_variable_codec_survives_reopen() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = crate::types::StorageConfig {
+            path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let runtime_config = TokioConfig::default()
+            .with_storage_directory(temp_dir.path())
+            .with_worker_threads(2);
+
+        let runner = Runner::new(runtime_config);
+
+        runner.start(|context| async move {
+            let config2 = config.clone();
+            let ctx2 = context.clone();
+
+            let storage = QmdbStorage::new(context, config).await.unwrap();
+            storage
+                .apply_batch(vec![
+                    crate::types::Operation::Set {
+                        key: b"k1".to_vec(),
+                        value: b"hello".to_vec(),
+                    },
+                    crate::types::Operation::Set {
+                        key: b"k2".to_vec(),
+                        value: vec![0u8; 100],
+                    },
+                    crate::types::Operation::Set {
+                        key: b"k3".to_vec(),
+                        value: Vec::new(),
+                    },
+                ])
+                .await
+                .unwrap();
+            storage.commit_state().await.unwrap();
+            drop(storage);
+
+            // Reopen from the same directory and verify values survived.
+            let reopened = QmdbStorage::new(ctx2, config2).await.unwrap();
+            assert_eq!(reopened.get(b"k1").unwrap(), Some(b"hello".to_vec()));
+            assert_eq!(reopened.get(b"k2").unwrap(), Some(vec![0u8; 100]));
+            assert_eq!(reopened.get(b"k3").unwrap(), Some(Vec::new()));
+        })
+    }
+
+    #[test]
     fn test_preview_batch_root_matches_eventual_commit_hash() {
         let temp_dir = TempDir::new().unwrap();
         let config = crate::types::StorageConfig {
