@@ -25,14 +25,20 @@ use commonware_storage::translator::EightCap;
 use evolve_core::{ErrorCode, ReadonlyKV};
 use std::num::{NonZeroU16, NonZeroU64, NonZeroUsize};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use thiserror::Error;
 use tokio::runtime::RuntimeFlavor;
-use tokio::sync::RwLock;
+use tokio::sync::{
+    mpsc::{unbounded_channel, UnboundedSender},
+    RwLock,
+};
 
 /// Type alias for QMDB in Current state.
 /// `N = 64` because SHA256 digests are 32 bytes and QMDB expects `2 * digest_size`.
 type QmdbCurrent<C> = Db<C, StorageKey, Vec<u8>, Sha256, EightCap, 64>;
+
+const PRUNE_SCHEDULE_DELAY: Duration = Duration::from_millis(50);
+const PRUNE_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 #[derive(Debug)]
 struct PreparedBatch {
@@ -109,6 +115,7 @@ where
     C: RStorage + BufferPooler + Clock + Metrics + Clone + Send + Sync + 'static,
 {
     db: Arc<RwLock<QmdbCurrent<C>>>,
+    prune_tx: UnboundedSender<()>,
     /// Read cache for fast synchronous lookups
     cache: Arc<ShardedDbCache>,
     /// Optional metrics for monitoring storage performance
@@ -122,6 +129,7 @@ where
     fn clone(&self) -> Self {
         Self {
             db: self.db.clone(),
+            prune_tx: self.prune_tx.clone(),
             cache: self.cache.clone(),
             metrics: self.metrics.clone(),
         }
@@ -132,6 +140,42 @@ impl<C> QmdbStorage<C>
 where
     C: RStorage + BufferPooler + Clock + Metrics + Clone + Send + Sync + 'static,
 {
+    fn spawn_prune_worker(db: Arc<RwLock<QmdbCurrent<C>>>) -> UnboundedSender<()> {
+        let (prune_tx, mut prune_rx) = unbounded_channel::<()>();
+
+        tokio::spawn(async move {
+            while prune_rx.recv().await.is_some() {
+                tokio::time::sleep(PRUNE_SCHEDULE_DELAY).await;
+                while prune_rx.try_recv().is_ok() {}
+
+                loop {
+                    let mut db = match db.try_write() {
+                        Ok(db) => db,
+                        Err(_) => {
+                            while prune_rx.try_recv().is_ok() {}
+                            tokio::time::sleep(PRUNE_RETRY_DELAY).await;
+                            continue;
+                        }
+                    };
+
+                    let prune_loc = db.inactivity_floor_loc();
+                    if let Err(err) = db.prune(prune_loc).await {
+                        tracing::error!("background prune failed: {err}");
+                        break;
+                    }
+
+                    if let Err(err) = db.sync().await {
+                        tracing::error!("background prune sync failed: {err}");
+                    }
+
+                    break;
+                }
+            }
+        });
+
+        prune_tx
+    }
+
     /// Create a new QmdbStorage instance
     pub async fn new(
         context: C,
@@ -186,12 +230,16 @@ where
             page_cache: CacheRef::from_pooler(&context, page_size, capacity),
         };
 
-        let db = Db::init(context, qmdb_config)
-            .await
-            .map_err(map_qmdb_error)?;
+        let db = Arc::new(RwLock::new(
+            Db::init(context, qmdb_config)
+                .await
+                .map_err(map_qmdb_error)?,
+        ));
+        let prune_tx = Self::spawn_prune_worker(db.clone());
 
         Ok(Self {
-            db: Arc::new(RwLock::new(db)),
+            db,
+            prune_tx,
             cache: Arc::new(ShardedDbCache::with_defaults()),
             metrics,
         })
@@ -334,11 +382,11 @@ where
     /// Commit the current state and generate a commit hash.
     pub async fn commit_state(&self) -> Result<crate::types::CommitHash, StorageError> {
         let start = Instant::now();
-        let mut db = self.db.write().await;
-        let prune_loc = db.inactivity_floor_loc();
-        db.prune(prune_loc).await.map_err(map_qmdb_error)?;
+        let db = self.db.write().await;
         db.sync().await.map_err(map_qmdb_error)?;
         let hash = root_to_commit_hash(db.root())?;
+        drop(db);
+        let _ = self.prune_tx.send(());
         self.metrics.record_commit(start.elapsed().as_secs_f64());
         Ok(hash)
     }
@@ -1364,10 +1412,17 @@ mod tests {
             storage.apply_batch(second_ops).await.unwrap();
             storage.commit_state().await.unwrap();
 
-            let start_after = {
-                let db = storage.db.read().await;
-                *db.bounds().await.start
-            };
+            let mut start_after = start_before;
+            for _ in 0..50 {
+                start_after = {
+                    let db = storage.db.read().await;
+                    *db.bounds().await.start
+                };
+                if start_after > start_before {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
 
             assert!(
                 start_after > start_before,
