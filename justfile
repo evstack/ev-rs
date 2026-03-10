@@ -49,6 +49,12 @@ check:
 # QUALITY
 # ============================================================================
 
+# Generate token module Rust code from Quint spec
+[group('build')]
+gen-token:
+    cargo run -p evolve_specgen -- specs/token.qnt crates/app/sdk/extensions/token/src/generated/token_from_spec.rs
+    cargo fmt --all
+
 # Format all code
 [group('quality')]
 fmt:
@@ -212,6 +218,28 @@ sim-debug trace:
 [group('sim')]
 sim-report trace:
     cargo run -p evolve-sim -- report --trace {{trace}}
+
+# ============================================================================
+# SPEC CONFORMANCE
+# ============================================================================
+
+# Run core STF Quint spec tests and live `quint_connect` conformance
+[group('spec')]
+spec-test-core:
+    quint test specs/stf_core.qnt
+    cargo test -p evolve_stf --test quint_core_connect
+
+# Run extended STF model specs backed by live `quint_connect`
+[group('spec')]
+spec-test-extended:
+    quint test specs/stf_post_tx.qnt
+    cargo test -p evolve_stf --test quint_post_tx_connect
+
+# Run full STF spec suite (core + extended)
+[group('spec')]
+spec-test:
+    just spec-test-core
+    just spec-test-extended
 
 # ============================================================================
 # BENCHMARKS
