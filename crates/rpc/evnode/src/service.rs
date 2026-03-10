@@ -3,6 +3,8 @@
 //! This module provides the gRPC server implementation for the EVNode ExecutorService,
 //! which allows ev-node to interact with the Evolve execution layer.
 
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -16,7 +18,7 @@ use evolve_stf::results::BlockResult;
 use evolve_stf_traits::{AccountsCodeStorage, StateChange, Transaction};
 use evolve_tx_eth::TxContext;
 use prost_types::Timestamp;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tonic::{Request, Response, Status};
 
 use crate::error::EvnodeError;
@@ -27,18 +29,32 @@ use crate::proto::evnode::v1::{
     SetFinalResponse,
 };
 
-/// Compute a state root from changes.
+/// Compute a projected state root from a base root plus pending changes.
 ///
-/// This is a simple hash of all changes for MVP.
-/// In production, this would be a proper Merkle root.
-pub fn compute_state_root(changes: &[StateChange]) -> B256 {
+/// This is not the storage engine's Merkle root. It is a deterministic hash used
+/// to track pending execution state between `execute_txs` calls until the storage
+/// backend commits the changes.
+pub fn compute_state_root(base_state_root: B256, changes: &[StateChange]) -> B256 {
     use alloy_primitives::keccak256;
 
     if changes.is_empty() {
-        return B256::ZERO;
+        return base_state_root;
     }
 
-    let mut data = Vec::new();
+    let estimated_changes_bytes: usize = changes
+        .iter()
+        .map(|change| match change {
+            StateChange::Set { key, value } => {
+                1 + std::mem::size_of::<u32>()
+                    + key.len()
+                    + std::mem::size_of::<u32>()
+                    + value.len()
+            }
+            StateChange::Remove { key } => 1 + std::mem::size_of::<u32>() + key.len(),
+        })
+        .sum();
+    let mut data = Vec::with_capacity(B256::len_bytes() + estimated_changes_bytes);
+    data.extend_from_slice(base_state_root.as_slice());
     for change in changes {
         match change {
             StateChange::Set { key, value } => {
@@ -133,6 +149,8 @@ struct ExecutorState {
     finalized_height: AtomicU64,
     /// Pending state changes (applied but not yet committed).
     pending_changes: RwLock<Vec<StateChange>>,
+    /// Serializes block execution so validation and root updates stay linear.
+    execution_lock: Mutex<()>,
 }
 
 impl ExecutorState {
@@ -146,6 +164,7 @@ impl ExecutorState {
             last_state_root: RwLock::new(B256::ZERO),
             finalized_height: AtomicU64::new(0),
             pending_changes: RwLock::new(Vec::new()),
+            execution_lock: Mutex::new(()),
         }
     }
 }
@@ -156,6 +175,10 @@ impl ExecutorState {
 /// The implementation should persist these changes appropriately.
 /// Note: The callback receives a reference to the state changes.
 pub type StateChangeCallback = Arc<dyn Fn(&[StateChange]) + Send + Sync>;
+
+/// Future returned by the block execution callback.
+pub type OnBlockExecutedFuture =
+    Pin<Box<dyn Future<Output = Result<B256, EvnodeError>> + Send + 'static>>;
 
 /// Information passed to the `OnBlockExecuted` callback after a block is executed.
 ///
@@ -169,7 +192,7 @@ pub struct BlockExecutedInfo {
     pub state_changes: Vec<StateChange>,
     /// Full block execution result.
     pub block_result: BlockResult,
-    /// State root computed from changes (keccak-based).
+    /// Projected state root computed from prior state plus pending changes.
     pub state_root: B256,
     /// Transactions that were included in the block.
     pub transactions: Vec<TxContext>,
@@ -179,8 +202,9 @@ pub struct BlockExecutedInfo {
 ///
 /// This provides all data needed for storage commit + chain indexing in one call.
 /// When set, this replaces the `StateChangeCallback` for `execute_txs` — the caller
-/// takes full responsibility for persisting state changes.
-pub type OnBlockExecuted = Arc<dyn Fn(BlockExecutedInfo) + Send + Sync>;
+/// takes full responsibility for persisting state changes and must return the
+/// canonical committed state root that should be exposed to subsequent callers.
+pub type OnBlockExecuted = Arc<dyn Fn(BlockExecutedInfo) -> OnBlockExecutedFuture + Send + Sync>;
 
 /// ExecutorService implementation for EVNode.
 ///
@@ -313,6 +337,32 @@ where
         // Store pending changes
         self.state.pending_changes.write().await.extend(changes);
     }
+
+    async fn resolve_prev_state_root(&self, prev_state_root: &[u8]) -> Result<B256, EvnodeError> {
+        let last_state_root = *self.state.last_state_root.read().await;
+
+        if prev_state_root.is_empty() {
+            return Ok(last_state_root);
+        }
+
+        if prev_state_root.len() != B256::len_bytes() {
+            return Err(EvnodeError::InvalidArgument(format!(
+                "prev_state_root must be {} bytes, got {}",
+                B256::len_bytes(),
+                prev_state_root.len()
+            )));
+        }
+
+        let provided_prev_state_root = B256::from_slice(prev_state_root);
+        if provided_prev_state_root != last_state_root {
+            return Err(EvnodeError::InvalidArgument(format!(
+                "prev_state_root mismatch: expected {}, got {}",
+                last_state_root, provided_prev_state_root
+            )));
+        }
+
+        Ok(provided_prev_state_root)
+    }
 }
 
 #[async_trait]
@@ -349,7 +399,7 @@ where
             .map_err(|e| Status::internal(format!("genesis failed: {}", e)))?;
 
         // Compute state root
-        let state_root = compute_state_root(&changes);
+        let state_root = compute_state_root(B256::ZERO, &changes);
 
         // Handle state changes (store pending, call callback)
         self.handle_state_changes(changes).await;
@@ -443,6 +493,13 @@ where
             }
         }
 
+        let _execute_guard = self.state.execution_lock.lock().await;
+
+        let prev_state_root = self
+            .resolve_prev_state_root(&req.prev_state_root)
+            .await
+            .map_err(Status::from)?;
+
         // Build the block
         let block = evolve_server::BlockBuilder::<TxContext>::new()
             .number(req.block_height)
@@ -451,15 +508,16 @@ where
             .transactions(transactions)
             .build();
 
-        // Execute through STF
+        // Execute through STF while holding the execution lock so storage reads and
+        // root validation remain linearized.
         let (result, exec_state) = self.stf.execute_block(&self.storage, &self.codes, &block);
 
         let changes = exec_state
             .into_changes()
             .map_err(|e| Status::internal(format!("failed to get state changes: {:?}", e)))?;
 
-        // Compute updated state root
-        let updated_state_root = compute_state_root(&changes);
+        // Compute the projected state root over the previous pending root.
+        let projected_state_root = compute_state_root(prev_state_root, &changes);
 
         // Log execution results (before moving ownership)
         let executed_tx_count = result.tx_results.len();
@@ -480,31 +538,34 @@ where
             gas_used
         );
 
-        // Finalize the block proposal: remove executed txs, return unexecuted in-flight txs.
-        if let Some(ref mempool) = self.mempool {
-            let executed_hashes: Vec<[u8; 32]> = block
-                .transactions
-                .iter()
-                .take(executed_tx_count)
-                .map(|tx| tx.hash().0)
-                .collect();
-            let mut pool = mempool.write().await;
-            pool.finalize(&executed_hashes);
-        }
+        let executed_hashes: Vec<[u8; 32]> = block
+            .transactions
+            .iter()
+            .take(executed_tx_count)
+            .map(|tx| tx.hash().0)
+            .collect();
 
-        // Handle state changes / notify callback
-        if let Some(ref callback) = self.on_block_executed {
+        // Handle state changes / notify callback. The callback returns the committed
+        // root so external-consensus callers observe the same root that gets indexed.
+        let updated_state_root = if let Some(ref callback) = self.on_block_executed {
             let info = BlockExecutedInfo {
                 height: req.block_height,
                 timestamp,
                 state_changes: changes,
                 block_result: result,
-                state_root: updated_state_root,
+                state_root: projected_state_root,
                 transactions: block.transactions,
             };
-            callback(info);
+            callback(info).await.map_err(Status::from)?
         } else {
             self.handle_state_changes(changes).await;
+            projected_state_root
+        };
+
+        // Finalize the block proposal only after state persistence succeeds.
+        if let Some(ref mempool) = self.mempool {
+            let mut pool = mempool.write().await;
+            pool.finalize(&executed_hashes);
         }
 
         // Update state
@@ -615,8 +676,10 @@ mod tests {
     use evolve_stf::results::TxResult;
     use evolve_stf_traits::Transaction;
     use k256::ecdsa::SigningKey;
+    use std::collections::VecDeque;
     use std::sync::atomic::AtomicUsize;
     use std::sync::Mutex;
+    use tokio::sync::Notify;
     use tonic::Code;
 
     use crate::proto::evnode::v1::executor_service_server::ExecutorService;
@@ -864,7 +927,7 @@ mod tests {
             key: b"k".to_vec(),
             value: b"v".to_vec(),
         }];
-        let expected_root = compute_state_root(&changes);
+        let expected_root = compute_state_root(B256::ZERO, &changes);
         let service = mk_service(true);
         let req = InitChainRequest {
             genesis_time: Some(Timestamp {
@@ -1015,7 +1078,7 @@ mod tests {
                 key: b"gone".to_vec(),
             },
         ];
-        let expected_root = compute_state_root(&expected_changes);
+        let expected_root = compute_state_root(B256::ZERO, &expected_changes);
         let service = mk_service_with_execute_changes(expected_changes);
         init_test_chain(&service).await;
 
@@ -1066,6 +1129,44 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn execute_txs_rejects_invalid_prev_state_root_length() {
+        let service = mk_service_with_execute_changes(Vec::new());
+        init_test_chain(&service).await;
+
+        let err = service
+            .execute_txs(Request::new(ExecuteTxsRequest {
+                block_height: 2,
+                timestamp: None,
+                prev_state_root: vec![0xaa; 31],
+                txs: vec![sample_legacy_tx_bytes()],
+            }))
+            .await
+            .expect_err("execute_txs should reject malformed prev_state_root");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("prev_state_root must be 32 bytes"));
+    }
+
+    #[tokio::test]
+    async fn execute_txs_rejects_mismatched_prev_state_root() {
+        let service = mk_service_with_execute_changes(Vec::new());
+        init_test_chain(&service).await;
+
+        let err = service
+            .execute_txs(Request::new(ExecuteTxsRequest {
+                block_height: 2,
+                timestamp: None,
+                prev_state_root: vec![0x11; 32],
+                txs: vec![sample_legacy_tx_bytes()],
+            }))
+            .await
+            .expect_err("execute_txs should reject mismatched prev_state_root");
+
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("prev_state_root mismatch"));
+    }
+
+    #[tokio::test]
     async fn execute_txs_prefers_block_callback_over_state_change_callback() {
         let execute_changes = vec![StateChange::Set {
             key: b"k1".to_vec(),
@@ -1083,8 +1184,9 @@ mod tests {
             })
             .with_on_block_executed({
                 let calls = Arc::clone(&block_callback_calls);
-                Arc::new(move |_| {
+                Arc::new(move |info| {
                     calls.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move { Ok(info.state_root) })
                 })
             });
         init_test_chain(&service).await;
@@ -1119,7 +1221,7 @@ mod tests {
             key: b"payload".to_vec(),
             value: b"ok".to_vec(),
         }];
-        let expected_root = compute_state_root(&execute_changes);
+        let expected_root = compute_state_root(B256::ZERO, &execute_changes);
         let callback_snapshot = Arc::new(Mutex::new(None::<(u64, u64, usize, usize, B256)>));
         let service = mk_service_with_execute_changes(execute_changes).with_on_block_executed({
             let snapshot = Arc::clone(&callback_snapshot);
@@ -1133,6 +1235,8 @@ mod tests {
                     info.block_result.tx_results.len(),
                     info.state_root,
                 ));
+                let projected_root = info.state_root;
+                Box::pin(async move { Ok(projected_root) })
             })
         });
         init_test_chain(&service).await;
@@ -1159,6 +1263,155 @@ mod tests {
         assert_eq!(snapshot.2, 1);
         assert_eq!(snapshot.3, 1);
         assert_eq!(snapshot.4, expected_root);
+    }
+
+    #[tokio::test]
+    async fn execute_txs_returns_committed_root_from_block_callback() {
+        let execute_changes = vec![StateChange::Set {
+            key: b"payload".to_vec(),
+            value: b"ok".to_vec(),
+        }];
+        let committed_roots = Arc::new(Mutex::new(VecDeque::from([
+            B256::repeat_byte(0x11),
+            B256::repeat_byte(0x22),
+        ])));
+        let service = mk_service_with_execute_changes(execute_changes).with_on_block_executed({
+            let committed_roots = Arc::clone(&committed_roots);
+            Arc::new(move |_info| {
+                let committed_roots = Arc::clone(&committed_roots);
+                Box::pin(async move {
+                    committed_roots
+                        .lock()
+                        .expect("committed roots lock should not be poisoned")
+                        .pop_front()
+                        .ok_or_else(|| {
+                            EvnodeError::Internal(
+                                "missing committed root for block callback test".to_string(),
+                            )
+                        })
+                })
+            })
+        });
+        init_test_chain(&service).await;
+
+        let first_response = service
+            .execute_txs(Request::new(ExecuteTxsRequest {
+                block_height: 2,
+                timestamp: None,
+                prev_state_root: vec![],
+                txs: vec![sample_legacy_tx_bytes()],
+            }))
+            .await
+            .expect("first execute_txs should succeed")
+            .into_inner();
+
+        assert_eq!(
+            first_response.updated_state_root,
+            B256::repeat_byte(0x11).to_vec()
+        );
+        assert_eq!(
+            *service.state.last_state_root.read().await,
+            B256::repeat_byte(0x11)
+        );
+
+        let second_response = service
+            .execute_txs(Request::new(ExecuteTxsRequest {
+                block_height: 3,
+                timestamp: None,
+                prev_state_root: first_response.updated_state_root.clone(),
+                txs: vec![sample_legacy_tx_bytes()],
+            }))
+            .await
+            .expect("second execute_txs should accept the committed prev_state_root")
+            .into_inner();
+
+        assert_eq!(
+            second_response.updated_state_root,
+            B256::repeat_byte(0x22).to_vec()
+        );
+        assert_eq!(
+            *service.state.last_state_root.read().await,
+            B256::repeat_byte(0x22)
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn execute_txs_serializes_prev_state_root_validation() {
+        let execute_changes = vec![StateChange::Set {
+            key: b"payload".to_vec(),
+            value: b"ok".to_vec(),
+        }];
+        let first_callback_entered = Arc::new(Notify::new());
+        let release_first_callback = Arc::new(Notify::new());
+        let callback_calls = Arc::new(AtomicUsize::new(0));
+        let committed_root = B256::repeat_byte(0x33);
+
+        let service = Arc::new(
+            mk_service_with_execute_changes(execute_changes).with_on_block_executed({
+                let first_callback_entered = Arc::clone(&first_callback_entered);
+                let release_first_callback = Arc::clone(&release_first_callback);
+                let callback_calls = Arc::clone(&callback_calls);
+                Arc::new(move |info| {
+                    let first_callback_entered = Arc::clone(&first_callback_entered);
+                    let release_first_callback = Arc::clone(&release_first_callback);
+                    let callback_calls = Arc::clone(&callback_calls);
+                    Box::pin(async move {
+                        if callback_calls.fetch_add(1, Ordering::SeqCst) == 0 {
+                            first_callback_entered.notify_one();
+                            release_first_callback.notified().await;
+                        }
+                        Ok::<_, EvnodeError>(if callback_calls.load(Ordering::SeqCst) == 1 {
+                            committed_root
+                        } else {
+                            info.state_root
+                        })
+                    })
+                })
+            }),
+        );
+        init_test_chain(service.as_ref()).await;
+
+        let first_service = Arc::clone(&service);
+        let first_request = tokio::spawn(async move {
+            first_service
+                .execute_txs(Request::new(ExecuteTxsRequest {
+                    block_height: 2,
+                    timestamp: None,
+                    prev_state_root: vec![],
+                    txs: vec![sample_legacy_tx_bytes()],
+                }))
+                .await
+        });
+
+        first_callback_entered.notified().await;
+
+        let second_service = Arc::clone(&service);
+        let second_request = tokio::spawn(async move {
+            second_service
+                .execute_txs(Request::new(ExecuteTxsRequest {
+                    block_height: 3,
+                    timestamp: None,
+                    prev_state_root: B256::ZERO.to_vec(),
+                    txs: vec![sample_legacy_tx_bytes()],
+                }))
+                .await
+        });
+
+        release_first_callback.notify_one();
+
+        let first_response = first_request
+            .await
+            .expect("first task should complete")
+            .expect("first execute_txs should succeed")
+            .into_inner();
+        assert_eq!(first_response.updated_state_root, committed_root.to_vec());
+
+        let err = second_request
+            .await
+            .expect("second task should complete")
+            .expect_err("second execute_txs should reject the stale prev_state_root");
+        assert_eq!(err.code(), Code::InvalidArgument);
+        assert!(err.message().contains("prev_state_root mismatch"));
     }
 
     #[tokio::test]
@@ -1290,5 +1543,50 @@ mod tests {
             remaining_hash, expected_remaining_hash,
             "only the unexecuted tail should be re-proposed"
         );
+    }
+
+    #[tokio::test]
+    async fn execute_txs_chains_projected_state_root_from_previous_root() {
+        let execute_changes = vec![StateChange::Set {
+            key: b"next".to_vec(),
+            value: b"value".to_vec(),
+        }];
+        let genesis_root = compute_state_root(
+            B256::ZERO,
+            &[StateChange::Set {
+                key: b"k".to_vec(),
+                value: b"v".to_vec(),
+            }],
+        );
+        let expected_root = compute_state_root(genesis_root, &execute_changes);
+
+        let service = ExecutorServiceImpl::new(
+            MockStf::new(true, execute_changes),
+            MockStorage,
+            MockCodes,
+            ExecutorServiceConfig::default(),
+        );
+        service
+            .init_chain(Request::new(InitChainRequest {
+                genesis_time: None,
+                initial_height: 1,
+                chain_id: "chain-root".to_string(),
+            }))
+            .await
+            .expect("init should succeed");
+
+        let response = service
+            .execute_txs(Request::new(ExecuteTxsRequest {
+                block_height: 2,
+                timestamp: None,
+                prev_state_root: genesis_root.to_vec(),
+                txs: vec![sample_legacy_tx_bytes()],
+            }))
+            .await
+            .expect("execute_txs should succeed")
+            .into_inner();
+
+        assert_eq!(response.updated_state_root, expected_root.to_vec());
+        assert_eq!(*service.state.last_state_root.read().await, expected_root);
     }
 }
