@@ -13,7 +13,7 @@
 
 use crate::cache::{CachedValue, ShardedDbCache};
 use crate::metrics::OptionalMetrics;
-use crate::types::{create_storage_key, StorageKey, MAX_VALUE_DATA_SIZE};
+use crate::types::{create_storage_key, StorageKey, MAX_VALUE_SIZE};
 use async_trait::async_trait;
 use commonware_codec::RangeCfg;
 use commonware_cryptography::sha256::Sha256;
@@ -39,6 +39,7 @@ type QmdbCurrent<C> = Db<C, StorageKey, Vec<u8>, Sha256, EightCap, 64>;
 
 const PRUNE_SCHEDULE_DELAY: Duration = Duration::from_millis(50);
 const PRUNE_RETRY_DELAY: Duration = Duration::from_millis(25);
+const PRUNE_MAX_LOCK_RETRIES: usize = 20;
 
 #[derive(Debug)]
 struct PreparedBatch {
@@ -146,29 +147,33 @@ where
         tokio::spawn(async move {
             while prune_rx.recv().await.is_some() {
                 tokio::time::sleep(PRUNE_SCHEDULE_DELAY).await;
+                // Drain any signals that arrived during the delay.
                 while prune_rx.try_recv().is_ok() {}
 
-                loop {
-                    let mut db = match db.try_write() {
-                        Ok(db) => db,
-                        Err(_) => {
-                            while prune_rx.try_recv().is_ok() {}
-                            tokio::time::sleep(PRUNE_RETRY_DELAY).await;
-                            continue;
+                // Acquire write lock with bounded retries.
+                let mut db_guard = None;
+                for _ in 0..PRUNE_MAX_LOCK_RETRIES {
+                    match db.try_write() {
+                        Ok(guard) => {
+                            db_guard = Some(guard);
+                            break;
                         }
-                    };
-
-                    let prune_loc = db.inactivity_floor_loc();
-                    if let Err(err) = db.prune(prune_loc).await {
-                        tracing::error!("background prune failed: {err}");
-                        break;
+                        Err(_) => tokio::time::sleep(PRUNE_RETRY_DELAY).await,
                     }
+                }
 
-                    if let Err(err) = db.sync().await {
-                        tracing::error!("background prune sync failed: {err}");
-                    }
+                let Some(mut db) = db_guard else {
+                    tracing::warn!("prune worker: could not acquire write lock, skipping cycle");
+                    continue;
+                };
 
-                    break;
+                let prune_loc = db.inactivity_floor_loc();
+                if let Err(err) = db.prune(prune_loc).await {
+                    tracing::error!("background prune failed: {err}");
+                    continue;
+                }
+                if let Err(err) = db.sync().await {
+                    tracing::error!("background prune sync failed: {err}");
                 }
             }
         });
@@ -216,7 +221,7 @@ where
             log_items_per_blob: NonZeroU64::new(1000).unwrap(),
             log_write_buffer: write_buffer_size,
             log_compression: None,
-            log_codec_config: ((), (RangeCfg::from(0..=MAX_VALUE_DATA_SIZE), ())),
+            log_codec_config: ((), (RangeCfg::from(0..=MAX_VALUE_SIZE), ())),
             mmr_journal_partition: format!("{}_mmr-journal", config.partition_prefix),
             mmr_items_per_blob: NonZeroU64::new(1000).unwrap(),
             mmr_write_buffer: write_buffer_size,
@@ -349,10 +354,10 @@ where
         for op in operations {
             match op {
                 crate::types::Operation::Set { key, value } => {
-                    if value.len() > MAX_VALUE_DATA_SIZE {
+                    if value.len() > MAX_VALUE_SIZE {
                         return Err(StorageError::ValueTooLarge {
                             size: value.len(),
-                            max: MAX_VALUE_DATA_SIZE,
+                            max: MAX_VALUE_SIZE,
                         });
                     }
 
@@ -382,7 +387,7 @@ where
     /// Commit the current state and generate a commit hash.
     pub async fn commit_state(&self) -> Result<crate::types::CommitHash, StorageError> {
         let start = Instant::now();
-        let db = self.db.write().await;
+        let db = self.db.read().await;
         db.sync().await.map_err(map_qmdb_error)?;
         let hash = root_to_commit_hash(db.root())?;
         drop(db);
@@ -779,8 +784,8 @@ mod tests {
         runner.start(|context| async move {
             let storage = QmdbStorage::new(context, config).await.unwrap();
 
-            // Value exactly at MAX_VALUE_DATA_SIZE limit should work
-            let max_value = vec![b'v'; crate::types::MAX_VALUE_DATA_SIZE];
+            // Value exactly at MAX_VALUE_SIZE limit should work
+            let max_value = vec![b'v'; crate::types::MAX_VALUE_SIZE];
             storage
                 .apply_batch(vec![crate::types::Operation::Set {
                     key: b"key".to_vec(),
@@ -792,8 +797,8 @@ mod tests {
             let retrieved = storage.get(b"key").unwrap();
             assert_eq!(retrieved, Some(max_value));
 
-            // Value exceeding MAX_VALUE_DATA_SIZE should fail
-            let oversized_value = vec![b'v'; crate::types::MAX_VALUE_DATA_SIZE + 1];
+            // Value exceeding MAX_VALUE_SIZE should fail
+            let oversized_value = vec![b'v'; crate::types::MAX_VALUE_SIZE + 1];
             let result = storage
                 .apply_batch(vec![crate::types::Operation::Set {
                     key: b"key2".to_vec(),
@@ -804,8 +809,8 @@ mod tests {
             assert!(result.is_err());
             match result.unwrap_err() {
                 StorageError::ValueTooLarge { size, max } => {
-                    assert_eq!(size, crate::types::MAX_VALUE_DATA_SIZE + 1);
-                    assert_eq!(max, crate::types::MAX_VALUE_DATA_SIZE);
+                    assert_eq!(size, crate::types::MAX_VALUE_SIZE + 1);
+                    assert_eq!(max, crate::types::MAX_VALUE_SIZE);
                 }
                 e => panic!("Expected ValueTooLarge, got {:?}", e),
             }

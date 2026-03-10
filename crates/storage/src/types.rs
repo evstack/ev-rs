@@ -166,5 +166,3 @@ pub fn create_storage_key(key: &[u8]) -> Result<StorageKey, ErrorCode> {
 /// We keep the existing 4092-byte limit to preserve bounded memory usage even though the
 /// underlying QMDB encoding is now variable-sized.
 pub const MAX_VALUE_SIZE: usize = 4092;
-/// Backwards-compatible alias used by existing tests and callers.
-pub const MAX_VALUE_DATA_SIZE: usize = MAX_VALUE_SIZE;
