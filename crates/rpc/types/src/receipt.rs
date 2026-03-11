@@ -42,6 +42,9 @@ pub struct RpcReceipt {
     pub tx_type: U64,
     /// Status (1 = success, 0 = failure)
     pub status: U64,
+    /// Revert reason for failed transactions (Evolve error code and message).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revert_reason: Option<String>,
 }
 
 impl RpcReceipt {
@@ -78,6 +81,7 @@ impl RpcReceipt {
             logs_bloom: Bytes::new(),
             tx_type: U64::ZERO,
             status: U64::from(Self::STATUS_SUCCESS),
+            revert_reason: None,
         }
     }
 
@@ -92,6 +96,7 @@ impl RpcReceipt {
         to: Option<Address>,
         gas_used: u64,
         cumulative_gas_used: u64,
+        revert_reason: Option<String>,
     ) -> Self {
         Self {
             transaction_hash: tx_hash,
@@ -108,6 +113,7 @@ impl RpcReceipt {
             logs_bloom: Bytes::new(),
             tx_type: U64::ZERO,
             status: U64::from(Self::STATUS_FAILURE),
+            revert_reason,
         }
     }
 
@@ -153,6 +159,7 @@ mod tests {
             None,
             50000,
             50000,
+            None,
         );
         assert!(!receipt.is_success());
         assert_eq!(receipt.status, U64::from(0u64));
