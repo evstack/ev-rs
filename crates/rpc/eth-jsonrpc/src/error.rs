@@ -61,7 +61,7 @@ pub enum RpcError {
     GasEstimationFailed(String),
 
     #[error("Method not implemented: {0}")]
-    NotImplemented(String),
+    NotImplemented(&'static str),
 
     #[error("Invalid block number or tag")]
     InvalidBlockNumberOrTag,

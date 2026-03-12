@@ -181,7 +181,7 @@ impl StateProvider for NoopStateProvider {
     }
 
     async fn call(&self, _request: &CallRequest, _block: Option<u64>) -> Result<Bytes, RpcError> {
-        Ok(Bytes::new())
+        Err(RpcError::NotImplemented("eth_call"))
     }
 
     async fn estimate_gas(
@@ -189,7 +189,7 @@ impl StateProvider for NoopStateProvider {
         _request: &CallRequest,
         _block: Option<u64>,
     ) -> Result<u64, RpcError> {
-        Ok(21000) // Default gas for simple transfer
+        Err(RpcError::NotImplemented("eth_estimateGas"))
     }
 
     async fn get_logs(&self, _filter: &LogFilter) -> Result<Vec<RpcLog>, RpcError> {
@@ -198,7 +198,7 @@ impl StateProvider for NoopStateProvider {
 
     async fn send_raw_transaction(&self, _data: &[u8]) -> Result<B256, RpcError> {
         // No-op: return a dummy hash
-        Err(RpcError::NotImplemented("sendRawTransaction".to_string()))
+        Err(RpcError::NotImplemented("sendRawTransaction"))
     }
 
     async fn get_code(&self, _address: Address, _block: Option<u64>) -> Result<Bytes, RpcError> {
@@ -930,7 +930,7 @@ mod tests {
                     RpcError::GasEstimationFailed(msg) => {
                         RpcError::GasEstimationFailed(msg.clone())
                     }
-                    RpcError::NotImplemented(method) => RpcError::NotImplemented(method.clone()),
+                    RpcError::NotImplemented(method) => RpcError::NotImplemented(*method),
                     RpcError::InvalidBlockNumberOrTag => RpcError::InvalidBlockNumberOrTag,
                     RpcError::InvalidAddress(msg) => RpcError::InvalidAddress(msg.clone()),
                     RpcError::InvalidTransaction(msg) => RpcError::InvalidTransaction(msg.clone()),
@@ -996,7 +996,7 @@ mod tests {
             Ok(vec![])
         }
         async fn send_raw_transaction(&self, _: &[u8]) -> Result<B256, RpcError> {
-            Err(RpcError::NotImplemented("sendRawTransaction".to_string()))
+            Err(RpcError::NotImplemented("sendRawTransaction"))
         }
         async fn get_code(&self, _: Address, _: Option<u64>) -> Result<Bytes, RpcError> {
             Ok(Bytes::new())
@@ -1143,7 +1143,7 @@ mod tests {
                 "reverted",
             ),
             (
-                RpcError::NotImplemented("eth_foo".to_string()),
+                RpcError::NotImplemented("eth_foo"),
                 crate::error::codes::METHOD_NOT_SUPPORTED,
                 "Method not implemented: eth_foo",
             ),
@@ -1433,7 +1433,7 @@ mod tests {
             Ok(vec![])
         }
         async fn send_raw_transaction(&self, _: &[u8]) -> Result<B256, RpcError> {
-            Err(RpcError::NotImplemented("sendRawTransaction".to_string()))
+            Err(RpcError::NotImplemented("sendRawTransaction"))
         }
         async fn get_code(&self, _: Address, _: Option<u64>) -> Result<Bytes, RpcError> {
             Ok(Bytes::new())

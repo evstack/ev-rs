@@ -51,6 +51,16 @@ pub const DEFAULT_DATA_DIR: &str = "./data";
 /// Default RPC server address.
 pub const DEFAULT_RPC_ADDR: &str = "127.0.0.1:8545";
 
+fn ensure_rpc_startup_compatibility<I, A>(provider: &ChainStateProvider<I, A>, runner_name: &str)
+where
+    I: evolve_chain_index::ChainIndex,
+    A: AccountsCodeStorage + Send + Sync,
+{
+    if let Err(err) = provider.ensure_rpc_compatibility() {
+        panic!("{runner_name} cannot start RPC: {err}");
+    }
+}
+
 fn parse_env_u64(var: &str, default: u64) -> u64 {
     std::env::var(var)
         .ok()
@@ -96,7 +106,8 @@ where
     Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
-    Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
+    Stf:
+        StfExecutor<Tx, S, Codes> + evolve_chain_index::RpcExecutionContext + Send + Sync + 'static,
 {
     let mempool: SharedMempool<Mempool<Tx>> = new_shared_mempool();
     let dev = Arc::new(DevConsensus::with_mempool(
@@ -289,6 +300,9 @@ struct EthRunnerConfig {
 }
 
 /// Run the dev node with default settings (RPC enabled).
+/// Run the dev node with RPC disabled by default.
+///
+/// Use `run_dev_node_with_rpc_and_mempool_eth` when you need compatible ETH JSON-RPC.
 pub fn run_dev_node<
     Stf,
     Codes,
@@ -312,7 +326,8 @@ pub fn run_dev_node<
     Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
-    Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
+    Stf:
+        StfExecutor<Tx, S, Codes> + evolve_chain_index::RpcExecutionContext + Send + Sync + 'static,
     G: BorshSerialize
         + BorshDeserialize
         + Clone
@@ -339,11 +354,14 @@ pub fn run_dev_node<
         build_codes,
         run_genesis,
         build_storage,
-        RpcConfig::default(),
+        RpcConfig::disabled(),
     )
 }
 
 /// Run the dev node with custom RPC configuration.
+///
+/// Startup fails if RPC is enabled for a generic transaction runner that
+/// cannot provide mempool-backed ETH ingress verification.
 pub fn run_dev_node_with_rpc<
     Stf,
     Codes,
@@ -368,7 +386,8 @@ pub fn run_dev_node_with_rpc<
     Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
-    Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
+    Stf:
+        StfExecutor<Tx, S, Codes> + evolve_chain_index::RpcExecutionContext + Send + Sync + 'static,
     G: BorshSerialize
         + BorshDeserialize
         + Clone
@@ -490,9 +509,12 @@ pub fn run_dev_node_with_rpc<
                     gas_price: U256::ZERO,
                     sync_status: SyncStatus::NotSyncing(false),
                 };
+                let query_executor = Arc::new((build_stf)(&genesis_result));
                 let state_querier: Arc<dyn StateQuerier> = Arc::new(StorageStateQuerier::new(
                     storage.clone(),
                     genesis_result.token_account_id(),
+                    Arc::clone(&codes_for_rpc),
+                    query_executor,
                 ));
                 let state_provider = ChainStateProvider::with_account_codes(
                     Arc::clone(&chain_index),
@@ -500,6 +522,7 @@ pub fn run_dev_node_with_rpc<
                     Arc::clone(&codes_for_rpc),
                 )
                 .with_state_querier(Arc::clone(&state_querier));
+                ensure_rpc_startup_compatibility(&state_provider, "run_dev_node_with_rpc");
 
                 // Start JSON-RPC server
                 let server_config = RpcServerConfig {
@@ -523,6 +546,7 @@ pub fn run_dev_node_with_rpc<
                         codes_for_rpc,
                     )
                     .with_state_querier(state_querier);
+                    ensure_rpc_startup_compatibility(&grpc_state_provider, "run_dev_node_with_rpc");
                     let grpc_config = grpc_server_config(&rpc_config, grpc_addr);
                     tracing::info!("Starting gRPC server on {}", grpc_addr);
                     let grpc_server = GrpcServer::with_subscription_manager(
@@ -768,12 +792,10 @@ pub fn run_dev_node_with_rpc_and_mempool<
             let mempool: SharedMempool<Mempool<Tx>> = new_shared_mempool();
 
             // Note: RPC with custom Tx types is not fully supported.
-            // The RPC layer requires TxContext for eth_sendRawTransaction.
-            // For custom Tx types, use run_dev_node_with_rpc_and_mempool_eth instead.
             if rpc_config.enabled {
-                tracing::warn!(
-                    "RPC enabled with generic Tx type. eth_sendRawTransaction will not work. \
-                    Use run_dev_node_with_rpc_and_mempool_eth for ETH transactions with full RPC support."
+                panic!(
+                    "run_dev_node_with_rpc_and_mempool cannot start RPC for generic transaction \
+                    types. Use run_dev_node_with_rpc_and_mempool_eth for ETH-compatible RPC."
                 );
             }
 
@@ -844,7 +866,11 @@ pub fn run_dev_node_with_rpc_and_mempool_eth<
 ) where
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
-    Stf: StfExecutor<TxContext, S, Codes> + Send + Sync + 'static,
+    Stf: StfExecutor<TxContext, S, Codes>
+        + evolve_chain_index::RpcExecutionContext
+        + Send
+        + Sync
+        + 'static,
     G: BorshSerialize
         + BorshDeserialize
         + Clone
@@ -900,7 +926,11 @@ fn run_dev_node_with_rpc_and_mempool_eth_impl<
 ) where
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
-    Stf: StfExecutor<TxContext, S, Codes> + Send + Sync + 'static,
+    Stf: StfExecutor<TxContext, S, Codes>
+        + evolve_chain_index::RpcExecutionContext
+        + Send
+        + Sync
+        + 'static,
     G: BorshSerialize
         + BorshDeserialize
         + Clone
@@ -1030,10 +1060,13 @@ fn run_dev_node_with_rpc_and_mempool_eth_impl<
                 };
 
                 // Create state querier for balance/nonce reads
+                let query_executor = Arc::new((build_stf)(&genesis_result));
                 let state_querier: Arc<dyn crate::StateQuerier> = Arc::new(
                     StorageStateQuerier::new(
                         storage.clone(),
                         genesis_result.token_account_id(),
+                        Arc::clone(&codes_for_rpc),
+                        query_executor,
                     ),
                 );
 
@@ -1044,6 +1077,10 @@ fn run_dev_node_with_rpc_and_mempool_eth_impl<
                     mempool.clone(),
                 )
                 .with_state_querier(Arc::clone(&state_querier));
+                ensure_rpc_startup_compatibility(
+                    &state_provider,
+                    "run_dev_node_with_rpc_and_mempool_eth",
+                );
 
                 let server_config = RpcServerConfig {
                     http_addr: rpc_config.http_addr,
@@ -1068,6 +1105,10 @@ fn run_dev_node_with_rpc_and_mempool_eth_impl<
                         mempool.clone(),
                     )
                     .with_state_querier(state_querier);
+                    ensure_rpc_startup_compatibility(
+                        &grpc_state_provider,
+                        "run_dev_node_with_rpc_and_mempool_eth",
+                    );
                     let grpc_config = grpc_server_config(&rpc_config, grpc_addr);
                     tracing::info!("Starting gRPC server on {}", grpc_addr);
                     let grpc_server = GrpcServer::with_subscription_manager(
@@ -1213,7 +1254,11 @@ pub fn run_dev_node_with_rpc_and_mempool_mock_storage<
     rpc_config: RpcConfig,
 ) where
     Codes: AccountsCodeStorage + Send + Sync + 'static,
-    Stf: StfExecutor<TxContext, MockStorage, Codes> + Send + Sync + 'static,
+    Stf: StfExecutor<TxContext, MockStorage, Codes>
+        + evolve_chain_index::RpcExecutionContext
+        + Send
+        + Sync
+        + 'static,
     G: BorshSerialize
         + BorshDeserialize
         + Clone

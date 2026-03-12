@@ -41,8 +41,8 @@ use crate::metrics::{BlockExecutionMetrics, TxExecutionMetrics};
 use crate::results::{BlockResult, TxResult};
 use evolve_core::events_api::Event;
 use evolve_core::{
-    AccountCode, AccountId, BlockContext, Environment, EnvironmentQuery, InvokableMessage,
-    InvokeRequest, InvokeResponse, ReadonlyKV, SdkResult,
+    AccountCode, AccountId, BlockContext, Environment, EnvironmentQuery, FungibleAsset,
+    InvokableMessage, InvokeRequest, InvokeResponse, ReadonlyKV, SdkResult,
 };
 use evolve_stf_traits::{
     AccountsCodeStorage, BeginBlocker as BeginBlockerTrait, Block as BlockTrait,
@@ -88,6 +88,30 @@ pub struct Stf<Tx, Block, BeginBlocker, TxValidator, EndBlocker, PostTx> {
     post_tx_handler: PostTx,
     storage_gas_config: StorageGasConfig,
     _phantoms: PhantomData<(Tx, Block)>,
+}
+
+/// Execution context for STF-backed read-only queries.
+#[derive(Clone, Debug)]
+pub struct QueryContext {
+    /// Optional gas limit for the query. `None` means unbounded gas tracking.
+    pub gas_limit: Option<u64>,
+    /// Caller identity exposed as `env.sender()`.
+    pub sender: AccountId,
+    /// Funds exposed through the read-only environment.
+    pub funds: Vec<FungibleAsset>,
+    /// Block metadata exposed through `env.block()`.
+    pub block: BlockContext,
+}
+
+impl Default for QueryContext {
+    fn default() -> Self {
+        Self {
+            gas_limit: None,
+            sender: evolve_core::runtime_api::RUNTIME_ACCOUNT_ID,
+            funds: vec![],
+            block: BlockContext::default(),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1395,6 +1419,72 @@ where
         let mut ctx = Invoker::new_for_query(&mut state, account_codes, &mut gas_counter, to);
         ctx.do_query(to, &InvokeRequest::new(req)?)
     }
+
+    /// Executes a query represented as a raw [`InvokeRequest`].
+    ///
+    /// Unlike [`query`](Self::query), this accepts a fully constructed request and
+    /// allows the caller to provide sender, funds, and block metadata. This is
+    /// used by RPC adapters that need to mirror transaction-like context while
+    /// keeping the operation read-only.
+    pub fn query_invoke_request<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
+        &self,
+        storage: &'a S,
+        account_codes: &'a A,
+        to: AccountId,
+        request: &InvokeRequest,
+        context: QueryContext,
+    ) -> TxResult {
+        let QueryContext {
+            gas_limit,
+            sender,
+            funds,
+            block,
+        } = context;
+        let mut state = ExecutionState::new(storage);
+        let mut gas_counter = gas_limit
+            .map(|limit| GasCounter::finite(limit, self.storage_gas_config.clone()))
+            .unwrap_or_else(GasCounter::infinite);
+        let mut ctx = Invoker::new_for_query_with_context(
+            &mut state,
+            account_codes,
+            &mut gas_counter,
+            to,
+            sender,
+            funds,
+            block,
+        );
+        let response = ctx.do_query(to, request);
+
+        TxResult {
+            events: state.pop_events(),
+            gas_used: gas_counter.gas_used(),
+            response,
+        }
+    }
+
+    /// Executes a single transaction against the current state without committing changes.
+    ///
+    /// This is intended for RPC simulations such as `eth_call` and
+    /// `eth_estimateGas`. The transaction goes through the normal sender
+    /// resolution, bootstrap, validation, and execution pipeline, but all writes
+    /// remain in the temporary execution state.
+    pub fn simulate_transaction<'a, S: ReadonlyKV + 'a, A: AccountsCodeStorage + 'a>(
+        &self,
+        storage: &'a S,
+        account_codes: &'a A,
+        tx: &Tx,
+        block: BlockContext,
+    ) -> TxResult {
+        let mut state = ExecutionState::new(storage);
+        self.apply_tx(
+            &mut state,
+            account_codes,
+            tx,
+            self.storage_gas_config.clone(),
+            block,
+        )
+    }
+
     /// Executes a closure with read-only access to a specific account's code.
     ///
     /// This method provides a developer-friendly way to extract data from account state
