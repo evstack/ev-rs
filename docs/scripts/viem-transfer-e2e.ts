@@ -69,6 +69,7 @@ type CommandResult = CargoResult;
 type NodeHandle = {
   process: ChildProcess;
   getLogs: () => string;
+  getSpawnError: () => Error | undefined;
 };
 
 function log(message: string): void {
@@ -90,6 +91,12 @@ function runCommand(command: string, args: string[], label: string): CommandResu
   const stdout = result.stdout ?? "";
   const stderr = result.stderr ?? "";
   const combined = `${stdout}${stderr}`;
+
+  if (result.error) {
+    throw new Error(
+      `${label} failed to start\n${result.error.message}\n${combined.trim() || "(no output)"}`
+    );
+  }
 
   if (result.status !== 0) {
     throw new Error(
@@ -219,19 +226,41 @@ function startNode(args: string[]): NodeHandle {
   });
 
   let logs = "";
-  child.stdout.setEncoding("utf8");
-  child.stderr.setEncoding("utf8");
-  child.stdout.on("data", (chunk: string) => {
+  let spawnError: Error | undefined;
+
+  child.stdout?.setEncoding("utf8");
+  child.stderr?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => {
     logs += chunk;
   });
-  child.stderr.on("data", (chunk: string) => {
+  child.stderr?.on("data", (chunk: string) => {
     logs += chunk;
+  });
+  child.once("error", (error) => {
+    spawnError = error;
+    logs += `spawn error: ${error.message}\n`;
   });
 
   return {
     process: child,
     getLogs: () => logs,
+    getSpawnError: () => spawnError,
   };
+}
+
+function assertNodeRunning(node: NodeHandle, phase: string): void {
+  const spawnError = node.getSpawnError();
+  if (spawnError) {
+    throw new Error(
+      `testapp failed to start while ${phase}\n${spawnError.message}\n${node.getLogs().trim()}`
+    );
+  }
+
+  if (node.process.exitCode !== null) {
+    throw new Error(
+      `testapp exited while ${phase} (exit ${node.process.exitCode})\n${node.getLogs().trim()}`
+    );
+  }
 }
 
 async function waitForRpcReady(
@@ -241,13 +270,7 @@ async function waitForRpcReady(
   const deadline = Date.now() + RPC_READY_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    if (node.process.exitCode !== null) {
-      throw new Error(
-        `testapp exited before RPC became ready (exit ${node.process.exitCode})\n${node
-          .getLogs()
-          .trim()}`
-      );
-    }
+    assertNodeRunning(node, "waiting for JSON-RPC readiness");
 
     try {
       const chainId = await publicClient.getChainId();
@@ -271,13 +294,7 @@ async function waitForFirstBlock(
   const deadline = Date.now() + RPC_READY_TIMEOUT_MS;
 
   while (Date.now() < deadline) {
-    if (node.process.exitCode !== null) {
-      throw new Error(
-        `testapp exited before producing a block (exit ${node.process.exitCode})\n${node
-          .getLogs()
-          .trim()}`
-      );
-    }
+    assertNodeRunning(node, "waiting for the first block");
 
     try {
       const blockNumber = await publicClient.getBlockNumber();
@@ -295,6 +312,10 @@ async function waitForFirstBlock(
 }
 
 async function stopNode(node: NodeHandle): Promise<void> {
+  if (node.getSpawnError()) {
+    return;
+  }
+
   if (node.process.exitCode !== null) {
     return;
   }
@@ -404,27 +425,63 @@ async function main(): Promise<void> {
   const recipient = privateKeyToAccount(RECIPIENT_PRIVATE_KEY);
 
   const sandboxDir = mkdtempSync(join(tmpdir(), "evolve-viem-demo-"));
-  const configPath = join(sandboxDir, "config.yaml");
-  const dataDir = join(sandboxDir, "data");
-  const genesisPath = join(sandboxDir, "genesis.json");
-  const rpcPort = await findFreePort();
-  const rpcUrl = `http://127.0.0.1:${rpcPort}`;
+  let node: NodeHandle | undefined;
 
-  buildGenesisFile(genesisPath, sender.address, recipient.address);
+  try {
+    const configPath = join(sandboxDir, "config.yaml");
+    const dataDir = join(sandboxDir, "data");
+    const genesisPath = join(sandboxDir, "genesis.json");
+    const rpcPort = await findFreePort();
+    const rpcUrl = `http://127.0.0.1:${rpcPort}`;
 
-  log(`Working directory: ${sandboxDir}`);
-  if (!existsSync(TESTAPP_BINARY) || !existsSync(TOKEN_ADDRESS_BINARY)) {
-    log("Building testapp binaries...");
-    runCargo(
-      ["build", "-p", "evolve_testapp", "--example", "print_token_address"],
-      "build testapp binaries"
+    buildGenesisFile(genesisPath, sender.address, recipient.address);
+
+    log(`Working directory: ${sandboxDir}`);
+    if (!existsSync(TESTAPP_BINARY) || !existsSync(TOKEN_ADDRESS_BINARY)) {
+      log("Building testapp binaries...");
+      runCargo(
+        [
+          "build",
+          "-p",
+          "evolve_testapp",
+          "--bin",
+          "testapp",
+          "--example",
+          "print_token_address",
+        ],
+        "build testapp binaries"
+      );
+    }
+
+    log("Initializing local testapp state...");
+    const initOutput = runCommand(
+      TESTAPP_BINARY,
+      [
+        "init",
+        "--config",
+        configPath,
+        "--log-level",
+        "info",
+        "--data-dir",
+        dataDir,
+        "--genesis-file",
+        genesisPath,
+      ],
+      "testapp init"
     );
-  }
-  log("Initializing local testapp state...");
-  const initOutput = runCommand(
-    TESTAPP_BINARY,
-    [
-      "init",
+
+    const tokenAddressOutput = runCommand(
+      TOKEN_ADDRESS_BINARY,
+      ["--data-dir", dataDir],
+      "print token address"
+    );
+    const tokenAddress = getAddress(
+      tokenAddressOutput.stdout.trim() || parseTokenAddressFromInitOutput(initOutput.combined)
+    );
+    const chain = createChain(rpcUrl);
+
+    node = startNode([
+      "run",
       "--config",
       configPath,
       "--log-level",
@@ -433,40 +490,15 @@ async function main(): Promise<void> {
       dataDir,
       "--genesis-file",
       genesisPath,
-    ],
-    "testapp init"
-  );
+      "--rpc-addr",
+      `127.0.0.1:${rpcPort}`,
+    ]);
 
-  const tokenAddressOutput = runCommand(
-    TOKEN_ADDRESS_BINARY,
-    ["--data-dir", dataDir],
-    "print token address"
-  );
-  const tokenAddress = getAddress(
-    tokenAddressOutput.stdout.trim() || parseTokenAddressFromInitOutput(initOutput.combined)
-  );
-  const chain = createChain(rpcUrl);
+    const publicClient = createPublicClient({
+      chain,
+      transport: http(rpcUrl),
+    });
 
-  const node = startNode([
-    "run",
-    "--config",
-    configPath,
-    "--log-level",
-    "info",
-    "--data-dir",
-    dataDir,
-    "--genesis-file",
-    genesisPath,
-    "--rpc-addr",
-    `127.0.0.1:${rpcPort}`,
-  ]);
-
-  const publicClient = createPublicClient({
-    chain,
-    transport: http(rpcUrl),
-  });
-
-  try {
     log(`Starting JSON-RPC node at ${rpcUrl}...`);
     await waitForRpcReady(publicClient, node);
     const firstBlock = await waitForFirstBlock(publicClient, node);
@@ -553,7 +585,9 @@ async function main(): Promise<void> {
       console.log(JSON.stringify(result, null, 2));
     }
   } finally {
-    await stopNode(node);
+    if (node) {
+      await stopNode(node);
+    }
 
     if (KEEP_TEMP) {
       log(`Keeping temp directory: ${sandboxDir}`);

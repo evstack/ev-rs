@@ -20,7 +20,7 @@ use crate::error::ChainIndexError;
 use crate::index::ChainIndex;
 use crate::querier::StateQuerier;
 use evolve_core::schema::AccountSchema;
-use evolve_core::AccountCode;
+use evolve_core::{AccountCode, BlockContext};
 use evolve_eth_jsonrpc::error::RpcError;
 use evolve_eth_jsonrpc::StateProvider;
 use evolve_mempool::{Mempool, MempoolTx, SharedMempool};
@@ -307,6 +307,39 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
         self.state_querier = Some(querier);
         self
     }
+
+    fn require_querier(&self) -> Result<&dyn StateQuerier, RpcError> {
+        self.state_querier
+            .as_deref()
+            .ok_or(RpcError::NotImplemented("state_querier not configured"))
+    }
+
+    fn resolve_state_query_block(&self, block: Option<u64>) -> Result<u64, RpcError> {
+        let latest = self
+            .index
+            .latest_block_number()
+            .map_err(RpcError::from)?
+            .ok_or(RpcError::BlockNotFound)?;
+
+        match block {
+            None => Ok(latest),
+            Some(number) if number == latest => Ok(number),
+            Some(number) => Err(RpcError::InvalidParams(format!(
+                "historical state queries are not supported: requested block {number}, latest block is {latest}"
+            ))),
+        }
+    }
+
+    fn resolve_block_context(&self, block: Option<u64>) -> Result<BlockContext, RpcError> {
+        let number = self.resolve_state_query_block(block)?;
+        let timestamp = self
+            .index
+            .get_block(number)
+            .map_err(RpcError::from)?
+            .map(|b| b.timestamp)
+            .unwrap_or(0);
+        Ok(BlockContext::new(number, timestamp))
+    }
 }
 
 impl From<ChainIndexError> for RpcError {
@@ -407,32 +440,26 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
         }
     }
 
-    async fn get_balance(&self, address: Address, _block: Option<u64>) -> Result<U256, RpcError> {
-        let querier = self
-            .state_querier
-            .as_ref()
-            .ok_or_else(|| RpcError::NotImplemented("state_querier not configured"))?;
+    async fn get_balance(&self, address: Address, block: Option<u64>) -> Result<U256, RpcError> {
+        let _latest = self.resolve_state_query_block(block)?;
+        let querier = self.require_querier()?;
         querier.get_balance(address).await
     }
 
     async fn get_transaction_count(
         &self,
         address: Address,
-        _block: Option<u64>,
+        block: Option<u64>,
     ) -> Result<u64, RpcError> {
-        let querier = self
-            .state_querier
-            .as_ref()
-            .ok_or_else(|| RpcError::NotImplemented("state_querier not configured"))?;
+        let _latest = self.resolve_state_query_block(block)?;
+        let querier = self.require_querier()?;
         querier.get_transaction_count(address).await
     }
 
     async fn call(&self, request: &CallRequest, block: Option<u64>) -> Result<Bytes, RpcError> {
-        let querier = self
-            .state_querier
-            .as_ref()
-            .ok_or_else(|| RpcError::NotImplemented("state_querier not configured"))?;
-        querier.call(request, block).await
+        let block_ctx = self.resolve_block_context(block)?;
+        let querier = self.require_querier()?;
+        querier.call(request, block_ctx).await
     }
 
     async fn estimate_gas(
@@ -440,11 +467,9 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
         request: &CallRequest,
         block: Option<u64>,
     ) -> Result<u64, RpcError> {
-        let querier = self
-            .state_querier
-            .as_ref()
-            .ok_or_else(|| RpcError::NotImplemented("state_querier not configured"))?;
-        querier.estimate_gas(request, block).await
+        let block_ctx = self.resolve_block_context(block)?;
+        let querier = self.require_querier()?;
+        querier.estimate_gas(request, block_ctx).await
     }
 
     async fn get_logs(&self, filter: &LogFilter) -> Result<Vec<RpcLog>, RpcError> {
@@ -517,10 +542,8 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
     }
 
     async fn get_code(&self, address: Address, block: Option<u64>) -> Result<Bytes, RpcError> {
-        let querier = self
-            .state_querier
-            .as_ref()
-            .ok_or_else(|| RpcError::NotImplemented("state_querier not configured"))?;
+        let block = Some(self.resolve_state_query_block(block)?);
+        let querier = self.require_querier()?;
         querier.get_code(address, block).await
     }
 
@@ -530,10 +553,8 @@ impl<I: ChainIndex + 'static, A: AccountsCodeStorage + Send + Sync + 'static> St
         position: U256,
         block: Option<u64>,
     ) -> Result<B256, RpcError> {
-        let querier = self
-            .state_querier
-            .as_ref()
-            .ok_or_else(|| RpcError::NotImplemented("state_querier not configured"))?;
+        let block = Some(self.resolve_state_query_block(block)?);
+        let querier = self.require_querier()?;
         querier.get_storage_at(address, position, block).await
     }
 
@@ -866,7 +887,7 @@ mod tests {
         async fn call(
             &self,
             _request: &CallRequest,
-            _block: Option<u64>,
+            _block: BlockContext,
         ) -> Result<Bytes, RpcError> {
             Ok(Bytes::new())
         }
@@ -874,7 +895,60 @@ mod tests {
         async fn estimate_gas(
             &self,
             _request: &CallRequest,
+            _block: BlockContext,
+        ) -> Result<u64, RpcError> {
+            Ok(21_000)
+        }
+    }
+
+    #[derive(Default)]
+    struct RecordingStateQuerier {
+        call_blocks: Mutex<Vec<BlockContext>>,
+    }
+
+    #[async_trait]
+    impl StateQuerier for RecordingStateQuerier {
+        async fn get_balance(&self, _address: Address) -> Result<U256, RpcError> {
+            Ok(U256::ZERO)
+        }
+
+        async fn get_transaction_count(&self, _address: Address) -> Result<u64, RpcError> {
+            Ok(0)
+        }
+
+        async fn get_code(
+            &self,
+            _address: Address,
             _block: Option<u64>,
+        ) -> Result<Bytes, RpcError> {
+            Ok(Bytes::new())
+        }
+
+        async fn get_storage_at(
+            &self,
+            _address: Address,
+            _position: U256,
+            _block: Option<u64>,
+        ) -> Result<B256, RpcError> {
+            Ok(B256::ZERO)
+        }
+
+        async fn call(
+            &self,
+            _request: &CallRequest,
+            block: BlockContext,
+        ) -> Result<Bytes, RpcError> {
+            self.call_blocks
+                .lock()
+                .expect("call block lock should not be poisoned")
+                .push(block);
+            Ok(Bytes::new())
+        }
+
+        async fn estimate_gas(
+            &self,
+            _request: &CallRequest,
+            _block: BlockContext,
         ) -> Result<u64, RpcError> {
             Ok(21_000)
         }
@@ -1311,5 +1385,50 @@ mod tests {
             internal_error,
             RpcError::InternalError(message) if message.contains("sqlite error: db down")
         ));
+    }
+
+    #[tokio::test]
+    async fn state_queries_reject_historical_blocks() {
+        let provider = default_provider(Arc::new(MockChainIndex {
+            latest: Some(7),
+            ..Default::default()
+        }))
+        .with_state_querier(Arc::new(DummyStateQuerier));
+
+        let error = provider
+            .get_balance(Address::repeat_byte(0x55), Some(6))
+            .await
+            .expect_err("historical state query should fail");
+
+        assert!(matches!(
+            error,
+            RpcError::InvalidParams(message)
+                if message.contains("historical state queries are not supported")
+                    && message.contains("requested block 6")
+                    && message.contains("latest block is 7")
+        ));
+    }
+
+    #[tokio::test]
+    async fn state_queries_default_to_latest_block() {
+        let querier = Arc::new(RecordingStateQuerier::default());
+        let provider = default_provider(Arc::new(MockChainIndex {
+            latest: Some(9),
+            ..Default::default()
+        }))
+        .with_state_querier(querier.clone());
+
+        provider
+            .call(&CallRequest::default(), None)
+            .await
+            .expect("latest state query should succeed");
+
+        let observed = querier
+            .call_blocks
+            .lock()
+            .expect("call block lock should not be poisoned")
+            .clone();
+        assert_eq!(observed.len(), 1);
+        assert_eq!(observed[0].height, 9);
     }
 }

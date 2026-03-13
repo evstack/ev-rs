@@ -103,17 +103,6 @@ pub struct QueryContext {
     pub block: BlockContext,
 }
 
-impl Default for QueryContext {
-    fn default() -> Self {
-        Self {
-            gas_limit: None,
-            sender: evolve_core::runtime_api::RUNTIME_ACCOUNT_ID,
-            funds: vec![],
-            block: BlockContext::default(),
-        }
-    }
-}
-
 #[cfg(test)]
 mod model_tests {
     use super::*;

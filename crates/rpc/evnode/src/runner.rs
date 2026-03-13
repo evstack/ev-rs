@@ -523,17 +523,21 @@ pub fn run_external_consensus_node_eth<
                 Path::new(&config.storage.path),
                 config.rpc.enabled || config.rpc.enable_block_indexing,
             );
-            let query_executor = Arc::new((build_stf)(&genesis_result));
-            let rpc_handle = start_external_consensus_rpc_server(
-                &config,
-                storage.clone(),
-                mempool.clone(),
-                &chain_index,
-                genesis_result.token_account_id(),
-                query_executor,
-                build_codes.as_ref(),
-            )
-            .await;
+            let rpc_handle = if config.rpc.enabled {
+                let query_executor = Arc::new((build_stf)(&genesis_result));
+                start_external_consensus_rpc_server(
+                    &config,
+                    storage.clone(),
+                    mempool.clone(),
+                    &chain_index,
+                    genesis_result.token_account_id(),
+                    query_executor,
+                    build_codes.as_ref(),
+                )
+                .await
+            } else {
+                None
+            };
 
             let executor_config = ExecutorServiceConfig::default();
             let commit_sink = ExternalConsensusCommitSink::spawn(

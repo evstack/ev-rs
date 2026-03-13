@@ -28,26 +28,23 @@ fn main() {
         .with_storage_directory(&data_dir)
         .with_worker_threads(2);
 
-    Runner::new(runtime_config).start(move |context| {
-        let data_dir = data_dir.clone();
-        async move {
-            let storage = QmdbStorage::new(
-                context,
-                StorageConfig {
-                    path: data_dir,
-                    ..Default::default()
-                },
-            )
-            .await
-            .expect("open qmdb storage");
+    Runner::new(runtime_config).start(move |context| async move {
+        let storage = QmdbStorage::new(
+            context,
+            StorageConfig {
+                path: data_dir,
+                ..Default::default()
+            },
+        )
+        .await
+        .expect("open qmdb storage");
 
-            let state = load_chain_state::<GenesisAccounts, _>(&storage)
-                .expect("load initialized chain state");
-            let token_address =
-                derive_runtime_contract_address(state.genesis_result.token_account_id());
+        let state =
+            load_chain_state::<GenesisAccounts, _>(&storage).expect("load initialized chain state");
+        let token_address =
+            derive_runtime_contract_address(state.genesis_result.token_account_id());
 
-            tx.send(token_address).expect("send token address");
-        }
+        tx.send(token_address).expect("send token address");
     });
 
     let token_address = rx.recv().expect("receive token address");

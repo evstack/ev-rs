@@ -48,13 +48,13 @@ pub trait StateQuerier: Send + Sync {
     ) -> Result<B256, RpcError>;
 
     /// Execute a read-only call.
-    async fn call(&self, request: &CallRequest, block: Option<u64>) -> Result<Bytes, RpcError>;
+    async fn call(&self, request: &CallRequest, block: BlockContext) -> Result<Bytes, RpcError>;
 
     /// Estimate gas for a transaction.
     async fn estimate_gas(
         &self,
         request: &CallRequest,
-        block: Option<u64>,
+        block: BlockContext,
     ) -> Result<u64, RpcError>;
 }
 
@@ -268,20 +268,19 @@ impl<S: ReadonlyKV + Send + Sync, A: AccountsCodeStorage + Send + Sync, E: RpcEx
         }])
     }
 
-    fn block_context(block: Option<u64>) -> BlockContext {
-        BlockContext::new(block.unwrap_or_default(), 0)
+
+    fn input_bytes(request: &CallRequest) -> Vec<u8> {
+        request.input_data().map(|b| b.to_vec()).unwrap_or_default()
     }
 
-    fn call_request_to_invoke_request(request: &CallRequest) -> InvokeRequest {
-        let input = request.input_data().cloned().unwrap_or_else(Bytes::new);
-        let bytes = input.as_ref();
-        let (function_id, args) = if bytes.len() >= 4 {
+    fn call_request_to_invoke_request(input: &[u8]) -> InvokeRequest {
+        let (function_id, args) = if input.len() >= 4 {
             (
-                u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as u64,
-                &bytes[4..],
+                u32::from_be_bytes([input[0], input[1], input[2], input[3]]) as u64,
+                &input[4..],
             )
         } else {
-            (0u64, bytes)
+            (0u64, input)
         };
 
         InvokeRequest::new_from_message(
@@ -294,88 +293,124 @@ impl<S: ReadonlyKV + Send + Sync, A: AccountsCodeStorage + Send + Sync, E: RpcEx
     fn synthetic_tx_hash(
         &self,
         request: &CallRequest,
-        block: Option<u64>,
+        block_height: u64,
     ) -> Result<B256, RpcError> {
-        let payload = serde_json::to_vec(&(request, block))
+        let payload = serde_json::to_vec(&(request, block_height))
             .map_err(|e| RpcError::InternalError(format!("encode synthetic tx: {e}")))?;
         Ok(B256::from(keccak256(payload)))
     }
 
-    fn build_synthetic_tx(
+    /// Pre-resolves addresses and parses the `CallRequest` once for reuse
+    /// across both exec and query paths.
+    fn resolve_call_context(
         &self,
         request: &CallRequest,
-        block: Option<u64>,
-    ) -> Result<TxContext, RpcError> {
+        block: BlockContext,
+    ) -> Result<ResolvedCallContext, RpcError> {
+        let input = Self::input_bytes(request);
         let sender = request.from.unwrap_or(Address::ZERO);
-        let invoke_request = Self::call_request_to_invoke_request(request);
-        let funds = self.call_request_funds(request)?;
         let sender_account = self.resolve_sender_account_id(sender)?;
-        let authentication_payload = Message::new(&sender.into_array()).map_err(|e| {
+        let recipient_account = self.resolve_account_id(request.to)?;
+        let funds = self.call_request_funds(request)?;
+        let gas_limit = self.call_request_gas_limit(request);
+        let invoke_request = Self::call_request_to_invoke_request(&input);
+
+        Ok(ResolvedCallContext {
+            input,
+            sender,
+            sender_account,
+            recipient_account,
+            funds,
+            gas_limit,
+            invoke_request,
+            block_ctx: block,
+            effective_gas_price: self.call_request_effective_gas_price(request),
+            nonce: self.sender_nonce(sender)?,
+            tx_hash: self.synthetic_tx_hash(request, block.height)?,
+            to_address: request.to,
+        })
+    }
+
+    fn build_synthetic_tx(&self, ctx: &ResolvedCallContext) -> Result<TxContext, RpcError> {
+        let authentication_payload = Message::new(&ctx.sender.into_array()).map_err(|e| {
             RpcError::InternalError(format!("encode synthetic auth payload: {:?}", e))
         })?;
 
         TxContext::from_payload(
-            TxPayload::Custom(
-                request
-                    .input_data()
-                    .cloned()
-                    .unwrap_or_else(Bytes::new)
-                    .to_vec(),
-            ),
+            TxPayload::Custom(ctx.input.clone()),
             sender_types::EOA_SECP256K1,
             TxContextMeta {
-                tx_hash: self.synthetic_tx_hash(request, block)?,
-                gas_limit: self.call_request_gas_limit(request),
-                nonce: self.sender_nonce(sender)?,
+                tx_hash: ctx.tx_hash,
+                gas_limit: ctx.gas_limit,
+                nonce: ctx.nonce,
                 chain_id: None,
-                effective_gas_price: self.call_request_effective_gas_price(request),
-                invoke_request,
-                funds,
-                sender_account,
-                recipient_account: self.resolve_account_id(request.to)?,
-                sender_key: sender.as_slice().to_vec(),
+                effective_gas_price: ctx.effective_gas_price,
+                invoke_request: ctx.invoke_request.clone(),
+                funds: ctx.funds.clone(),
+                sender_account: ctx.sender_account,
+                recipient_account: ctx.recipient_account,
+                sender_key: ctx.sender.as_slice().to_vec(),
                 authentication_payload,
-                sender_eth_address: Some(sender.into()),
-                recipient_eth_address: Some(request.to.into()),
+                sender_eth_address: Some(ctx.sender.into()),
+                recipient_eth_address: Some(ctx.to_address.into()),
             },
         )
         .ok_or_else(|| RpcError::InternalError("failed to build synthetic tx context".to_string()))
     }
 
-    fn run_query(
-        &self,
-        request: &CallRequest,
-        block: Option<u64>,
-    ) -> Result<Option<TxResult>, RpcError> {
-        let Some(target_account) = self.resolve_account_id(request.to)? else {
-            return Ok(None);
-        };
-        let sender = self.resolve_sender_account_id(request.from.unwrap_or(Address::ZERO))?;
-        let funds = self.call_request_funds(request)?;
-        let invoke_request = Self::call_request_to_invoke_request(request);
-
-        Ok(Some(self.executor.execute_query(
+    fn run_query(&self, ctx: &ResolvedCallContext) -> Option<TxResult> {
+        let target_account = ctx.recipient_account?;
+        Some(self.executor.execute_query(
             &self.storage,
             self.account_codes.as_ref(),
             target_account,
-            &invoke_request,
+            &ctx.invoke_request,
             QueryContext {
-                gas_limit: Some(self.call_request_gas_limit(request)),
-                sender,
-                funds,
-                block: Self::block_context(block),
+                gas_limit: Some(ctx.gas_limit),
+                sender: ctx.sender_account,
+                funds: ctx.funds.clone(),
+                block: ctx.block_ctx,
             },
-        )))
+        ))
     }
 
-    fn run_exec(&self, request: &CallRequest, block: Option<u64>) -> Result<TxResult, RpcError> {
-        let synthetic_tx = self.build_synthetic_tx(request, block)?;
+    fn run_exec(&self, ctx: &ResolvedCallContext) -> Result<TxResult, RpcError> {
+        let synthetic_tx = self.build_synthetic_tx(ctx)?;
         Ok(self.executor.simulate_call_tx(
             &self.storage,
             self.account_codes.as_ref(),
             &synthetic_tx,
-            Self::block_context(block),
+            ctx.block_ctx,
         ))
+    }
+
+    /// Run exec first; if it returns `ERR_UNKNOWN_FUNCTION`, fall back to query.
+    fn exec_with_query_fallback(
+        &self,
+        request: &CallRequest,
+        block: BlockContext,
+        map_err: fn(evolve_core::ErrorCode) -> RpcError,
+    ) -> Result<CallExecutionOutcome, RpcError> {
+        let ctx = self.resolve_call_context(request, block)?;
+
+        if ctx.recipient_account.is_none() {
+            return Ok(CallExecutionOutcome::UnknownTarget);
+        }
+
+        let exec_result = self.run_exec(&ctx)?;
+        match &exec_result.response {
+            Ok(_) => return Ok(CallExecutionOutcome::Success(exec_result)),
+            Err(err) if *err == ERR_UNKNOWN_FUNCTION => {}
+            Err(err) => return Err(map_err(*err)),
+        }
+
+        match self.run_query(&ctx) {
+            Some(query_result) => match &query_result.response {
+                Ok(_) => Ok(CallExecutionOutcome::Success(query_result)),
+                Err(err) => Err(map_err(*err)),
+            },
+            None => Ok(CallExecutionOutcome::UnknownTarget),
+        }
     }
 
     fn response_bytes(response: InvokeResponse) -> Result<Bytes, RpcError> {
@@ -384,14 +419,6 @@ impl<S: ReadonlyKV + Send + Sync, A: AccountsCodeStorage + Send + Sync, E: RpcEx
             .into_bytes()
             .map_err(|e| RpcError::InternalError(format!("encode response bytes: {:?}", e)))?;
         Ok(Bytes::from(bytes))
-    }
-
-    fn storage_slot_candidates(position: U256) -> Vec<Vec<u8>> {
-        let mut candidates = vec![position.to_be_bytes::<32>().to_vec()];
-        if position <= U256::from(u8::MAX) {
-            candidates.push(vec![position.to::<u8>()]);
-        }
-        candidates
     }
 
     fn storage_word(value: &[u8]) -> B256 {
@@ -406,19 +433,32 @@ impl<S: ReadonlyKV + Send + Sync, A: AccountsCodeStorage + Send + Sync, E: RpcEx
         B256::from(word)
     }
 
-    fn map_call_error(err: evolve_core::ErrorCode) -> RpcError {
+    fn map_stf_error(err: evolve_core::ErrorCode, wrap: fn(String) -> RpcError) -> RpcError {
         if err == ERR_OUT_OF_GAS {
-            return RpcError::ExecutionReverted("out of gas".to_string());
+            return wrap("out of gas".to_string());
         }
-        RpcError::ExecutionReverted(format!("{:?}", err))
+        wrap(format!("{:?}", err))
     }
+}
 
-    fn map_estimate_error(err: evolve_core::ErrorCode) -> RpcError {
-        if err == ERR_OUT_OF_GAS {
-            return RpcError::GasEstimationFailed("out of gas".to_string());
-        }
-        RpcError::GasEstimationFailed(format!("{:?}", err))
-    }
+struct ResolvedCallContext {
+    input: Vec<u8>,
+    sender: Address,
+    sender_account: AccountId,
+    recipient_account: Option<AccountId>,
+    funds: Vec<FungibleAsset>,
+    gas_limit: u64,
+    invoke_request: InvokeRequest,
+    block_ctx: BlockContext,
+    effective_gas_price: u128,
+    nonce: u64,
+    tx_hash: B256,
+    to_address: Address,
+}
+
+enum CallExecutionOutcome {
+    Success(TxResult),
+    UnknownTarget,
 }
 
 #[async_trait]
@@ -471,8 +511,14 @@ impl<
             return Ok(B256::ZERO);
         };
 
-        for key in Self::storage_slot_candidates(position) {
-            if let Some(value) = self.read_account_storage(account_id, &key)? {
+        // Try 32-byte big-endian key first, then single-byte for small positions.
+        let be_key = position.to_be_bytes::<32>();
+        if let Some(value) = self.read_account_storage(account_id, &be_key)? {
+            return Ok(Self::storage_word(&value));
+        }
+        if position <= U256::from(u8::MAX) {
+            let short_key = [position.to::<u8>()];
+            if let Some(value) = self.read_account_storage(account_id, &short_key)? {
                 return Ok(Self::storage_word(&value));
             }
         }
@@ -480,48 +526,32 @@ impl<
         Ok(B256::ZERO)
     }
 
-    async fn call(&self, request: &CallRequest, block: Option<u64>) -> Result<Bytes, RpcError> {
-        if self.resolve_account_id(request.to)?.is_none() {
-            return Ok(Bytes::new());
-        }
-
-        let exec_result = self.run_exec(request, block)?;
-        match exec_result.response {
-            Ok(response) => return Self::response_bytes(response),
-            Err(err) if err == ERR_UNKNOWN_FUNCTION => {}
-            Err(err) => return Err(Self::map_call_error(err)),
-        }
-
-        let Some(query_result) = self.run_query(request, block)? else {
-            return Ok(Bytes::new());
+    async fn call(&self, request: &CallRequest, block: BlockContext) -> Result<Bytes, RpcError> {
+        let result = match self.exec_with_query_fallback(request, block, |e| {
+            Self::map_stf_error(e, RpcError::ExecutionReverted)
+        })? {
+            CallExecutionOutcome::Success(result) => result,
+            CallExecutionOutcome::UnknownTarget => return Ok(Bytes::new()),
         };
-        match query_result.response {
-            Ok(response) => Self::response_bytes(response),
-            Err(err) => Err(Self::map_call_error(err)),
-        }
+        Self::response_bytes(result.response.expect("checked by fallback helper"))
     }
 
     async fn estimate_gas(
         &self,
         request: &CallRequest,
-        block: Option<u64>,
+        block: BlockContext,
     ) -> Result<u64, RpcError> {
-        let exec_result = self.run_exec(request, block)?;
-        match exec_result.response {
-            Ok(_) => return Ok(exec_result.gas_used),
-            Err(err) if err == ERR_UNKNOWN_FUNCTION => {}
-            Err(err) => return Err(Self::map_estimate_error(err)),
-        }
-
-        let Some(query_result) = self.run_query(request, block)? else {
-            return Err(RpcError::GasEstimationFailed(
-                "target account not found".to_string(),
-            ));
+        let result = match self.exec_with_query_fallback(request, block, |e| {
+            Self::map_stf_error(e, RpcError::GasEstimationFailed)
+        })? {
+            CallExecutionOutcome::Success(result) => result,
+            CallExecutionOutcome::UnknownTarget => {
+                return Err(RpcError::GasEstimationFailed(
+                    "target account not found".to_string(),
+                ))
+            }
         };
-        match query_result.response {
-            Ok(_) => Ok(query_result.gas_used),
-            Err(err) => Err(Self::map_estimate_error(err)),
-        }
+        Ok(result.gas_used)
     }
 }
 
@@ -545,8 +575,10 @@ mod tests {
 
     const QUERY_SELECTOR: u32 = 0x0102_0304;
     const EXEC_SELECTOR: u32 = 0x0506_0708;
+    const FAIL_SELECTOR: u32 = 0x090A_0B0C;
     const QUERY_FUNCTION_ID: u64 = QUERY_SELECTOR as u64;
     const EXEC_FUNCTION_ID: u64 = EXEC_SELECTOR as u64;
+    const FAIL_FUNCTION_ID: u64 = FAIL_SELECTOR as u64;
     const EOA_ADDR_TO_ID_PREFIX: &[u8] = b"registry/eoa/eth/a2i/";
     const EOA_ID_TO_ADDR_PREFIX: &[u8] = b"registry/eoa/eth/i2a/";
     const CONTRACT_ADDR_TO_ID_PREFIX: &[u8] = b"registry/contract/runtime/a2i/";
@@ -724,6 +756,7 @@ mod tests {
                     )?;
                     InvokeResponse::new(&payload.value)
                 }
+                FAIL_FUNCTION_ID => Err(ERR_OUT_OF_GAS),
                 _ => Err(ERR_UNKNOWN_FUNCTION),
             }
         }
@@ -905,7 +938,7 @@ mod tests {
         };
 
         let result = querier
-            .call(&request, Some(12))
+            .call(&request, BlockContext::new(12, 1000))
             .await
             .expect("query call should succeed");
 
@@ -924,12 +957,33 @@ mod tests {
         };
 
         let result = querier
-            .call(&request, Some(15))
+            .call(&request, BlockContext::new(15, 1500))
             .await
             .expect("exec call should succeed");
 
         let decoded = u64::decode(result.as_ref()).expect("result should decode");
         assert_eq!(decoded, 55);
+    }
+
+    #[tokio::test]
+    async fn eth_call_preserves_execution_reverts() {
+        let (querier, contract_address, sender_address) = setup_querier();
+        let request = CallRequest {
+            from: Some(sender_address),
+            to: contract_address,
+            data: Some(Bytes::from(selector_bytes(FAIL_SELECTOR).to_vec())),
+            ..Default::default()
+        };
+
+        let error = querier
+            .call(&request, BlockContext::new(15, 1500))
+            .await
+            .expect_err("reverting call should error");
+
+        assert!(matches!(
+            error,
+            RpcError::ExecutionReverted(message) if message == "out of gas"
+        ));
     }
 
     #[tokio::test]
@@ -943,7 +997,7 @@ mod tests {
         };
 
         let gas = querier
-            .estimate_gas(&request, Some(20))
+            .estimate_gas(&request, BlockContext::new(20, 2000))
             .await
             .expect("gas estimate should succeed");
 
@@ -961,7 +1015,7 @@ mod tests {
         };
 
         let result = querier
-            .call(&request, Some(1))
+            .call(&request, BlockContext::new(1, 100))
             .await
             .expect("unknown target should not error");
 

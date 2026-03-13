@@ -106,8 +106,7 @@ where
     Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
-    Stf:
-        StfExecutor<Tx, S, Codes> + evolve_chain_index::RpcExecutionContext + Send + Sync + 'static,
+    Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
 {
     let mempool: SharedMempool<Mempool<Tx>> = new_shared_mempool();
     let dev = Arc::new(DevConsensus::with_mempool(
@@ -299,7 +298,6 @@ struct EthRunnerConfig {
     runner_mode: EthRunnerMode,
 }
 
-/// Run the dev node with default settings (RPC enabled).
 /// Run the dev node with RPC disabled by default.
 ///
 /// Use `run_dev_node_with_rpc_and_mempool_eth` when you need compatible ETH JSON-RPC.
@@ -326,8 +324,7 @@ pub fn run_dev_node<
     Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
-    Stf:
-        StfExecutor<Tx, S, Codes> + evolve_chain_index::RpcExecutionContext + Send + Sync + 'static,
+    Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
     G: BorshSerialize
         + BorshDeserialize
         + Clone
@@ -360,8 +357,9 @@ pub fn run_dev_node<
 
 /// Run the dev node with custom RPC configuration.
 ///
-/// Startup fails if RPC is enabled for a generic transaction runner that
-/// cannot provide mempool-backed ETH ingress verification.
+/// Generic transaction runners cannot provide compatible ETH JSON-RPC ingress.
+/// Startup fails when `rpc_config.enabled` is `true`; use
+/// `run_dev_node_with_rpc_and_mempool_eth` instead.
 pub fn run_dev_node_with_rpc<
     Stf,
     Codes,
@@ -386,8 +384,7 @@ pub fn run_dev_node_with_rpc<
     Tx: Transaction + MempoolTx + Encodable + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
-    Stf:
-        StfExecutor<Tx, S, Codes> + evolve_chain_index::RpcExecutionContext + Send + Sync + 'static,
+    Stf: StfExecutor<Tx, S, Codes> + Send + Sync + 'static,
     G: BorshSerialize
         + BorshDeserialize
         + Clone
@@ -407,6 +404,13 @@ pub fn run_dev_node_with_rpc<
     BuildStorageFut:
         Future<Output = Result<S, Box<dyn std::error::Error + Send + Sync>>> + Send + 'static,
 {
+    if rpc_config.enabled {
+        panic!(
+            "run_dev_node_with_rpc cannot start RPC for generic transaction types. Use \
+             run_dev_node_with_rpc_and_mempool_eth for ETH-compatible RPC."
+        );
+    }
+
     tracing::info!("=== Evolve Dev Node ===");
     let data_dir = data_dir.as_ref();
     std::fs::create_dir_all(data_dir).expect("failed to create data directory");
@@ -415,11 +419,10 @@ pub fn run_dev_node_with_rpc<
         path: data_dir.to_path_buf(),
         ..Default::default()
     };
-    let chain_index_db_path = data_dir.join("chain-index.sqlite");
 
     let runtime_config = TokioConfig::default()
         .with_storage_directory(data_dir)
-        .with_worker_threads(4); // More threads for RPC handling
+        .with_worker_threads(4);
 
     let runner = Runner::new(runtime_config);
 
@@ -436,7 +439,6 @@ pub fn run_dev_node_with_rpc<
         let run_genesis = Arc::clone(&run_genesis);
         let build_storage = Arc::clone(&build_storage);
         let rpc_config = rpc_config.clone();
-        let chain_index_db_path = chain_index_db_path.clone();
 
         async move {
             // Clone context early since build_storage takes ownership
@@ -485,191 +487,42 @@ pub fn run_dev_node_with_rpc<
             // Build block archive callback (always on)
             let archive_cb = build_block_archive(context_for_archive).await;
 
-            // Set up RPC infrastructure if enabled
-            let rpc_handle = if rpc_config.enabled {
-                // Create chain index backed by SQLite
-                let chain_index = Arc::new(
-                    PersistentChainIndex::new(&chain_index_db_path)
-                        .expect("failed to open chain index database"),
-                );
+            let consensus =
+                DevConsensus::new(stf, storage, codes, dev_config).with_block_archive(archive_cb);
+            let dev: Arc<DevConsensus<Stf, S, Codes, Tx, evolve_server::NoopChainIndex>> =
+                Arc::new(consensus);
 
-                // Initialize from existing data
-                if let Err(e) = chain_index.initialize() {
-                    tracing::warn!("Failed to initialize chain index: {:?}", e);
+            tracing::info!(
+                "Block interval: {:?}, starting at height {}",
+                block_interval,
+                initial_height
+            );
+
+            tracing::info!("Starting block production... (Ctrl+C to stop)");
+
+            tokio::select! {
+                _ = dev.run_block_production(context_for_shutdown.clone()) => {
                 }
-
-                // Create subscription manager for real-time events
-                let subscriptions = Arc::new(SubscriptionManager::new());
-
-                // Create state provider for RPC
-                let codes_for_rpc = Arc::new(build_codes());
-                let state_provider_config = ChainStateProviderConfig {
-                    chain_id: rpc_config.chain_id,
-                    protocol_version: DEFAULT_PROTOCOL_VERSION.to_string(),
-                    gas_price: U256::ZERO,
-                    sync_status: SyncStatus::NotSyncing(false),
-                };
-                let query_executor = Arc::new((build_stf)(&genesis_result));
-                let state_querier: Arc<dyn StateQuerier> = Arc::new(StorageStateQuerier::new(
-                    storage.clone(),
-                    genesis_result.token_account_id(),
-                    Arc::clone(&codes_for_rpc),
-                    query_executor,
-                ));
-                let state_provider = ChainStateProvider::with_account_codes(
-                    Arc::clone(&chain_index),
-                    state_provider_config.clone(),
-                    Arc::clone(&codes_for_rpc),
-                )
-                .with_state_querier(Arc::clone(&state_querier));
-                ensure_rpc_startup_compatibility(&state_provider, "run_dev_node_with_rpc");
-
-                // Start JSON-RPC server
-                let server_config = RpcServerConfig {
-                    http_addr: rpc_config.http_addr,
-                    chain_id: rpc_config.chain_id,
-                };
-
-                tracing::info!("Starting JSON-RPC server on {}", rpc_config.http_addr);
-                let handle = start_server_with_subscriptions(
-                    server_config,
-                    state_provider,
-                    Arc::clone(&subscriptions),
-                )
-                .await
-                .expect("failed to start RPC server");
-
-                let grpc_handle = if let Some(grpc_addr) = rpc_config.grpc_addr {
-                    let grpc_state_provider = ChainStateProvider::with_account_codes(
-                        Arc::clone(&chain_index),
-                        state_provider_config,
-                        codes_for_rpc,
-                    )
-                    .with_state_querier(state_querier);
-                    ensure_rpc_startup_compatibility(&grpc_state_provider, "run_dev_node_with_rpc");
-                    let grpc_config = grpc_server_config(&rpc_config, grpc_addr);
-                    tracing::info!("Starting gRPC server on {}", grpc_addr);
-                    let grpc_server = GrpcServer::with_subscription_manager(
-                        grpc_config,
-                        grpc_state_provider,
-                        Arc::clone(&subscriptions),
-                    );
-                    Some(tokio::spawn(async move {
-                        if let Err(e) = grpc_server.serve().await {
-                            tracing::error!("gRPC server error: {}", e);
-                        }
-                    }))
-                } else {
-                    None
-                };
-
-                // Create DevConsensus with RPC support
-                let consensus = DevConsensus::with_rpc(
-                    stf,
-                    storage,
-                    codes,
-                    dev_config,
-                    chain_index,
-                    subscriptions,
-                )
-                .with_indexing_enabled(rpc_config.enable_block_indexing)
-                .with_block_archive(archive_cb);
-                let dev: Arc<DevConsensus<Stf, S, Codes, Tx, PersistentChainIndex>> =
-                    Arc::new(consensus);
-
-                tracing::info!(
-                    "Block interval: {:?}, starting at height {}",
-                    block_interval,
-                    initial_height
-                );
-
-                tracing::info!("Starting block production... (Ctrl+C to stop)");
-
-                // Run block production and Ctrl+C handling concurrently using Spawner pattern.
-                // When Ctrl+C is received, stop() triggers shutdown signal via context.stopped().
-                tokio::select! {
-                    _ = dev.run_block_production(context_for_shutdown.clone()) => {
-                        // Block production exited
-                    }
-                    _ = tokio::signal::ctrl_c() => {
-                        tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
-                        context_for_shutdown
-                            .stop(0, Some(shutdown_timeout(&rpc_config)))
-                            .await
-                            .expect("shutdown failed");
-                    }
+                _ = tokio::signal::ctrl_c() => {
+                    tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
+                    context_for_shutdown
+                        .stop(0, Some(shutdown_timeout(&rpc_config)))
+                        .await
+                        .expect("shutdown failed");
                 }
+            }
 
-                // Save chain state
-                let final_height = dev.height();
-                tracing::info!("Stopped at height: {}", final_height);
+            let final_height = dev.height();
+            tracing::info!("Stopped at height: {}", final_height);
 
-                let chain_state = ChainState {
-                    height: final_height,
-                    genesis_result,
-                };
-                if let Err(e) = save_chain_state(dev.storage(), &chain_state).await {
-                    tracing::error!("Failed to save chain state: {}", e);
-                } else {
-                    tracing::info!("Saved chain state at height {}", final_height);
-                }
-
-                Some((handle, grpc_handle))
-            } else {
-                // No RPC - use simple DevConsensus
-                let consensus = DevConsensus::new(stf, storage, codes, dev_config)
-                    .with_block_archive(archive_cb);
-                let dev: Arc<DevConsensus<Stf, S, Codes, Tx, evolve_server::NoopChainIndex>> =
-                    Arc::new(consensus);
-
-                tracing::info!(
-                    "Block interval: {:?}, starting at height {}",
-                    block_interval,
-                    initial_height
-                );
-
-                tracing::info!("Starting block production... (Ctrl+C to stop)");
-
-                // Run block production and Ctrl+C handling concurrently using Spawner pattern
-                tokio::select! {
-                    _ = dev.run_block_production(context_for_shutdown.clone()) => {
-                        // Block production exited
-                    }
-                    _ = tokio::signal::ctrl_c() => {
-                        tracing::info!("Received Ctrl+C, initiating graceful shutdown...");
-                        context_for_shutdown
-                            .stop(0, Some(shutdown_timeout(&rpc_config)))
-                            .await
-                            .expect("shutdown failed");
-                    }
-                }
-
-                let final_height = dev.height();
-                tracing::info!("Stopped at height: {}", final_height);
-
-                let chain_state = ChainState {
-                    height: final_height,
-                    genesis_result,
-                };
-                if let Err(e) = save_chain_state(dev.storage(), &chain_state).await {
-                    tracing::error!("Failed to save chain state: {}", e);
-                } else {
-                    tracing::info!("Saved chain state at height {}", final_height);
-                }
-
-                None
+            let chain_state = ChainState {
+                height: final_height,
+                genesis_result,
             };
-
-            // Stop RPC server if running
-            if let Some((handle, grpc_handle)) = rpc_handle {
-                tracing::info!("Stopping RPC server...");
-                handle.stop().expect("failed to stop RPC server");
-                tracing::info!("RPC server stopped");
-                if let Some(grpc_handle) = grpc_handle {
-                    tracing::info!("Stopping gRPC server...");
-                    grpc_handle.abort();
-                    tracing::info!("gRPC server stopped");
-                }
+            if let Err(e) = save_chain_state(dev.storage(), &chain_state).await {
+                tracing::error!("Failed to save chain state: {}", e);
+            } else {
+                tracing::info!("Saved chain state at height {}", final_height);
             }
         }
     });
