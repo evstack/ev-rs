@@ -329,6 +329,10 @@ fn build_stored_receipt<Tx: Transaction>(
     let to = resolve_recipient_address(tx);
     let logs: Vec<StoredLog> = tx_result.events.iter().map(event_to_stored_log).collect();
     let status = if tx_result.response.is_ok() { 1 } else { 0 };
+    let revert_reason = match &tx_result.response {
+        Err(err) => Some(format!("ErrorCode(id=0x{:04x}, arg={})", err.id, err.arg)),
+        Ok(_) => None,
+    };
 
     StoredReceipt {
         transaction_hash: tx_hash,
@@ -347,6 +351,7 @@ fn build_stored_receipt<Tx: Transaction>(
         logs,
         status,
         tx_type: eth_fields.as_ref().map(|f| f.tx_type).unwrap_or(0),
+        revert_reason,
     }
 }
 

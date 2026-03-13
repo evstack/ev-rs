@@ -209,6 +209,7 @@ impl PersistentChainIndex {
                  contract_address BLOB,
                  status INTEGER NOT NULL,
                  tx_type INTEGER NOT NULL,
+                 revert_reason TEXT,
                  FOREIGN KEY (block_number) REFERENCES blocks(number)
              );
              CREATE INDEX IF NOT EXISTS idx_receipts_block ON receipts(block_number);
@@ -342,6 +343,7 @@ impl PersistentChainIndex {
         let status: i64 = row.get(9)?;
         let tx_type: i64 = row.get(10)?;
         let effective_gas_price_bytes: Vec<u8> = row.get(11)?;
+        let revert_reason: Option<String> = row.get(12)?;
 
         let to = to_bytes
             .as_deref()
@@ -366,6 +368,7 @@ impl PersistentChainIndex {
             logs: vec![], // logs are stored separately
             status: status as u8,
             tx_type: tx_type as u8,
+            revert_reason,
         })
     }
 }
@@ -504,7 +507,7 @@ impl ChainIndex for PersistentChainIndex {
                     receipts.block_number, receipts.from_addr, receipts.to_addr,
                     receipts.cumulative_gas_used, receipts.gas_used,
                     receipts.contract_address, receipts.status, receipts.tx_type,
-                    transactions.gas_price
+                    transactions.gas_price, receipts.revert_reason
              FROM receipts
              INNER JOIN transactions ON transactions.hash = receipts.transaction_hash
              WHERE receipts.transaction_hash = ?",
@@ -672,8 +675,8 @@ fn insert_receipt(
     tx.execute(
         "INSERT OR REPLACE INTO receipts
          (transaction_hash, transaction_index, block_hash, block_number, from_addr, to_addr,
-          cumulative_gas_used, gas_used, contract_address, status, tx_type)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+          cumulative_gas_used, gas_used, contract_address, status, tx_type, revert_reason)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             receipt.transaction_hash.as_slice(),
             array_index,
@@ -686,6 +689,7 @@ fn insert_receipt(
             receipt.contract_address.as_ref().map(|a| a.as_slice()),
             receipt.status as i64,
             receipt.tx_type as i64,
+            receipt.revert_reason.as_deref(),
         ],
     )?;
     Ok(())
@@ -864,6 +868,7 @@ mod tests {
             logs: vec![],
             status: if success { 1 } else { 0 },
             tx_type: 0,
+            revert_reason: None,
         }
     }
 

@@ -180,16 +180,36 @@ impl<'s, 'a, S: ReadonlyKV, A: AccountsCodeStorage> Invoker<'s, 'a, S, A> {
         gas_counter: &'a mut GasCounter,
         recipient: AccountId,
     ) -> Self {
+        Self::new_for_query_with_context(
+            storage,
+            account_codes,
+            gas_counter,
+            recipient,
+            RUNTIME_ACCOUNT_ID,
+            vec![],
+            BlockContext::default(),
+        )
+    }
+
+    pub fn new_for_query_with_context(
+        storage: &'a mut ExecutionState<'s, S>,
+        account_codes: &'a A,
+        gas_counter: &'a mut GasCounter,
+        recipient: AccountId,
+        sender: AccountId,
+        funds: Vec<FungibleAsset>,
+        block: BlockContext,
+    ) -> Self {
         Self {
             whoami: recipient,
-            sender: RUNTIME_ACCOUNT_ID,
-            funds: vec![],
+            sender,
+            funds,
             account_codes,
             storage,
             gas_counter,
             scope: ExecutionScope::Query,
             call_depth: 0,
-            block: BlockContext::default(),
+            block,
         }
     }
 

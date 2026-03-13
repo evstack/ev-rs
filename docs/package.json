@@ -6,14 +6,19 @@
   "scripts": {
     "dev": "vocs dev",
     "build": "vocs build",
-    "preview": "vocs preview"
+    "preview": "vocs preview",
+    "typecheck": "tsc --noEmit",
+    "demo:viem-transfer": "bun run scripts/viem-transfer-e2e.ts",
+    "test:viem-transfer": "bun run scripts/viem-transfer-e2e.ts --quiet"
   },
   "dependencies": {
+    "viem": "^2.39.0",
     "vocs": "^1.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
     "@types/react": "^19.0.0",
     "typescript": "^5.5.0"
   }
