@@ -35,11 +35,19 @@ pub struct RpcServerConfig {
     pub chain_id: u64,
 }
 
+/// Default chain ID for the Evolve network.
+///
+/// Deliberately chosen to be distinct from any live EVM network to prevent
+/// cross-chain replay of transactions signed against a default configuration.
+/// Override via `RpcServerConfig { chain_id: <your_id>, .. }` or the
+/// `EVOLVE_CHAIN__CHAIN_ID` environment variable when running a production node.
+pub const DEFAULT_CHAIN_ID: u64 = 900_901;
+
 impl Default for RpcServerConfig {
     fn default() -> Self {
         Self {
             http_addr: "127.0.0.1:8545".parse().unwrap(),
-            chain_id: 1,
+            chain_id: DEFAULT_CHAIN_ID,
         }
     }
 }

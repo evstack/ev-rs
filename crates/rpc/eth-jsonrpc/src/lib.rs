@@ -11,7 +11,7 @@
 //! #[tokio::main]
 //! async fn main() {
 //!     let config = RpcServerConfig {
-//!         chain_id: 1,
+//!         chain_id: 900_901,
 //!         ..Default::default()
 //!     };
 //!     let handle = start_server(config, NoopStateProvider).await.unwrap();
