@@ -446,11 +446,16 @@ where
                 merkleized.finalize()
             };
             db.apply_batch(changeset).await.map_err(map_qmdb_error)?;
-        }
 
-        for key in keys_to_invalidate {
-            self.cache.invalidate(&key);
+            // Invalidate cache entries while still holding the write lock so that
+            // no concurrent reader can observe a stale cached value between the
+            // QMDB commit and the invalidation (M-1 fix).
+            for key in &keys_to_invalidate {
+                self.cache.invalidate(key);
+            }
         }
+        // keys_to_invalidate dropped here; the Vec was consumed by the reference loop above.
+        drop(keys_to_invalidate);
 
         self.metrics
             .record_batch(start.elapsed().as_secs_f64(), ops_count, sets, deletes);
@@ -483,16 +488,10 @@ where
         result: Result<Option<Vec<u8>>, impl std::fmt::Display>,
     ) -> Result<Option<Vec<u8>>, ErrorCode> {
         match result {
-            Ok(Some(value)) => Ok(Some(value)),
-            Ok(None) => Ok(None),
+            Ok(value) => Ok(value),
             Err(e) => {
-                let err_str = e.to_string();
-                if err_str.contains("not found") {
-                    Ok(None)
-                } else {
-                    tracing::error!("QMDB read error: {err_str}");
-                    Err(crate::types::ERR_ADB_ERROR)
-                }
+                tracing::error!("QMDB read error: {e}");
+                Err(crate::types::ERR_ADB_ERROR)
             }
         }
     }

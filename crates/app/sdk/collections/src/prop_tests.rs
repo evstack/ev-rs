@@ -9,36 +9,13 @@ use crate::queue::Queue;
 use crate::unordered_map::UnorderedMap;
 use crate::vector::Vector;
 use crate::ERR_EMPTY;
+use crate::ERR_NOT_FOUND;
+use evolve_testing::proptest_config::proptest_config;
 use proptest::prelude::*;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 const MAX_OPS: usize = 32;
 const MAX_KEYS: usize = 16;
-const DEFAULT_CASES: u32 = 128;
-const CI_CASES: u32 = 32;
-
-fn proptest_cases() -> u32 {
-    if let Ok(value) = std::env::var("EVOLVE_PROPTEST_CASES") {
-        if let Ok(parsed) = value.parse::<u32>() {
-            if parsed > 0 {
-                return parsed;
-            }
-        }
-    }
-
-    if std::env::var("EVOLVE_CI").is_ok() || std::env::var("CI").is_ok() {
-        return CI_CASES;
-    }
-
-    DEFAULT_CASES
-}
-
-fn proptest_config() -> proptest::test_runner::Config {
-    proptest::test_runner::Config {
-        cases: proptest_cases(),
-        ..Default::default()
-    }
-}
 
 proptest! {
     #![proptest_config(proptest_config())]
@@ -214,5 +191,78 @@ proptest! {
         expected_pairs.sort_by_key(|(key, _)| *key);
 
         prop_assert_eq!(actual_pairs, expected_pairs);
+    }
+}
+
+// ============================================================================
+// Map model-based test
+// ============================================================================
+
+#[derive(Clone, Debug)]
+enum MapOp {
+    Set { key: u64, value: u64 },
+    Get { key: u64 },
+    Remove { key: u64 },
+    Exists { key: u64 },
+}
+
+fn map_ops_strategy() -> impl Strategy<Value = Vec<MapOp>> {
+    let keys: Vec<u64> = (0..MAX_KEYS as u64).collect();
+
+    let set = (proptest::sample::select(keys.clone()), any::<u64>())
+        .prop_map(|(key, value)| MapOp::Set { key, value });
+    let get = proptest::sample::select(keys.clone()).prop_map(|key| MapOp::Get { key });
+    let remove = proptest::sample::select(keys.clone()).prop_map(|key| MapOp::Remove { key });
+    let exists = proptest::sample::select(keys).prop_map(|key| MapOp::Exists { key });
+
+    let op = prop_oneof![4 => set, 2 => get, 2 => remove, 1 => exists];
+    proptest::collection::vec(op, 0..=MAX_OPS)
+}
+
+proptest! {
+    #![proptest_config(proptest_config())]
+
+    #[test]
+    fn prop_map_matches_model(ops in map_ops_strategy()) {
+        let map: Map<u64, u64> = Map::new(50);
+        let mut env = MockEnvironment::new(1, 2);
+        let mut model: BTreeMap<u64, u64> = BTreeMap::new();
+
+        for op in ops {
+            match op {
+                MapOp::Set { key, value } => {
+                    map.set(&key, &value, &mut env).unwrap();
+                    model.insert(key, value);
+                }
+                MapOp::Get { key } => {
+                    let actual = map.may_get(&key, &mut env).unwrap();
+                    let expected = model.get(&key).copied();
+                    prop_assert_eq!(actual, expected);
+
+                    // Also verify get() returns ERR_NOT_FOUND for missing keys
+                    if expected.is_none() {
+                        prop_assert_eq!(map.get(&key, &mut env).unwrap_err(), ERR_NOT_FOUND);
+                    } else {
+                        prop_assert_eq!(map.get(&key, &mut env).unwrap(), expected.unwrap());
+                    }
+                }
+                MapOp::Remove { key } => {
+                    map.remove(&key, &mut env).unwrap();
+                    model.remove(&key);
+                }
+                MapOp::Exists { key } => {
+                    let actual = map.exists(&key, &mut env).unwrap();
+                    let expected = model.contains_key(&key);
+                    prop_assert_eq!(actual, expected);
+                }
+            }
+        }
+
+        // Final state: verify all keys match the model
+        for key in 0..MAX_KEYS as u64 {
+            let expected = model.get(&key).copied();
+            let actual = map.may_get(&key, &mut env).unwrap();
+            prop_assert_eq!(actual, expected);
+        }
     }
 }

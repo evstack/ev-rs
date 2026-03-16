@@ -141,6 +141,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
             max_gas: 30_000_000,
             max_bytes: 128 * 1024,
         },
+        // No auth token for this local example. In production, set
+        // EVOLVE_EVNODE_AUTH_TOKEN and keep require_auth = true.
+        auth_token: None,
+        require_auth: false,
     };
 
     tracing::info!("Starting EVNode gRPC server on {}", addr);

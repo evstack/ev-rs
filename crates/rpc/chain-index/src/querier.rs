@@ -8,6 +8,7 @@ use alloy_primitives::{Address, Bytes, U256};
 use async_trait::async_trait;
 
 use evolve_core::encoding::Encodable;
+use evolve_core::runtime_api::ACCOUNT_STORAGE_PREFIX;
 use evolve_core::{AccountId, Message, ReadonlyKV};
 use evolve_eth_jsonrpc::error::RpcError;
 use evolve_rpc_types::CallRequest;
@@ -53,7 +54,8 @@ impl<S: ReadonlyKV + Send + Sync> StorageStateQuerier<S> {
     }
 
     fn read_nonce(&self, account_id: AccountId) -> Result<u64, RpcError> {
-        let mut key = account_id.as_bytes().to_vec();
+        let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+        key.extend_from_slice(&account_id.as_bytes());
         key.push(0u8); // EthEoaAccount::nonce storage prefix
         match self
             .storage
@@ -68,7 +70,8 @@ impl<S: ReadonlyKV + Send + Sync> StorageStateQuerier<S> {
     }
 
     fn read_balance(&self, account_id: AccountId) -> Result<u128, RpcError> {
-        let mut key = self.token_account_id.as_bytes().to_vec();
+        let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+        key.extend_from_slice(&self.token_account_id.as_bytes());
         key.push(1u8); // Token::balances storage prefix
         key.extend(
             account_id

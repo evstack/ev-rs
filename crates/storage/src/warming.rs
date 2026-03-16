@@ -76,11 +76,10 @@ where
         return;
     }
 
-    // Prefetch into cache
-    cache.prefetch_keys(&all_keys, |key| {
-        // Fetch from storage, ignoring errors (treat as absent)
-        storage.get(key).ok().flatten()
-    });
+    // Prefetch into cache.
+    // Pass storage errors as Err so prefetch_keys does not cache a false-absent
+    // entry for a key that failed due to a transient I/O problem (M-3 fix).
+    cache.prefetch_keys(&all_keys, |key| storage.get(key));
 }
 
 /// Warms the cache asynchronously for a batch of transactions.
@@ -325,5 +324,45 @@ mod tests {
 
         let keys = token_transfer_keys(token, sender, recipient);
         assert_eq!(keys.len(), 3);
+    }
+
+    /// Storage that returns an error for one specific key.
+    struct FaultingStorage {
+        inner: MockStorage,
+        fault_key: Vec<u8>,
+    }
+
+    impl ReadonlyKV for FaultingStorage {
+        fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, ErrorCode> {
+            if key == self.fault_key.as_slice() {
+                Err(ErrorCode::new(0xFF))
+            } else {
+                self.inner.get(key)
+            }
+        }
+    }
+
+    /// Regression test for M-3: a storage error during cache warming must not
+    /// populate a false-absent cache entry that silences future successful reads.
+    #[test]
+    fn test_warm_cache_storage_error_does_not_cache_absent() {
+        let cache = ShardedDbCache::with_defaults();
+        let fault_key = b"key_error".to_vec();
+        let storage = FaultingStorage {
+            inner: MockStorage::new(),
+            fault_key: fault_key.clone(),
+        };
+
+        let txs = vec![TestTx {
+            keys: vec![fault_key.clone()],
+        }];
+
+        warm_cache(&cache, &storage, &txs, &TestPredictor);
+
+        // The faulting key must remain a cache miss, not a false Absent entry.
+        assert!(
+            cache.get(&fault_key).is_none(),
+            "a transient storage error must not populate a false-absent cache entry"
+        );
     }
 }

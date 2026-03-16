@@ -17,7 +17,7 @@ use crate::eoa_registry::{
     ensure_eoa_mapping, lookup_account_id_in_env, lookup_contract_account_id_in_env,
     resolve_or_create_eoa_account, ETH_EOA_CODE_ID,
 };
-use crate::error::{ERR_RECIPIENT_REQUIRED, ERR_TX_DECODE};
+use crate::error::{ERR_RECIPIENT_REQUIRED, ERR_SENDER_MISMATCH, ERR_TX_DECODE};
 use crate::payload::{EthIntentPayload, TxPayload};
 use crate::sender_type;
 use crate::traits::{derive_eth_eoa_account_id, TypedTransaction};
@@ -457,7 +457,19 @@ impl Decodable for TxContext {
             }
 
             let payload = match wire.payload {
-                TxPayloadWire::Eoa(raw) => TxPayload::Eoa(Box::new(TxEnvelope::decode(&raw)?)),
+                TxPayloadWire::Eoa(raw) => {
+                    let envelope = TxEnvelope::decode(&raw)?;
+                    // SECURITY: verify the wire-provided sender matches the
+                    // secp256k1-recovered sender from the envelope.  Without
+                    // this check an attacker can set sender_eth_address to any
+                    // victim address while signing with a different key.
+                    let recovered = envelope.sender();
+                    let claimed = wire.sender_eth_address.ok_or(ERR_TX_DECODE)?;
+                    if recovered != Address::from(claimed) {
+                        return Err(ERR_SENDER_MISMATCH);
+                    }
+                    TxPayload::Eoa(Box::new(envelope))
+                }
                 TxPayloadWire::Custom(raw) => TxPayload::Custom(raw),
             };
 
@@ -684,6 +696,145 @@ mod tests {
             .resolve_recipient_account(&mut env)
             .expect("resolve recipient");
         assert_eq!(resolved, contract_id);
+    }
+
+    /// Build a raw `ctx1` wire payload whose EOA envelope was signed by
+    /// `signing_key` but whose `sender_eth_address` field is set to
+    /// `spoofed_sender`.  This simulates the sender-spoofing attack.
+    fn build_spoofed_eoa_wire(
+        signing_key: &SigningKey,
+        to: Address,
+        spoofed_sender: [u8; 20],
+    ) -> Vec<u8> {
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce: 0,
+            gas_price: 1_000_000_000,
+            gas_limit: 21_000,
+            to: TxKind::Call(to),
+            value: U256::ZERO,
+            input: Bytes::new(),
+        };
+        let signature = sign_hash(signing_key, tx.signature_hash());
+        let signed = tx.into_signed(signature);
+        let mut rlp = Vec::new();
+        signed.rlp_encode(&mut rlp);
+
+        // The real sender recovered from the envelope.
+        let envelope = TxEnvelope::decode(&rlp).expect("decode signed tx");
+        let real_sender = envelope.sender();
+
+        // Derive a minimal but valid invoke request from the envelope.
+        let invoke_request = envelope
+            .to_invoke_requests()
+            .into_iter()
+            .next()
+            .expect("invoke request");
+
+        let wire = TxContextWireV1 {
+            sender_type: sender_type::EOA_SECP256K1,
+            payload: TxPayloadWire::Eoa(rlp),
+            tx_hash: envelope.tx_hash().0,
+            gas_limit: envelope.gas_limit(),
+            nonce: envelope.nonce(),
+            chain_id: envelope.chain_id(),
+            effective_gas_price: 1_000_000_000,
+            invoke_request,
+            funds: vec![],
+            sender_account: derive_eth_eoa_account_id(real_sender),
+            recipient_account: None,
+            sender_key: real_sender.as_slice().to_vec(),
+            authentication_payload: Message::new(&real_sender.into_array()).expect("auth payload"),
+            // Lie: claim the spoofed victim address as sender.
+            sender_eth_address: Some(spoofed_sender),
+            recipient_eth_address: Some(to.into()),
+        };
+
+        let mut encoded = TX_CONTEXT_WIRE_MAGIC.to_vec();
+        encoded.extend(borsh::to_vec(&wire).expect("borsh encode wire"));
+        encoded
+    }
+
+    #[test]
+    fn eoa_wire_spoofed_sender_is_rejected() {
+        let signing_key = SigningKey::random(&mut OsRng);
+        let to = Address::repeat_byte(0xBB);
+        let victim: [u8; 20] = [0xDE; 20];
+
+        // Recover the real sender so we can assert it differs from the victim.
+        let real_sender: [u8; 20] = {
+            let tx = TxLegacy {
+                chain_id: Some(1),
+                nonce: 0,
+                gas_price: 1_000_000_000,
+                gas_limit: 21_000,
+                to: TxKind::Call(to),
+                value: U256::ZERO,
+                input: Bytes::new(),
+            };
+            let sig = sign_hash(&signing_key, tx.signature_hash());
+            let signed = tx.into_signed(sig);
+            let mut rlp = Vec::new();
+            signed.rlp_encode(&mut rlp);
+            TxEnvelope::decode(&rlp).expect("decode").sender().into()
+        };
+        // Guard: the test is only meaningful when the victim differs from real signer.
+        assert_ne!(
+            real_sender, victim,
+            "victim must differ from real signer for this test"
+        );
+
+        let wire_bytes = build_spoofed_eoa_wire(&signing_key, to, victim);
+        let result = TxContext::decode(&wire_bytes);
+
+        assert!(
+            result.is_err(),
+            "decode must reject a wire payload where sender_eth_address does not match the recovered secp256k1 sender"
+        );
+        assert_eq!(
+            result.unwrap_err(),
+            ERR_SENDER_MISMATCH,
+            "expected ERR_SENDER_MISMATCH, got a different error"
+        );
+    }
+
+    #[test]
+    fn eoa_wire_correct_sender_is_accepted() {
+        // A legitimately-crafted EOA wire payload (sender matches recovered key)
+        // must still decode successfully after the fix.
+        let signing_key = SigningKey::random(&mut OsRng);
+        let to = Address::repeat_byte(0xCC);
+
+        let real_sender: [u8; 20] = {
+            let tx = TxLegacy {
+                chain_id: Some(1),
+                nonce: 0,
+                gas_price: 1_000_000_000,
+                gas_limit: 21_000,
+                to: TxKind::Call(to),
+                value: U256::ZERO,
+                input: Bytes::new(),
+            };
+            let sig = sign_hash(&signing_key, tx.signature_hash());
+            let signed = tx.into_signed(sig);
+            let mut rlp = Vec::new();
+            signed.rlp_encode(&mut rlp);
+            TxEnvelope::decode(&rlp).expect("decode").sender().into()
+        };
+
+        // Build a wire payload with the correct sender.
+        let wire_bytes = build_spoofed_eoa_wire(&signing_key, to, real_sender);
+        let result = TxContext::decode(&wire_bytes);
+        assert!(
+            result.is_ok(),
+            "decode must accept a wire payload with a matching sender_eth_address"
+        );
+        let ctx = result.unwrap();
+        assert_eq!(
+            ctx.sender_address().map(<[u8; 20]>::from),
+            Some(real_sender),
+            "sender resolution must point to the recovered address"
+        );
     }
 
     #[test]

@@ -602,13 +602,28 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
         to_block: u64,
         filter: &LogFilter,
     ) -> Result<Vec<RpcLog>, RpcError> {
+        // Reject inverted ranges immediately (matches go-ethereum behavior).
+        if from_block > to_block {
+            return Err(RpcError::InvalidParams(format!(
+                "fromBlock ({}) is greater than toBlock ({})",
+                from_block, to_block
+            )));
+        }
+
         let mut result = Vec::new();
 
-        // Limit range to prevent DoS
-        let max_blocks = 1000u64;
-        let actual_to = to_block.min(from_block.saturating_add(max_blocks));
+        // Reject oversized ranges rather than silently truncating (matches Geth behavior).
+        const MAX_BLOCK_RANGE: u64 = 1000;
+        // Maximum log entries returned in a single getLogs call.
+        const MAX_LOGS: usize = 10_000;
+        let range = to_block.saturating_sub(from_block).saturating_add(1);
+        if range > MAX_BLOCK_RANGE {
+            return Err(RpcError::InvalidParams(format!(
+                "block range ({range}) exceeds maximum ({MAX_BLOCK_RANGE}); narrow the filter range"
+            )));
+        }
 
-        for block_num in from_block..=actual_to {
+        for block_num in from_block..=to_block {
             // Get block for hash
             let block = match self.index.get_block(block_num)? {
                 Some(b) => b,
@@ -667,6 +682,12 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
                             }
                         }
 
+                        if result.len() >= MAX_LOGS {
+                            return Err(RpcError::InvalidParams(format!(
+                                "query returned more than {} results; narrow the filter range",
+                                MAX_LOGS
+                            )));
+                        }
                         result.push(stored_log.to_rpc_log(
                             block_num,
                             block.hash,
@@ -878,6 +899,7 @@ mod tests {
             logs: vec![],
             status: 1,
             tx_type: 0,
+            revert_reason: None,
         }
     }
 

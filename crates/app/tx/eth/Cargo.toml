@@ -39,6 +39,8 @@ sha3 = { workspace = true }
 k256 = { version = "0.13", features = ["ecdsa"], optional = true }
 
 [dev-dependencies]
+# Enable testing feature so integration tests can access sign_hash
+evolve_tx_eth = { path = ".", features = ["testing"] }
 # For testing with real signatures
 k256 = { version = "0.13", features = ["ecdsa", "arithmetic"] }
 # For hex test vectors
@@ -49,6 +51,8 @@ proptest = "1.5"
 rand = "0.8"
 # For TxDecoder trait in tests
 evolve_stf_traits = { workspace = true }
+# Shared test config
+evolve_testing = { workspace = true, features = ["proptest"] }
 
 [lints]
 workspace = true

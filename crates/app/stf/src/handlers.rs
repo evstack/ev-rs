@@ -12,7 +12,7 @@ use crate::invoker::Invoker;
 use crate::runtime_api_impl;
 use evolve_core::runtime_api::{
     CreateAccountRequest, CreateAccountResponse, MigrateRequest, RegisterAccountAtIdRequest,
-    RegisterAccountAtIdResponse, RUNTIME_ACCOUNT_ID,
+    RegisterAccountAtIdResponse, ACCOUNT_STORAGE_PREFIX, RUNTIME_ACCOUNT_ID,
 };
 use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageRemoveResponse,
@@ -120,7 +120,8 @@ pub fn handle_storage_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
         StorageSetRequest::FUNCTION_IDENTIFIER => {
             let storage_set: StorageSetRequest = request.get()?;
 
-            let mut key = invoker.whoami.as_bytes().to_vec();
+            let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+            key.extend_from_slice(&invoker.whoami.as_bytes());
             key.extend(storage_set.key);
 
             // increase gas costs
@@ -133,7 +134,8 @@ pub fn handle_storage_exec<S: ReadonlyKV, A: AccountsCodeStorage>(
         }
         StorageRemoveRequest::FUNCTION_IDENTIFIER => {
             let storage_remove: StorageRemoveRequest = request.get()?;
-            let mut key = invoker.whoami.as_bytes().to_vec();
+            let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+            key.extend_from_slice(&invoker.whoami.as_bytes());
             key.extend(storage_remove.key);
             invoker.gas_counter.consume_remove_gas(&key)?;
             invoker.storage.remove(&key)?;
@@ -151,7 +153,8 @@ pub fn handle_storage_query<S: ReadonlyKV, A: AccountsCodeStorage>(
         StorageGetRequest::FUNCTION_IDENTIFIER => {
             let storage_get: StorageGetRequest = request.get()?;
 
-            let mut key = storage_get.account_id.as_bytes().to_vec();
+            let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+            key.extend_from_slice(&storage_get.account_id.as_bytes());
             key.extend(storage_get.key);
 
             let value = invoker.storage.get(&key)?;

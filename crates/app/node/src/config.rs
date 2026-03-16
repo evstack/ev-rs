@@ -124,7 +124,8 @@ pub struct ChainConfig {
 
 impl Default for ChainConfig {
     fn default() -> Self {
-        Self { chain_id: 1 }
+        // 900_901 is deliberately not a live EVM network to prevent cross-chain replay.
+        Self { chain_id: 900_901 }
     }
 }
 
@@ -227,7 +228,7 @@ mod tests {
             .extract()
             .expect("figment extract failed");
 
-        assert_eq!(loaded.chain.chain_id, 1);
+        assert_eq!(loaded.chain.chain_id, 900_901);
         assert_eq!(loaded.storage.path, DEFAULT_DATA_DIR);
         assert_eq!(loaded.rpc.http_addr, DEFAULT_RPC_ADDR);
         assert_eq!(loaded.grpc.addr, DEFAULT_GRPC_ADDR);

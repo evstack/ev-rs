@@ -2,7 +2,7 @@ use crate::error::ERR_ADDRESS_ACCOUNT_CONFLICT;
 use crate::traits::{derive_eth_eoa_account_id, derive_runtime_contract_address};
 use alloy_primitives::Address;
 use evolve_core::low_level::{exec_account, query_account, register_account_at_id};
-use evolve_core::runtime_api::RUNTIME_ACCOUNT_ID;
+use evolve_core::runtime_api::{ACCOUNT_STORAGE_PREFIX, RUNTIME_ACCOUNT_ID};
 use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageSetRequest, StorageSetResponse,
     STORAGE_ACCOUNT_ID,
@@ -93,7 +93,8 @@ pub fn lookup_account_id_in_storage<S: ReadonlyKV>(
     storage: &S,
     address: Address,
 ) -> SdkResult<Option<AccountId>> {
-    let mut full_key = RUNTIME_ACCOUNT_ID.as_bytes().to_vec();
+    let mut full_key = vec![ACCOUNT_STORAGE_PREFIX];
+    full_key.extend_from_slice(&RUNTIME_ACCOUNT_ID.as_bytes());
     full_key.extend_from_slice(&addr_to_id_key(address));
     match storage.get(&full_key)? {
         Some(raw) => Ok(Some(decode_account_id(Message::from_bytes(raw))?)),
@@ -123,7 +124,8 @@ pub fn lookup_contract_account_id_in_storage<S: ReadonlyKV>(
     storage: &S,
     address: Address,
 ) -> SdkResult<Option<AccountId>> {
-    let mut full_key = RUNTIME_ACCOUNT_ID.as_bytes().to_vec();
+    let mut full_key = vec![ACCOUNT_STORAGE_PREFIX];
+    full_key.extend_from_slice(&RUNTIME_ACCOUNT_ID.as_bytes());
     full_key.extend_from_slice(&contract_addr_to_id_key(address));
     match storage.get(&full_key)? {
         Some(raw) => Ok(Some(decode_account_id(Message::from_bytes(raw))?)),
@@ -135,7 +137,8 @@ pub fn lookup_address_in_storage<S: ReadonlyKV>(
     storage: &S,
     account_id: AccountId,
 ) -> SdkResult<Option<Address>> {
-    let mut full_key = RUNTIME_ACCOUNT_ID.as_bytes().to_vec();
+    let mut full_key = vec![ACCOUNT_STORAGE_PREFIX];
+    full_key.extend_from_slice(&RUNTIME_ACCOUNT_ID.as_bytes());
     full_key.extend_from_slice(&id_to_addr_key(account_id));
     match storage.get(&full_key)? {
         Some(raw) => {
