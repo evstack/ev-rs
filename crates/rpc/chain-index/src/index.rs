@@ -231,10 +231,18 @@ impl PersistentChainIndex {
         )?;
 
         // Migration: add revert_reason column to existing receipts tables that
-        // were created before this column existed. ALTER TABLE ADD COLUMN is a
-        // no-op if the column already exists (SQLite returns "duplicate column"
-        // which we ignore).
-        let _ = conn.execute_batch("ALTER TABLE receipts ADD COLUMN revert_reason TEXT;");
+        // were created before this column existed. We only ignore the
+        // "duplicate column" error; other failures (I/O, corruption) are
+        // propagated so startup fails visibly.
+        match conn.execute_batch("ALTER TABLE receipts ADD COLUMN revert_reason TEXT;") {
+            Ok(()) => {}
+            Err(rusqlite::Error::SqliteFailure(_, Some(ref msg)))
+                if msg.contains("duplicate column") =>
+            {
+                // Column already exists — nothing to do.
+            }
+            Err(e) => return Err(e.into()),
+        }
 
         Ok(())
     }

@@ -318,9 +318,10 @@ pub fn proto_to_log_filter(filter: &proto::LogFilter) -> RpcLogFilter {
 
 /// Convert proto CallRequest to RpcCallRequest.
 ///
-/// Returns `None` if required fields are missing or have invalid byte lengths.
-/// Callers must reject the request in that case rather than silently routing
-/// to the zero address.
+/// Returns `None` if address fields are present but have invalid byte lengths.
+/// A missing `to` field is treated as contract creation and mapped to
+/// `Address::ZERO`; callers must reject `None` rather than silently routing
+/// malformed requests.
 pub fn proto_to_call_request(req: &proto::CallRequest) -> Option<RpcCallRequest> {
     let to = req.to.as_ref().and_then(proto_to_address).or_else(|| {
         // A missing `to` field is only valid for contract-creation calls.
