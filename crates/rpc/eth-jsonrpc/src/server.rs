@@ -434,6 +434,21 @@ impl<S: StateProvider> EthApiServer for EthRpcServer<S> {
     }
 
     async fn send_raw_transaction(&self, data: Bytes) -> Result<B256, ErrorObjectOwned> {
+        // Reject empty or oversized payloads before passing to the verifier.
+        const MAX_RAW_TX_SIZE: usize = 128 * 1024; // 128 KiB
+        if data.is_empty() {
+            return Err(ErrorObjectOwned::from(RpcError::InvalidTransaction(
+                "empty transaction".to_string(),
+            )));
+        }
+        if data.len() > MAX_RAW_TX_SIZE {
+            return Err(ErrorObjectOwned::from(RpcError::InvalidTransaction(
+                format!(
+                    "transaction exceeds maximum size of {} bytes",
+                    MAX_RAW_TX_SIZE
+                ),
+            )));
+        }
         self.state
             .send_raw_transaction(data.as_ref())
             .await
@@ -492,8 +507,16 @@ impl<S: StateProvider> EthApiServer for EthRpcServer<S> {
         _newest_block: BlockNumberOrTag,
         _reward_percentiles: Option<Vec<f64>>,
     ) -> Result<FeeHistory, ErrorObjectOwned> {
-        // Return zero fees for the requested block count
-        let count = block_count.to::<usize>().min(1024);
+        // Per EIP-1559 and go-ethereum: block_count must be in [1, 1024].
+        const MAX_FEE_HISTORY_BLOCKS: u64 = 1024;
+        let count_raw = block_count.to::<u64>();
+        if count_raw == 0 || count_raw > MAX_FEE_HISTORY_BLOCKS {
+            return Err(ErrorObjectOwned::from(RpcError::InvalidParams(format!(
+                "block count must be between 1 and {}",
+                MAX_FEE_HISTORY_BLOCKS
+            ))));
+        }
+        let count = count_raw as usize;
         Ok(FeeHistory {
             oldest_block: U64::ZERO,
             base_fee_per_gas: vec![U256::ZERO; count + 1],
@@ -538,6 +561,14 @@ impl<S: StateProvider> Web3ApiServer for EthRpcServer<S> {
     }
 
     async fn sha3(&self, data: Bytes) -> Result<B256, ErrorObjectOwned> {
+        // Reject absurdly large inputs to prevent CPU/allocation DoS.
+        const MAX_SHA3_INPUT: usize = 128 * 1024; // 128 KiB
+        if data.len() > MAX_SHA3_INPUT {
+            return Err(ErrorObjectOwned::from(RpcError::InvalidParams(format!(
+                "input exceeds maximum allowed size of {} bytes",
+                MAX_SHA3_INPUT
+            ))));
+        }
         use sha3::{Digest, Keccak256};
         let mut hasher = Keccak256::new();
         hasher.update(data.as_ref());
@@ -599,11 +630,13 @@ impl<S: StateProvider> EthPubSubApiServer for EthRpcServer<S> {
             "newPendingTransactions" => SubscriptionKind::NewPendingTransactions,
             "syncing" => SubscriptionKind::Syncing,
             _ => {
-                // Reject unknown subscription types
+                // Reject unknown subscription types.
+                // Truncate the reflected kind string to avoid echoing arbitrary user input.
+                let safe_kind: String = kind.chars().take(64).collect();
                 pending
                     .reject(jsonrpsee::types::ErrorObject::owned(
                         -32602,
-                        format!("Unknown subscription type: {}", kind),
+                        format!("Unknown subscription type: {}", safe_kind),
                         None::<()>,
                     ))
                     .await;

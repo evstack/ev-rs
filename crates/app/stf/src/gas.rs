@@ -279,34 +279,10 @@ impl GasCounter {
 mod tests {
     use super::*;
     use evolve_core::Message;
+    use evolve_testing::proptest_config::proptest_config;
     use proptest::prelude::*;
 
     const MAX_OPS: usize = 64;
-    const DEFAULT_CASES: u32 = 128;
-    const CI_CASES: u32 = 32;
-
-    fn proptest_cases() -> u32 {
-        if let Ok(value) = std::env::var("EVOLVE_PROPTEST_CASES") {
-            if let Ok(parsed) = value.parse::<u32>() {
-                if parsed > 0 {
-                    return parsed;
-                }
-            }
-        }
-
-        if std::env::var("EVOLVE_CI").is_ok() || std::env::var("CI").is_ok() {
-            return CI_CASES;
-        }
-
-        DEFAULT_CASES
-    }
-
-    fn proptest_config() -> proptest::test_runner::Config {
-        proptest::test_runner::Config {
-            cases: proptest_cases(),
-            ..Default::default()
-        }
-    }
 
     #[derive(Clone, Debug)]
     enum Op {

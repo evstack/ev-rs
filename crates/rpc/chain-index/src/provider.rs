@@ -602,10 +602,20 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
         to_block: u64,
         filter: &LogFilter,
     ) -> Result<Vec<RpcLog>, RpcError> {
+        // Reject inverted ranges immediately (matches go-ethereum behavior).
+        if from_block > to_block {
+            return Err(RpcError::InvalidParams(format!(
+                "fromBlock ({}) is greater than toBlock ({})",
+                from_block, to_block
+            )));
+        }
+
         let mut result = Vec::new();
 
         // Limit range to prevent DoS
         let max_blocks = 1000u64;
+        // Maximum log entries returned in a single getLogs call.
+        const MAX_LOGS: usize = 10_000;
         let actual_to = to_block.min(from_block.saturating_add(max_blocks));
 
         for block_num in from_block..=actual_to {
@@ -667,6 +677,12 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
                             }
                         }
 
+                        if result.len() >= MAX_LOGS {
+                            return Err(RpcError::InvalidParams(format!(
+                                "query returned more than {} results; narrow the filter range",
+                                MAX_LOGS
+                            )));
+                        }
                         result.push(stored_log.to_rpc_log(
                             block_num,
                             block.hash,

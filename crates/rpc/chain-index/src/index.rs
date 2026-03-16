@@ -1020,6 +1020,7 @@ mod model_tests {
     };
     use super::*;
     use alloy_primitives::Address;
+    use evolve_testing::proptest_config::proptest_config;
     use proptest::prelude::*;
     use std::collections::HashMap;
 
@@ -1194,6 +1195,8 @@ mod model_tests {
     }
 
     proptest! {
+        #![proptest_config(proptest_config())]
+
         /// Model-based test: verify that PersistentChainIndex behaves identically to the reference model.
         #[test]
         fn prop_chain_index_matches_model(operations in arb_operations(30)) {

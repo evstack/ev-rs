@@ -1,7 +1,8 @@
 //! Property-based tests for transaction encoding/decoding roundtrips.
 
 use alloy_consensus::{SignableTransaction, TxEip1559, TxLegacy};
-use alloy_primitives::{Address, Bytes, U256};
+use alloy_primitives::{Address, Bytes, TxKind, U256};
+use evolve_testing::proptest_config::proptest_config;
 use evolve_tx_eth::{tx_type, TxEnvelope, TypedTransaction};
 use k256::ecdsa::{SigningKey, VerifyingKey};
 use proptest::prelude::*;
@@ -31,7 +32,18 @@ fn arb_bytes(max_len: usize) -> impl Strategy<Value = Bytes> {
 }
 
 fn arb_u256() -> impl Strategy<Value = U256> {
-    prop::array::uniform32(any::<u8>()).prop_map(|bytes| U256::from_be_bytes(bytes))
+    prop_oneof![
+        3 => prop::array::uniform32(any::<u8>()).prop_map(U256::from_be_bytes),
+        1 => Just(U256::ZERO),
+        1 => Just(U256::MAX),
+    ]
+}
+
+fn arb_tx_kind() -> impl Strategy<Value = TxKind> {
+    prop_oneof![
+        4 => arb_address().prop_map(TxKind::Call),
+        1 => Just(TxKind::Create),
+    ]
 }
 
 fn arb_legacy_tx() -> impl Strategy<Value = TxLegacy> {
@@ -39,7 +51,7 @@ fn arb_legacy_tx() -> impl Strategy<Value = TxLegacy> {
         any::<u64>(),                 // nonce
         1u128..1_000_000_000_000u128, // gas_price (reasonable range)
         21000u64..1_000_000u64,       // gas_limit
-        arb_address(),                // to
+        arb_tx_kind(),                // to
         arb_u256(),                   // value
         arb_bytes(256),               // input (smaller for faster tests)
     )
@@ -48,7 +60,7 @@ fn arb_legacy_tx() -> impl Strategy<Value = TxLegacy> {
             nonce,
             gas_price,
             gas_limit,
-            to: alloy_primitives::TxKind::Call(to),
+            to,
             value,
             input,
         })
@@ -60,7 +72,7 @@ fn arb_eip1559_tx() -> impl Strategy<Value = TxEip1559> {
         21000u64..1_000_000u64,     // gas_limit
         1u128..100_000_000_000u128, // max_fee_per_gas
         1u128..10_000_000_000u128,  // max_priority_fee
-        arb_address(),              // to
+        arb_tx_kind(),              // to
         arb_u256(),                 // value
         arb_bytes(256),             // input
     )
@@ -71,7 +83,7 @@ fn arb_eip1559_tx() -> impl Strategy<Value = TxEip1559> {
                 gas_limit,
                 max_fee_per_gas: max_fee,
                 max_priority_fee_per_gas: max_priority.min(max_fee), // priority <= max
-                to: alloy_primitives::TxKind::Call(to),
+                to,
                 value,
                 input,
                 access_list: Default::default(),
@@ -84,7 +96,7 @@ fn arb_eip1559_tx() -> impl Strategy<Value = TxEip1559> {
 // ============================================================================
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(20))]
+    #![proptest_config(proptest_config())]
 
     /// Property: Encoding then decoding a legacy transaction preserves all fields
     #[test]
@@ -112,8 +124,9 @@ proptest! {
         prop_assert_eq!(decoded.value(), tx.value);
         prop_assert_eq!(decoded.input(), tx.input.as_ref());
 
-        if let alloy_primitives::TxKind::Call(to) = tx.to {
-            prop_assert_eq!(decoded.to(), Some(to));
+        match tx.to {
+            TxKind::Call(to) => prop_assert_eq!(decoded.to(), Some(to)),
+            TxKind::Create => prop_assert_eq!(decoded.to(), None),
         }
     }
 
@@ -143,8 +156,9 @@ proptest! {
         prop_assert_eq!(decoded.value(), tx.value);
         prop_assert_eq!(decoded.input(), tx.input.as_ref());
 
-        if let alloy_primitives::TxKind::Call(to) = tx.to {
-            prop_assert_eq!(decoded.to(), Some(to));
+        match tx.to {
+            TxKind::Call(to) => prop_assert_eq!(decoded.to(), Some(to)),
+            TxKind::Create => prop_assert_eq!(decoded.to(), None),
         }
     }
 
@@ -242,7 +256,7 @@ impl TxModel {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(15))]
+    #![proptest_config(proptest_config())]
 
     /// Model test: TxEnvelope preserves the model
     #[test]
