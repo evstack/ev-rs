@@ -42,6 +42,9 @@ pub struct RpcReceipt {
     pub tx_type: U64,
     /// Status (1 = success, 0 = failure)
     pub status: U64,
+    /// Revert reason for failed transactions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revert_reason: Option<String>,
 }
 
 impl RpcReceipt {
@@ -78,6 +81,7 @@ impl RpcReceipt {
             logs_bloom: Bytes::new(),
             tx_type: U64::ZERO,
             status: U64::from(Self::STATUS_SUCCESS),
+            revert_reason: None,
         }
     }
 
@@ -108,6 +112,7 @@ impl RpcReceipt {
             logs_bloom: Bytes::new(),
             tx_type: U64::ZERO,
             status: U64::from(Self::STATUS_FAILURE),
+            revert_reason: None,
         }
     }
 

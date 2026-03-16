@@ -878,6 +878,7 @@ mod tests {
             logs: vec![],
             status: 1,
             tx_type: 0,
+            revert_reason: None,
         }
     }
 

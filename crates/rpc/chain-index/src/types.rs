@@ -169,6 +169,9 @@ pub struct StoredReceipt {
     pub status: u8,
     /// Transaction type.
     pub tx_type: u8,
+    /// Revert reason for failed transactions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub revert_reason: Option<String>,
 }
 
 impl StoredReceipt {
@@ -204,6 +207,7 @@ impl StoredReceipt {
             logs_bloom: Bytes::new(),
             tx_type: U64::from(self.tx_type as u64),
             status: U64::from(self.status as u64),
+            revert_reason: self.revert_reason.clone(),
         }
     }
 }

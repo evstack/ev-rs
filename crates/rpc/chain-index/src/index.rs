@@ -172,12 +172,10 @@ impl PersistentChainIndex {
                  miner BLOB NOT NULL,
                  extra_data BLOB NOT NULL
              );
-             CREATE INDEX IF NOT EXISTS idx_blocks_hash ON blocks(hash);
 
              CREATE TABLE IF NOT EXISTS transactions (
                  hash BLOB PRIMARY KEY,
                  block_number INTEGER NOT NULL,
-                 block_hash BLOB NOT NULL,
                  transaction_index INTEGER NOT NULL,
                  from_addr BLOB NOT NULL,
                  to_addr BLOB,
@@ -200,7 +198,6 @@ impl PersistentChainIndex {
              CREATE TABLE IF NOT EXISTS receipts (
                  transaction_hash BLOB PRIMARY KEY,
                  transaction_index INTEGER NOT NULL,
-                 block_hash BLOB NOT NULL,
                  block_number INTEGER NOT NULL,
                  from_addr BLOB NOT NULL,
                  to_addr BLOB,
@@ -209,6 +206,7 @@ impl PersistentChainIndex {
                  contract_address BLOB,
                  status INTEGER NOT NULL,
                  tx_type INTEGER NOT NULL,
+                 revert_reason TEXT,
                  FOREIGN KEY (block_number) REFERENCES blocks(number)
              );
              CREATE INDEX IF NOT EXISTS idx_receipts_block ON receipts(block_number);
@@ -280,6 +278,10 @@ impl PersistentChainIndex {
         })
     }
 
+    /// Parse a transaction row. Expected column order:
+    /// t.hash, t.block_number, b.hash (block_hash from JOIN), t.transaction_index,
+    /// t.from_addr, t.to_addr, t.value, t.gas, t.gas_price, t.input, t.nonce,
+    /// t.v, t.r, t.s, t.tx_type, t.chain_id, t.max_fee_per_gas, t.max_priority_fee_per_gas
     fn row_to_stored_transaction(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredTransaction> {
         use alloy_primitives::{Bytes, U256};
 
@@ -329,6 +331,10 @@ impl PersistentChainIndex {
         })
     }
 
+    /// Parse a receipt row. Expected column order:
+    /// r.transaction_hash, r.transaction_index, b.hash (block_hash from JOIN),
+    /// r.block_number, r.from_addr, r.to_addr, r.cumulative_gas_used, r.gas_used,
+    /// r.contract_address, r.status, r.tx_type, t.gas_price, r.revert_reason
     fn row_to_stored_receipt(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredReceipt> {
         let transaction_hash_bytes: Vec<u8> = row.get(0)?;
         let transaction_index: i64 = row.get(1)?;
@@ -342,6 +348,7 @@ impl PersistentChainIndex {
         let status: i64 = row.get(9)?;
         let tx_type: i64 = row.get(10)?;
         let effective_gas_price_bytes: Vec<u8> = row.get(11)?;
+        let revert_reason: Option<String> = row.get(12)?;
 
         let to = to_bytes
             .as_deref()
@@ -366,6 +373,7 @@ impl PersistentChainIndex {
             logs: vec![], // logs are stored separately
             status: status as u8,
             tx_type: tx_type as u8,
+            revert_reason,
         })
     }
 }
@@ -457,10 +465,12 @@ impl ChainIndex for PersistentChainIndex {
 
         let conn = self.read_conn()?;
         let result = conn.query_row(
-            "SELECT hash, block_number, block_hash, transaction_index, from_addr, to_addr,
-                    value, gas, gas_price, input, nonce, v, r, s, tx_type, chain_id,
-                    max_fee_per_gas, max_priority_fee_per_gas
-             FROM transactions WHERE hash = ?",
+            "SELECT t.hash, t.block_number, b.hash, t.transaction_index, t.from_addr, t.to_addr,
+                    t.value, t.gas, t.gas_price, t.input, t.nonce, t.v, t.r, t.s, t.tx_type,
+                    t.chain_id, t.max_fee_per_gas, t.max_priority_fee_per_gas
+             FROM transactions t
+             INNER JOIN blocks b ON b.number = t.block_number
+             WHERE t.hash = ?",
             params![hash.as_slice()],
             Self::row_to_stored_transaction,
         );
@@ -500,14 +510,15 @@ impl ChainIndex for PersistentChainIndex {
 
         let conn = self.read_conn()?;
         let result = conn.query_row(
-            "SELECT receipts.transaction_hash, receipts.transaction_index, receipts.block_hash,
-                    receipts.block_number, receipts.from_addr, receipts.to_addr,
-                    receipts.cumulative_gas_used, receipts.gas_used,
-                    receipts.contract_address, receipts.status, receipts.tx_type,
-                    transactions.gas_price
-             FROM receipts
-             INNER JOIN transactions ON transactions.hash = receipts.transaction_hash
-             WHERE receipts.transaction_hash = ?",
+            "SELECT r.transaction_hash, r.transaction_index, b.hash,
+                    r.block_number, r.from_addr, r.to_addr,
+                    r.cumulative_gas_used, r.gas_used,
+                    r.contract_address, r.status, r.tx_type,
+                    t.gas_price, r.revert_reason
+             FROM receipts r
+             INNER JOIN transactions t ON t.hash = r.transaction_hash
+             INNER JOIN blocks b ON b.number = r.block_number
+             WHERE r.transaction_hash = ?",
             params![hash.as_slice()],
             Self::row_to_stored_receipt,
         );
@@ -632,14 +643,13 @@ fn insert_transaction(
 ) -> ChainIndexResult<()> {
     tx.execute(
         "INSERT OR REPLACE INTO transactions
-         (hash, block_number, block_hash, transaction_index, from_addr, to_addr,
+         (hash, block_number, transaction_index, from_addr, to_addr,
           value, gas, gas_price, input, nonce, v, r, s, tx_type, chain_id,
           max_fee_per_gas, max_priority_fee_per_gas)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             transaction.hash.as_slice(),
             transaction.block_number as i64,
-            transaction.block_hash.as_slice(),
             array_index,
             transaction.from.as_slice(),
             transaction.to.as_ref().map(|a| a.as_slice()),
@@ -671,13 +681,12 @@ fn insert_receipt(
 ) -> ChainIndexResult<()> {
     tx.execute(
         "INSERT OR REPLACE INTO receipts
-         (transaction_hash, transaction_index, block_hash, block_number, from_addr, to_addr,
-          cumulative_gas_used, gas_used, contract_address, status, tx_type)
+         (transaction_hash, transaction_index, block_number, from_addr, to_addr,
+          cumulative_gas_used, gas_used, contract_address, status, tx_type, revert_reason)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         params![
             receipt.transaction_hash.as_slice(),
             array_index,
-            receipt.block_hash.as_slice(),
             receipt.block_number as i64,
             receipt.from.as_slice(),
             receipt.to.as_ref().map(|a| a.as_slice()),
@@ -686,6 +695,7 @@ fn insert_receipt(
             receipt.contract_address.as_ref().map(|a| a.as_slice()),
             receipt.status as i64,
             receipt.tx_type as i64,
+            receipt.revert_reason.as_deref(),
         ],
     )?;
     Ok(())
@@ -864,6 +874,7 @@ mod tests {
             logs: vec![],
             status: if success { 1 } else { 0 },
             tx_type: 0,
+            revert_reason: None,
         }
     }
 

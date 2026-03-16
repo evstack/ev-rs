@@ -41,6 +41,23 @@ pub struct BlockStorageConfig {
     ///
     /// Default: 4096 bytes
     pub replay_buffer: usize,
+
+    /// Zstd compression level for block data (1-21).
+    ///
+    /// Borsh-encoded blocks compress well due to repetitive hash structures.
+    /// Level 3 gives ~2x compression with minimal CPU overhead.
+    /// Set to 0 to disable compression.
+    /// Default: 3
+    pub compression_level: u8,
+
+    /// Number of recent blocks to retain before pruning.
+    ///
+    /// Pruning happens at section granularity (`blocks_per_section`), so the
+    /// actual retention may be slightly higher. Set to 0 to disable pruning
+    /// (keep all blocks).
+    ///
+    /// Default: 100_000 (~1 day at 1 block/sec)
+    pub retention_blocks: u64,
 }
 
 impl Default for BlockStorageConfig {
@@ -51,6 +68,8 @@ impl Default for BlockStorageConfig {
             key_write_buffer: 1024 * 1024,       // 1MB
             value_write_buffer: 4 * 1024 * 1024, // 4MB
             replay_buffer: 4096,
+            compression_level: 3,
+            retention_blocks: 100_000,
         }
     }
 }

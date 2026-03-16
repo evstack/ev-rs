@@ -117,9 +117,14 @@ where
             key_partition: format!("{}-block-index", config.partition_prefix),
             key_page_cache,
             value_partition: format!("{}-block-data", config.partition_prefix),
-            // No compression by default. Blocks are often already compressed (gzip/zstd
-            // at the application layer), so double-compression wastes CPU.
-            compression: None,
+            // Zstd compression for block data. Borsh-encoded ArchivedBlocks contain
+            // repetitive structure (hashes, encoded txs) and compress well.
+            // Level 3 gives ~2x ratio with minimal CPU. 0 = disabled.
+            compression: if config.compression_level > 0 {
+                Some(config.compression_level)
+            } else {
+                None
+            },
             // `bytes::Bytes` uses `RangeCfg<usize>` as its codec config.
             // An unbounded range accepts blocks of any size.
             codec_config: RangeCfg::from(..),
