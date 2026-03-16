@@ -345,7 +345,9 @@ impl<S: StateProvider> ExecutionService for ExecutionServiceImpl<S> {
             .request
             .as_ref()
             .and_then(proto_to_call_request)
-            .ok_or_else(|| GrpcError::InvalidArgument("Missing or invalid call request".to_string()))?;
+            .ok_or_else(|| {
+                GrpcError::InvalidArgument("Missing or invalid call request".to_string())
+            })?;
 
         let block_num = self
             .resolve_block(req.block.as_ref())
@@ -372,7 +374,9 @@ impl<S: StateProvider> ExecutionService for ExecutionServiceImpl<S> {
             .request
             .as_ref()
             .and_then(proto_to_call_request)
-            .ok_or_else(|| GrpcError::InvalidArgument("Missing or invalid call request".to_string()))?;
+            .ok_or_else(|| {
+                GrpcError::InvalidArgument("Missing or invalid call request".to_string())
+            })?;
 
         let block_num = self
             .resolve_block(req.block.as_ref())
