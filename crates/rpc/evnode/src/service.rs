@@ -630,6 +630,19 @@ where
         let mut cumulative_bytes: u64 = 0;
         let mut cumulative_gas: u64 = 0;
 
+        // Use request limits if non-zero, otherwise fall back to configured defaults.
+        // Callers must not be able to disable limits by sending zero.
+        let effective_max_bytes = if req.max_bytes > 0 {
+            req.max_bytes
+        } else {
+            self.config.max_bytes
+        };
+        let effective_max_gas = if req.max_gas > 0 {
+            req.max_gas
+        } else {
+            self.config.max_gas
+        };
+
         for raw_tx in &req.txs {
             let tx_bytes = raw_tx.len() as u64;
 
@@ -646,10 +659,9 @@ where
             let tx_gas = Self::estimate_tx_gas(&tx);
 
             // Check size limit
-            let would_exceed_bytes =
-                req.max_bytes > 0 && cumulative_bytes + tx_bytes > req.max_bytes;
+            let would_exceed_bytes = cumulative_bytes + tx_bytes > effective_max_bytes;
             // Check gas limit
-            let would_exceed_gas = req.max_gas > 0 && cumulative_gas + tx_gas > req.max_gas;
+            let would_exceed_gas = cumulative_gas + tx_gas > effective_max_gas;
 
             if would_exceed_bytes || would_exceed_gas {
                 // Transaction is valid but doesn't fit - postpone it

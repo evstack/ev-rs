@@ -18,6 +18,7 @@ sha2.workspace = true
 
 [dev-dependencies]
 proptest = "1.4"
+evolve_testing = { workspace = true, features = ["proptest"] }
 
 [lints]
 workspace = true

@@ -7,12 +7,45 @@ use evolve_mempool::{Mempool, SharedMempool};
 use evolve_stf_traits::AccountsCodeStorage;
 use evolve_tx_eth::TxContext;
 use tonic::transport::Server;
+use tonic::{Request, Status};
 
 use crate::proto::evnode::v1::executor_service_server::ExecutorServiceServer;
 use crate::service::{
     EvnodeStfExecutor, ExecutorServiceConfig, ExecutorServiceImpl, OnBlockExecuted,
     StateChangeCallback,
 };
+
+/// Metadata key used to carry the shared-secret auth token.
+pub const AUTH_TOKEN_METADATA_KEY: &str = "x-evnode-token";
+
+/// Build a tonic interceptor that enforces a shared-secret bearer token.
+///
+/// The interceptor reads the `x-evnode-token` metadata key from every
+/// incoming request and rejects the call with `UNAUTHENTICATED` if the
+/// value is absent or does not match `expected_token`.
+///
+/// # Security note
+///
+/// This provides defense-in-depth for the privileged evnode execution
+/// interface. The server should **also** be bound to a loopback or VPN
+/// interface — token auth is not a substitute for network-level isolation.
+pub fn make_auth_interceptor(
+    expected_token: String,
+) -> impl Fn(Request<()>) -> Result<Request<()>, Status> + Clone {
+    move |req: Request<()>| {
+        let provided = req
+            .metadata()
+            .get(AUTH_TOKEN_METADATA_KEY)
+            .and_then(|v| v.to_str().ok());
+
+        match provided {
+            Some(token) if token == expected_token => Ok(req),
+            _ => Err(Status::unauthenticated(
+                "missing or invalid evnode auth token",
+            )),
+        }
+    }
+}
 
 /// Configuration for the EVNode gRPC server.
 #[derive(Debug, Clone)]
@@ -25,6 +58,16 @@ pub struct EvnodeServerConfig {
     pub max_message_size: usize,
     /// Executor service configuration.
     pub executor_config: ExecutorServiceConfig,
+    /// Optional shared-secret auth token.
+    ///
+    /// When set, every inbound gRPC call must carry this value in the
+    /// `x-evnode-token` metadata header. Calls without a valid token
+    /// are rejected with `UNAUTHENTICATED`.
+    ///
+    /// **Strongly recommended** when the server is not exclusively
+    /// reachable from localhost. The `EVOLVE_EVNODE_AUTH_TOKEN` environment
+    /// variable is a convenient source for this value.
+    pub auth_token: Option<String>,
 }
 
 impl Default for EvnodeServerConfig {
@@ -34,6 +77,7 @@ impl Default for EvnodeServerConfig {
             enable_gzip: true,
             max_message_size: 4 * 1024 * 1024, // 4MB
             executor_config: ExecutorServiceConfig::default(),
+            auth_token: std::env::var("EVOLVE_EVNODE_AUTH_TOKEN").ok(),
         }
     }
 }
