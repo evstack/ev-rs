@@ -1218,26 +1218,58 @@ mod tests {
     // Tests boundary condition (capping at 1024)
 
     #[tokio::test]
-    async fn test_fee_history_capped_at_1024() {
+    async fn test_fee_history_rejects_over_1024() {
         let provider = MockStateProvider::new().with_block_number(100);
         let server = EthRpcServer::new(RpcServerConfig::default(), provider);
 
-        // Request more than 1024 blocks - should be capped
-        let result = EthApiServer::fee_history(
+        // Request more than 1024 blocks - should be rejected
+        let err = EthApiServer::fee_history(
             &server,
             U64::from(2000),
             BlockNumberOrTag::Tag(BlockTag::Latest),
             None,
         )
         .await
+        .unwrap_err();
+
+        assert_eq!(err.code(), jsonrpsee::types::error::INVALID_PARAMS_CODE);
+        assert!(err.message().contains("block count must be between 1 and 1024"));
+    }
+
+    #[tokio::test]
+    async fn test_fee_history_rejects_zero() {
+        let provider = MockStateProvider::new().with_block_number(100);
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        let err = EthApiServer::fee_history(
+            &server,
+            U64::ZERO,
+            BlockNumberOrTag::Tag(BlockTag::Latest),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code(), jsonrpsee::types::error::INVALID_PARAMS_CODE);
+    }
+
+    #[tokio::test]
+    async fn test_fee_history_at_max() {
+        let provider = MockStateProvider::new().with_block_number(2000);
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        // Exactly 1024 should succeed
+        let result = EthApiServer::fee_history(
+            &server,
+            U64::from(1024),
+            BlockNumberOrTag::Tag(BlockTag::Latest),
+            None,
+        )
+        .await
         .unwrap();
 
-        assert_eq!(result.base_fee_per_gas.len(), 1025); // capped at 1024 + 1
+        assert_eq!(result.base_fee_per_gas.len(), 1025);
         assert_eq!(result.gas_used_ratio.len(), 1024);
-        assert_eq!(result.oldest_block, U64::ZERO);
-        assert!(result.reward.is_none());
-        assert!(result.base_fee_per_gas.iter().all(|fee| *fee == U256::ZERO));
-        assert!(result.gas_used_ratio.iter().all(|ratio| *ratio == 0.0));
     }
 
     // ==================== Transaction count extraction ====================
