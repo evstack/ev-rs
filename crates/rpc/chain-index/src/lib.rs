@@ -44,5 +44,5 @@ pub use integration::{build_index_data, event_to_stored_log, index_block, BlockM
 pub use provider::{
     ChainStateProvider, ChainStateProviderConfig, NoopAccountCodes, DEFAULT_PROTOCOL_VERSION,
 };
-pub use querier::{StateQuerier, StorageStateQuerier};
+pub use querier::{RpcExecutionContext, StateQuerier, StorageStateQuerier};
 pub use types::*;
