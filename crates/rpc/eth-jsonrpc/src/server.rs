@@ -1233,7 +1233,9 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(err.code(), jsonrpsee::types::error::INVALID_PARAMS_CODE);
-        assert!(err.message().contains("block count must be between 1 and 1024"));
+        assert!(err
+            .message()
+            .contains("block count must be between 1 and 1024"));
     }
 
     #[tokio::test]

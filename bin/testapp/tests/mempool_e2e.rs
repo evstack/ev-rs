@@ -275,18 +275,21 @@ impl AsyncMockStorage {
 
     /// Initialize an EthEoaAccount's storage (nonce and eth_address).
     fn init_eth_eoa_storage(&self, account_id: AccountId, eth_address: [u8; 20]) {
-        // Storage keys are: account_id + prefix (u8)
+        use evolve_core::runtime_api::ACCOUNT_STORAGE_PREFIX;
+        // Storage keys are: ACCOUNT_STORAGE_PREFIX + account_id + prefix (u8)
         // Item::new(0) = nonce, Item::new(1) = eth_address
         let mut data = self.data.write().unwrap();
 
-        let mut nonce_key = account_id.as_bytes().to_vec();
+        let mut nonce_key = vec![ACCOUNT_STORAGE_PREFIX];
+        nonce_key.extend_from_slice(&account_id.as_bytes());
         nonce_key.push(0u8);
         data.insert(
             nonce_key,
             Message::new(&0u64).unwrap().into_bytes().unwrap(),
         );
 
-        let mut addr_key = account_id.as_bytes().to_vec();
+        let mut addr_key = vec![ACCOUNT_STORAGE_PREFIX];
+        addr_key.extend_from_slice(&account_id.as_bytes());
         addr_key.push(1u8);
         data.insert(
             addr_key,
@@ -296,18 +299,21 @@ impl AsyncMockStorage {
 
     /// Initialize an Ed25519AuthAccount's storage (nonce and public key).
     fn init_ed25519_auth_storage(&self, account_id: AccountId, public_key: [u8; 32]) {
-        // Storage keys are: account_id + prefix (u8)
+        use evolve_core::runtime_api::ACCOUNT_STORAGE_PREFIX;
+        // Storage keys are: ACCOUNT_STORAGE_PREFIX + account_id + prefix (u8)
         // Item::new(0) = nonce, Item::new(1) = public key
         let mut data = self.data.write().unwrap();
 
-        let mut nonce_key = account_id.as_bytes().to_vec();
+        let mut nonce_key = vec![ACCOUNT_STORAGE_PREFIX];
+        nonce_key.extend_from_slice(&account_id.as_bytes());
         nonce_key.push(0u8);
         data.insert(
             nonce_key,
             Message::new(&0u64).unwrap().into_bytes().unwrap(),
         );
 
-        let mut pubkey_key = account_id.as_bytes().to_vec();
+        let mut pubkey_key = vec![ACCOUNT_STORAGE_PREFIX];
+        pubkey_key.extend_from_slice(&account_id.as_bytes());
         pubkey_key.push(1u8);
         data.insert(
             pubkey_key,
@@ -317,7 +323,9 @@ impl AsyncMockStorage {
 
     /// Set token balance directly in storage for a specific account.
     fn set_token_balance(&self, token_account_id: AccountId, account_id: AccountId, balance: u128) {
-        let mut key = token_account_id.as_bytes().to_vec();
+        use evolve_core::runtime_api::ACCOUNT_STORAGE_PREFIX;
+        let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+        key.extend_from_slice(&token_account_id.as_bytes());
         key.push(1u8); // Token::balances storage prefix
         key.extend(account_id.encode().expect("encode account id"));
         let value = Message::new(&balance).unwrap().into_bytes().unwrap();
@@ -417,9 +425,11 @@ fn create_signed_tx(
 }
 
 fn read_nonce<S: ReadonlyKV>(storage: &S, account_id: AccountId) -> u64 {
+    use evolve_core::runtime_api::ACCOUNT_STORAGE_PREFIX;
     use evolve_core::Message;
 
-    let mut nonce_key = account_id.as_bytes().to_vec();
+    let mut nonce_key = vec![ACCOUNT_STORAGE_PREFIX];
+    nonce_key.extend_from_slice(&account_id.as_bytes());
     nonce_key.push(0u8);
     match storage.get(&nonce_key).expect("read nonce") {
         Some(value) => Message::from_bytes(value)
@@ -437,7 +447,8 @@ fn read_token_balance<S: ReadonlyKV>(
     use evolve_core::encoding::Encodable;
     use evolve_core::Message;
 
-    let mut key = token_account_id.as_bytes().to_vec();
+    let mut key = vec![evolve_core::runtime_api::ACCOUNT_STORAGE_PREFIX];
+    key.extend_from_slice(&token_account_id.as_bytes());
     key.push(1u8); // Token::balances storage prefix
     key.extend(account_id.encode().expect("encode account id"));
 

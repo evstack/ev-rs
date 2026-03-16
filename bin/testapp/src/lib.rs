@@ -418,7 +418,8 @@ mod tests {
         token_account_id: AccountId,
         account_id: AccountId,
     ) -> u128 {
-        let mut key = token_account_id.as_bytes().to_vec();
+        let mut key = vec![evolve_core::runtime_api::ACCOUNT_STORAGE_PREFIX];
+        key.extend_from_slice(&token_account_id.as_bytes());
         key.push(1u8);
         key.extend(account_id.encode().expect("encode account id"));
 

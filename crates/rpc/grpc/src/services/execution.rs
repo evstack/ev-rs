@@ -775,7 +775,7 @@ mod tests {
             .await
             .expect_err("missing call request should fail");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(err.message().contains("Missing call request"));
+        assert!(err.message().contains("Missing or invalid call request"));
     }
 
     #[tokio::test]
