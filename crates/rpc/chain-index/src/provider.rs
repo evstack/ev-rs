@@ -337,7 +337,13 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
             .get_block(number)
             .map_err(RpcError::from)?
             .map(|b| b.timestamp)
-            .unwrap_or(0);
+            .unwrap_or_else(|| {
+                tracing::warn!(
+                    block = number,
+                    "block not yet indexed, using timestamp 0 for query context"
+                );
+                0
+            });
         Ok(BlockContext::new(number, timestamp))
     }
 }

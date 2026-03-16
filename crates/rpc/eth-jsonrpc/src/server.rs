@@ -930,7 +930,7 @@ mod tests {
                     RpcError::GasEstimationFailed(msg) => {
                         RpcError::GasEstimationFailed(msg.clone())
                     }
-                    RpcError::NotImplemented(method) => RpcError::NotImplemented(*method),
+                    RpcError::NotImplemented(method) => RpcError::NotImplemented(method),
                     RpcError::InvalidBlockNumberOrTag => RpcError::InvalidBlockNumberOrTag,
                     RpcError::InvalidAddress(msg) => RpcError::InvalidAddress(msg.clone()),
                     RpcError::InvalidTransaction(msg) => RpcError::InvalidTransaction(msg.clone()),

@@ -268,7 +268,6 @@ impl<S: ReadonlyKV + Send + Sync, A: AccountsCodeStorage + Send + Sync, E: RpcEx
         }])
     }
 
-
     fn input_bytes(request: &CallRequest) -> Vec<u8> {
         request.input_data().map(|b| b.to_vec()).unwrap_or_default()
     }
