@@ -229,6 +229,13 @@ impl PersistentChainIndex {
                  value BLOB NOT NULL
              );",
         )?;
+
+        // Migration: add revert_reason column to existing receipts tables that
+        // were created before this column existed. ALTER TABLE ADD COLUMN is a
+        // no-op if the column already exists (SQLite returns "duplicate column"
+        // which we ignore).
+        let _ = conn.execute_batch("ALTER TABLE receipts ADD COLUMN revert_reason TEXT;");
+
         Ok(())
     }
 

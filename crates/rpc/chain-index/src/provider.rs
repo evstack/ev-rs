@@ -616,7 +616,7 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
         let max_blocks = 1000u64;
         // Maximum log entries returned in a single getLogs call.
         const MAX_LOGS: usize = 10_000;
-        let actual_to = to_block.min(from_block.saturating_add(max_blocks));
+        let actual_to = to_block.min(from_block.saturating_add(max_blocks - 1));
 
         for block_num in from_block..=actual_to {
             // Get block for hash

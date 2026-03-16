@@ -52,7 +52,7 @@ pub fn make_auth_interceptor(
 }
 
 /// Configuration for the EVNode gRPC server.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct EvnodeServerConfig {
     /// Address to bind the gRPC server to.
     pub addr: SocketAddr,
@@ -82,6 +82,22 @@ pub struct EvnodeServerConfig {
     pub require_auth: bool,
 }
 
+impl std::fmt::Debug for EvnodeServerConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EvnodeServerConfig")
+            .field("addr", &self.addr)
+            .field("enable_gzip", &self.enable_gzip)
+            .field("max_message_size", &self.max_message_size)
+            .field("executor_config", &self.executor_config)
+            .field(
+                "auth_token",
+                &self.auth_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field("require_auth", &self.require_auth)
+            .finish()
+    }
+}
+
 impl Default for EvnodeServerConfig {
     fn default() -> Self {
         Self {
@@ -89,7 +105,9 @@ impl Default for EvnodeServerConfig {
             enable_gzip: true,
             max_message_size: 4 * 1024 * 1024, // 4MB
             executor_config: ExecutorServiceConfig::default(),
-            auth_token: std::env::var("EVOLVE_EVNODE_AUTH_TOKEN").ok(),
+            auth_token: std::env::var("EVOLVE_EVNODE_AUTH_TOKEN")
+                .ok()
+                .filter(|t| !t.trim().is_empty()),
             require_auth: true,
         }
     }
