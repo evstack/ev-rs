@@ -336,14 +336,8 @@ impl<I: ChainIndex, A: AccountsCodeStorage + Send + Sync> ChainStateProvider<I, 
             .index
             .get_block(number)
             .map_err(RpcError::from)?
-            .map(|b| b.timestamp)
-            .unwrap_or_else(|| {
-                tracing::warn!(
-                    block = number,
-                    "block not yet indexed, using timestamp 0 for query context"
-                );
-                0
-            });
+            .ok_or(RpcError::BlockNotFound)?
+            .timestamp;
         Ok(BlockContext::new(number, timestamp))
     }
 }
@@ -1439,11 +1433,17 @@ mod tests {
     #[tokio::test]
     async fn state_queries_default_to_latest_block() {
         let querier = Arc::new(RecordingStateQuerier::default());
-        let provider = default_provider(Arc::new(MockChainIndex {
+        let block_hash = B256::repeat_byte(0x91);
+        let mut index = MockChainIndex {
             latest: Some(9),
             ..Default::default()
-        }))
-        .with_state_querier(querier.clone());
+        };
+        index.blocks_by_number.insert(9, block(9, block_hash));
+        index
+            .blocks_by_hash
+            .insert(block_hash, block(9, block_hash));
+
+        let provider = default_provider(Arc::new(index)).with_state_querier(querier.clone());
 
         provider
             .call(&CallRequest::default(), None)

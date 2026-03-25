@@ -22,7 +22,7 @@ import {
   parseGwei,
   stringToHex,
 } from "viem";
-import { privateKeyToAccount } from "viem/accounts";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = resolve(SCRIPT_DIR, "..", "..");
@@ -43,11 +43,6 @@ const RPC_READY_TIMEOUT_MS = 120_000;
 const RPC_POLL_INTERVAL_MS = 1_000;
 const NODE_SHUTDOWN_TIMEOUT_MS = 10_000;
 const RPC_PORT_CANDIDATES = [18545, 28545, 38545, 48545];
-
-const SENDER_PRIVATE_KEY =
-  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
-const RECIPIENT_PRIVATE_KEY =
-  "0x59c6995e998f97a5a0044966f0945382d7f0f8cb9b8b9c5d91b3ef1c0d8f4a7c" as const;
 
 const INITIAL_SENDER_BALANCE = 1_000n;
 const INITIAL_RECIPIENT_BALANCE = 1n;
@@ -121,11 +116,11 @@ function buildGenesisFile(path: string, sender: Address, recipient: Address): vo
     accounts: [
       {
         eth_address: sender,
-        balance: Number(INITIAL_SENDER_BALANCE),
+        balance: INITIAL_SENDER_BALANCE.toString(),
       },
       {
         eth_address: recipient,
-        balance: Number(INITIAL_RECIPIENT_BALANCE),
+        balance: INITIAL_RECIPIENT_BALANCE.toString(),
       },
     ],
   };
@@ -256,9 +251,10 @@ function assertNodeRunning(node: NodeHandle, phase: string): void {
     );
   }
 
-  if (node.process.exitCode !== null) {
+  if (node.process.exitCode !== null || node.process.signalCode !== null) {
+    const termination = node.process.exitCode ?? node.process.signalCode;
     throw new Error(
-      `testapp exited while ${phase} (exit ${node.process.exitCode})\n${node.getLogs().trim()}`
+      `testapp exited while ${phase} (${termination})\n${node.getLogs().trim()}`
     );
   }
 }
@@ -316,13 +312,13 @@ async function stopNode(node: NodeHandle): Promise<void> {
     return;
   }
 
-  if (node.process.exitCode !== null) {
+  if (node.process.exitCode !== null || node.process.signalCode !== null) {
     return;
   }
 
   node.process.kill("SIGINT");
   const stopped = await waitForExit(node.process, NODE_SHUTDOWN_TIMEOUT_MS);
-  if (!stopped && node.process.exitCode === null) {
+  if (!stopped && node.process.exitCode === null && node.process.signalCode === null) {
     node.process.kill("SIGKILL");
     await waitForExit(node.process, NODE_SHUTDOWN_TIMEOUT_MS);
   }
@@ -420,9 +416,14 @@ function isPortAvailable(port: number): Promise<boolean> {
   });
 }
 
+function resolveAccount(envKey: string): ReturnType<typeof privateKeyToAccount> {
+  const privateKey = process.env[envKey]?.trim() as Hex | undefined;
+  return privateKeyToAccount(privateKey ?? generatePrivateKey());
+}
+
 async function main(): Promise<void> {
-  const sender = privateKeyToAccount(SENDER_PRIVATE_KEY);
-  const recipient = privateKeyToAccount(RECIPIENT_PRIVATE_KEY);
+  const sender = resolveAccount("SENDER_PRIVATE_KEY");
+  const recipient = resolveAccount("RECIPIENT_PRIVATE_KEY");
 
   const sandboxDir = mkdtempSync(join(tmpdir(), "evolve-viem-demo-"));
   let node: NodeHandle | undefined;

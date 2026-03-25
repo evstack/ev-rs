@@ -535,7 +535,16 @@ impl<
             CallExecutionOutcome::Success(result) => result,
             CallExecutionOutcome::UnknownTarget => return Ok(Bytes::new()),
         };
-        Self::response_bytes(result.response.expect("checked by fallback helper"))
+        let response = match result.response {
+            Ok(response) => response,
+            Err(err) => {
+                return Err(RpcError::InternalError(format!(
+                    "unexpected execution error after success guard: {:?}",
+                    err
+                )));
+            }
+        };
+        Self::response_bytes(response)
     }
 
     async fn estimate_gas(

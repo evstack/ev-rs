@@ -28,7 +28,27 @@ pub struct TokenConfig {
 #[derive(Deserialize)]
 pub struct AccountConfig {
     pub eth_address: String,
+    #[serde(deserialize_with = "deserialize_u128_balance")]
     pub balance: u128,
+}
+
+fn deserialize_u128_balance<'de, D>(deserializer: D) -> Result<u128, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::Number(number) => number
+            .to_string()
+            .parse::<u128>()
+            .map_err(|e| Error::custom(format!("invalid balance number: {e}"))),
+        serde_json::Value::String(text) => text
+            .parse::<u128>()
+            .map_err(|e| Error::custom(format!("invalid balance string: {e}"))),
+        _ => Err(Error::custom("expected balance as number or string")),
+    }
 }
 
 /// Persisted genesis result (replaces testapp's GenesisAccounts for evd).
