@@ -233,6 +233,8 @@ type RuntimeContext = TokioContext;
 /// subsystem — all produced blocks must be persisted.
 async fn build_block_archive(context: TokioContext) -> OnBlockArchive {
     let config = BlockStorageConfig::default();
+    let retention = config.retention_blocks;
+    let prune_interval = config.blocks_per_section;
     let store = BlockStorage::new(context, config)
         .await
         .expect("failed to initialize block archive storage");
@@ -246,10 +248,18 @@ async fn build_block_archive(context: TokioContext) -> OnBlockArchive {
             if let Err(e) = store.put_sync(block_number, block_hash, block_bytes).await {
                 tracing::warn!("Failed to archive block {}: {:?}", block_number, e);
             }
+
+            // Prune old blocks at section boundaries to bound disk usage.
+            if retention > 0 && block_number > retention && block_number % prune_interval == 0 {
+                let min_block = block_number.saturating_sub(retention);
+                if let Err(e) = store.prune(min_block).await {
+                    tracing::warn!(min_block, "Failed to prune block archive: {:?}", e);
+                }
+            }
         }
     });
 
-    tracing::info!("Block archive storage enabled");
+    tracing::info!(retention, "Block archive storage enabled");
 
     Arc::new(move |block_number, block_hash, block_bytes| {
         let hash_bytes = ArchiveBlockHash::new(block_hash.0);

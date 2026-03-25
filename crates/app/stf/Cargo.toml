@@ -17,6 +17,7 @@ linkme = {version = "0.3", default-features = false, optional = true}
 
 [dev-dependencies]
 proptest = "1.4"
+evolve_testing = { workspace = true, features = ["proptest"] }
 
 [lints]
 workspace = true

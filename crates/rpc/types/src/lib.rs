@@ -197,6 +197,7 @@ mod tests {
 #[cfg(test)]
 mod proptests {
     use super::*;
+    use evolve_testing::proptest_config::proptest_config;
     use proptest::prelude::*;
 
     fn arb_account_id() -> impl Strategy<Value = evolve_core::AccountId> {
@@ -284,6 +285,8 @@ mod proptests {
     }
 
     proptest! {
+        #![proptest_config(proptest_config())]
+
         #[test]
         fn prop_account_id_to_address_is_deterministic(id in arb_account_id()) {
             prop_assert_eq!(account_id_to_address(id), account_id_to_address(id));

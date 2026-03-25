@@ -26,8 +26,8 @@ struct Args {
     #[arg(long, default_value = "http://127.0.0.1:8545")]
     rpc_url: String,
 
-    /// Chain ID used for signing EIP-1559 transactions
-    #[arg(long, default_value_t = 1)]
+    /// Chain ID used for signing EIP-1559 transactions (default matches Evolve's DEFAULT_CHAIN_ID)
+    #[arg(long, default_value_t = 900_901)]
     chain_id: u64,
 
     /// Token account Ethereum address (0x...) that exposes `transfer`

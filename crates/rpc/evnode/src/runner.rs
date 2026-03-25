@@ -557,6 +557,8 @@ pub fn run_external_consensus_node_eth<
                 enable_gzip: config.grpc.enable_gzip,
                 max_message_size: config.grpc_max_message_size_usize(),
                 executor_config,
+                auth_token: std::env::var("EVOLVE_EVNODE_AUTH_TOKEN").ok(),
+                require_auth: true,
             };
             let server =
                 EvnodeServer::with_mempool(grpc_config, stf, storage.clone(), codes, mempool)

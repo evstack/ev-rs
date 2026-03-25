@@ -35,11 +35,19 @@ pub struct RpcServerConfig {
     pub chain_id: u64,
 }
 
+/// Default chain ID for the Evolve network.
+///
+/// Deliberately chosen to be distinct from any live EVM network to prevent
+/// cross-chain replay of transactions signed against a default configuration.
+/// Override via `RpcServerConfig { chain_id: <your_id>, .. }` or the
+/// `EVOLVE_CHAIN__CHAIN_ID` environment variable when running a production node.
+pub const DEFAULT_CHAIN_ID: u64 = 900_901;
+
 impl Default for RpcServerConfig {
     fn default() -> Self {
         Self {
             http_addr: "127.0.0.1:8545".parse().unwrap(),
-            chain_id: 1,
+            chain_id: DEFAULT_CHAIN_ID,
         }
     }
 }
@@ -434,6 +442,21 @@ impl<S: StateProvider> EthApiServer for EthRpcServer<S> {
     }
 
     async fn send_raw_transaction(&self, data: Bytes) -> Result<B256, ErrorObjectOwned> {
+        // Reject empty or oversized payloads before passing to the verifier.
+        const MAX_RAW_TX_SIZE: usize = 128 * 1024; // 128 KiB
+        if data.is_empty() {
+            return Err(ErrorObjectOwned::from(RpcError::InvalidTransaction(
+                "empty transaction".to_string(),
+            )));
+        }
+        if data.len() > MAX_RAW_TX_SIZE {
+            return Err(ErrorObjectOwned::from(RpcError::InvalidTransaction(
+                format!(
+                    "transaction exceeds maximum size of {} bytes",
+                    MAX_RAW_TX_SIZE
+                ),
+            )));
+        }
         self.state
             .send_raw_transaction(data.as_ref())
             .await
@@ -492,8 +515,16 @@ impl<S: StateProvider> EthApiServer for EthRpcServer<S> {
         _newest_block: BlockNumberOrTag,
         _reward_percentiles: Option<Vec<f64>>,
     ) -> Result<FeeHistory, ErrorObjectOwned> {
-        // Return zero fees for the requested block count
-        let count = block_count.to::<usize>().min(1024);
+        // Per EIP-1559 and go-ethereum: block_count must be in [1, 1024].
+        const MAX_FEE_HISTORY_BLOCKS: u64 = 1024;
+        let count_raw = block_count.to::<u64>();
+        if count_raw == 0 || count_raw > MAX_FEE_HISTORY_BLOCKS {
+            return Err(ErrorObjectOwned::from(RpcError::InvalidParams(format!(
+                "block count must be between 1 and {}",
+                MAX_FEE_HISTORY_BLOCKS
+            ))));
+        }
+        let count = count_raw as usize;
         Ok(FeeHistory {
             oldest_block: U64::ZERO,
             base_fee_per_gas: vec![U256::ZERO; count + 1],
@@ -538,6 +569,14 @@ impl<S: StateProvider> Web3ApiServer for EthRpcServer<S> {
     }
 
     async fn sha3(&self, data: Bytes) -> Result<B256, ErrorObjectOwned> {
+        // Reject absurdly large inputs to prevent CPU/allocation DoS.
+        const MAX_SHA3_INPUT: usize = 128 * 1024; // 128 KiB
+        if data.len() > MAX_SHA3_INPUT {
+            return Err(ErrorObjectOwned::from(RpcError::InvalidParams(format!(
+                "input exceeds maximum allowed size of {} bytes",
+                MAX_SHA3_INPUT
+            ))));
+        }
         use sha3::{Digest, Keccak256};
         let mut hasher = Keccak256::new();
         hasher.update(data.as_ref());
@@ -599,11 +638,13 @@ impl<S: StateProvider> EthPubSubApiServer for EthRpcServer<S> {
             "newPendingTransactions" => SubscriptionKind::NewPendingTransactions,
             "syncing" => SubscriptionKind::Syncing,
             _ => {
-                // Reject unknown subscription types
+                // Reject unknown subscription types.
+                // Truncate the reflected kind string to avoid echoing arbitrary user input.
+                let safe_kind: String = kind.chars().take(64).collect();
                 pending
                     .reject(jsonrpsee::types::ErrorObject::owned(
                         -32602,
-                        format!("Unknown subscription type: {}", kind),
+                        format!("Unknown subscription type: {}", safe_kind),
                         None::<()>,
                     ))
                     .await;
@@ -1177,26 +1218,60 @@ mod tests {
     // Tests boundary condition (capping at 1024)
 
     #[tokio::test]
-    async fn test_fee_history_capped_at_1024() {
+    async fn test_fee_history_rejects_over_1024() {
         let provider = MockStateProvider::new().with_block_number(100);
         let server = EthRpcServer::new(RpcServerConfig::default(), provider);
 
-        // Request more than 1024 blocks - should be capped
-        let result = EthApiServer::fee_history(
+        // Request more than 1024 blocks - should be rejected
+        let err = EthApiServer::fee_history(
             &server,
             U64::from(2000),
             BlockNumberOrTag::Tag(BlockTag::Latest),
             None,
         )
         .await
+        .unwrap_err();
+
+        assert_eq!(err.code(), jsonrpsee::types::error::INVALID_PARAMS_CODE);
+        assert!(err
+            .message()
+            .contains("block count must be between 1 and 1024"));
+    }
+
+    #[tokio::test]
+    async fn test_fee_history_rejects_zero() {
+        let provider = MockStateProvider::new().with_block_number(100);
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        let err = EthApiServer::fee_history(
+            &server,
+            U64::ZERO,
+            BlockNumberOrTag::Tag(BlockTag::Latest),
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code(), jsonrpsee::types::error::INVALID_PARAMS_CODE);
+    }
+
+    #[tokio::test]
+    async fn test_fee_history_at_max() {
+        let provider = MockStateProvider::new().with_block_number(2000);
+        let server = EthRpcServer::new(RpcServerConfig::default(), provider);
+
+        // Exactly 1024 should succeed
+        let result = EthApiServer::fee_history(
+            &server,
+            U64::from(1024),
+            BlockNumberOrTag::Tag(BlockTag::Latest),
+            None,
+        )
+        .await
         .unwrap();
 
-        assert_eq!(result.base_fee_per_gas.len(), 1025); // capped at 1024 + 1
+        assert_eq!(result.base_fee_per_gas.len(), 1025);
         assert_eq!(result.gas_used_ratio.len(), 1024);
-        assert_eq!(result.oldest_block, U64::ZERO);
-        assert!(result.reward.is_none());
-        assert!(result.base_fee_per_gas.iter().all(|fee| *fee == U256::ZERO));
-        assert!(result.gas_used_ratio.iter().all(|ratio| *ratio == 0.0));
     }
 
     // ==================== Transaction count extraction ====================

@@ -250,9 +250,16 @@ impl ShardedDbCache {
 
     /// Prefetches multiple keys in parallel by grouping them by shard.
     /// This is useful for cache warming before transaction execution.
-    pub fn prefetch_keys<F>(&self, keys: &[Vec<u8>], fetch_fn: F)
+    ///
+    /// The fetch function must return `Ok(Some(v))` if the key exists,
+    /// `Ok(None)` if the key is confirmed absent, or `Err(_)` to skip
+    /// caching the key entirely (e.g. on transient I/O errors).
+    ///
+    /// Using `Err` on error prevents a transient failure from incorrectly
+    /// populating a negative cache entry that would mask later successful reads.
+    pub fn prefetch_keys<E, F>(&self, keys: &[Vec<u8>], fetch_fn: F)
     where
-        F: Fn(&[u8]) -> Option<Vec<u8>> + Sync,
+        F: Fn(&[u8]) -> Result<Option<Vec<u8>>, E> + Sync,
     {
         // Group keys by shard to minimize lock acquisitions
         let mut shard_keys: [Vec<&Vec<u8>>; NUM_SHARDS] = std::array::from_fn(|_| Vec::new());
@@ -273,12 +280,13 @@ impl ShardedDbCache {
                     continue;
                 }
 
-                // Fetch from storage and cache
+                // Fetch from storage and cache; errors leave the key as a cache miss.
                 match fetch_fn(key) {
-                    Some(value) => {
+                    Ok(Some(value)) => {
                         self.shards[shard_idx].insert((*key).clone(), CachedValue::Present(value))
                     }
-                    None => self.shards[shard_idx].insert((*key).clone(), CachedValue::Absent),
+                    Ok(None) => self.shards[shard_idx].insert((*key).clone(), CachedValue::Absent),
+                    Err(_) => {} // transient error — skip caching, will retry on next access
                 }
             }
         }
@@ -533,9 +541,11 @@ mod tests {
             b"\x00key3".to_vec(), // Same shard as key1
         ];
 
-        // Mock fetch function
-        cache.prefetch_keys(&keys, |key| {
-            Some(format!("value_for_{}", String::from_utf8_lossy(key)).into_bytes())
+        // Mock fetch function — returns Ok(Some(_)) for all keys (infallible).
+        cache.prefetch_keys(&keys, |key| -> Result<Option<Vec<u8>>, ()> {
+            Ok(Some(
+                format!("value_for_{}", String::from_utf8_lossy(key)).into_bytes(),
+            ))
         });
 
         // All keys should be cached

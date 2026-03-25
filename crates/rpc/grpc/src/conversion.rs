@@ -317,14 +317,32 @@ pub fn proto_to_log_filter(filter: &proto::LogFilter) -> RpcLogFilter {
 // ============================================================================
 
 /// Convert proto CallRequest to RpcCallRequest.
-pub fn proto_to_call_request(req: &proto::CallRequest) -> RpcCallRequest {
-    RpcCallRequest {
-        from: req.from.as_ref().and_then(proto_to_address),
-        to: req
-            .to
-            .as_ref()
-            .and_then(proto_to_address)
-            .unwrap_or(Address::ZERO),
+///
+/// Returns `None` if address fields are present but have invalid byte lengths.
+/// A missing `to` field is treated as contract creation and mapped to
+/// `Address::ZERO`; callers must reject `None` rather than silently routing
+/// malformed requests.
+pub fn proto_to_call_request(req: &proto::CallRequest) -> Option<RpcCallRequest> {
+    let to = req.to.as_ref().and_then(proto_to_address).or_else(|| {
+        // A missing `to` field is only valid for contract-creation calls.
+        // We represent that as Address::ZERO here and let the STF decide,
+        // but only when the field is truly absent (None), not when it is
+        // present with an invalid encoding.
+        if req.to.is_none() {
+            Some(Address::ZERO)
+        } else {
+            None
+        }
+    })?;
+
+    let from = match req.from.as_ref() {
+        Some(f) => Some(proto_to_address(f)?),
+        None => None,
+    };
+
+    Some(RpcCallRequest {
+        from,
+        to,
         gas: req.gas.map(U64::from),
         gas_price: req.gas_price.as_ref().map(proto_to_u256),
         max_fee_per_gas: req.max_fee_per_gas.as_ref().map(proto_to_u256),
@@ -332,7 +350,7 @@ pub fn proto_to_call_request(req: &proto::CallRequest) -> RpcCallRequest {
         value: req.value.as_ref().map(proto_to_u256),
         data: req.data.as_ref().map(|d| Bytes::copy_from_slice(d)),
         input: None,
-    }
+    })
 }
 
 // ============================================================================

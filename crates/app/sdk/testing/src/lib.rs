@@ -3,9 +3,13 @@
 // Testing code - determinism requirements do not apply.
 #![allow(clippy::disallowed_types)]
 
+#[cfg(feature = "proptest")]
+pub mod proptest_config;
+
 pub mod server_mocks;
 
 use evolve_core::encoding::{Decodable, Encodable};
+use evolve_core::runtime_api::ACCOUNT_STORAGE_PREFIX;
 use evolve_core::storage_api::{
     StorageGetRequest, StorageGetResponse, StorageRemoveRequest, StorageRemoveResponse,
     StorageSetRequest, StorageSetResponse, STORAGE_ACCOUNT_ID,
@@ -111,7 +115,8 @@ impl MockEnv {
             StorageSetRequest::FUNCTION_IDENTIFIER => {
                 let storage_set: StorageSetRequest = request.get()?;
 
-                let mut key = self.whoami.as_bytes().to_vec();
+                let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+                key.extend_from_slice(&self.whoami.as_bytes());
                 key.extend(storage_set.key);
 
                 self.state.insert(key, storage_set.value.as_vec()?);
@@ -120,7 +125,8 @@ impl MockEnv {
             }
             StorageRemoveRequest::FUNCTION_IDENTIFIER => {
                 let storage_remove: StorageRemoveRequest = request.get()?;
-                let mut key = self.whoami.as_bytes().to_vec();
+                let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+                key.extend_from_slice(&self.whoami.as_bytes());
                 key.extend(storage_remove.key);
                 self.state.remove(&key);
                 Ok(InvokeResponse::new(&StorageRemoveResponse {})?)
@@ -134,7 +140,8 @@ impl MockEnv {
             StorageGetRequest::FUNCTION_IDENTIFIER => {
                 let storage_get: StorageGetRequest = request.get()?;
 
-                let mut key = storage_get.account_id.as_bytes().to_vec();
+                let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+                key.extend_from_slice(&storage_get.account_id.as_bytes());
                 key.extend(storage_get.key);
 
                 let value = self.state.get(&key).cloned();

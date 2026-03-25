@@ -344,8 +344,10 @@ impl<S: StateProvider> ExecutionService for ExecutionServiceImpl<S> {
         let call_request = req
             .request
             .as_ref()
-            .map(proto_to_call_request)
-            .ok_or_else(|| GrpcError::InvalidArgument("Missing call request".to_string()))?;
+            .and_then(proto_to_call_request)
+            .ok_or_else(|| {
+                GrpcError::InvalidArgument("Missing or invalid call request".to_string())
+            })?;
 
         let block_num = self
             .resolve_block(req.block.as_ref())
@@ -371,8 +373,10 @@ impl<S: StateProvider> ExecutionService for ExecutionServiceImpl<S> {
         let call_request = req
             .request
             .as_ref()
-            .map(proto_to_call_request)
-            .ok_or_else(|| GrpcError::InvalidArgument("Missing call request".to_string()))?;
+            .and_then(proto_to_call_request)
+            .ok_or_else(|| {
+                GrpcError::InvalidArgument("Missing or invalid call request".to_string())
+            })?;
 
         let block_num = self
             .resolve_block(req.block.as_ref())
@@ -771,7 +775,7 @@ mod tests {
             .await
             .expect_err("missing call request should fail");
         assert_eq!(err.code(), tonic::Code::InvalidArgument);
-        assert!(err.message().contains("Missing call request"));
+        assert!(err.message().contains("Missing or invalid call request"));
     }
 
     #[tokio::test]

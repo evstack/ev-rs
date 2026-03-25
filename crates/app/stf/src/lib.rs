@@ -107,42 +107,20 @@ pub struct QueryContext {
 mod model_tests {
     use super::*;
     use borsh::{BorshDeserialize, BorshSerialize};
-    use evolve_core::runtime_api::ACCOUNT_IDENTIFIER_PREFIX;
+    use evolve_core::runtime_api::{ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_STORAGE_PREFIX};
     use evolve_core::storage_api::{StorageSetRequest, STORAGE_ACCOUNT_ID};
     use evolve_core::{ErrorCode, FungibleAsset, Message};
     use evolve_stf_traits::{
         AccountsCodeStorage, BeginBlocker as BeginBlockerTrait, Block as BlockTrait, EndBlocker,
         PostTxExecution, Transaction, TxValidator, WritableKV,
     };
+    use evolve_testing::proptest_config::proptest_config;
     use hashbrown::HashMap;
     use proptest::prelude::*;
 
-    const DEFAULT_CASES: u32 = 32;
-    const CI_CASES: u32 = 8;
     const MAX_TXS: usize = 16;
     const TEST_ACCOUNT_ID: AccountId = AccountId::from_u64(100);
     const DEFAULT_SENDER_ID: AccountId = AccountId::from_u64(200);
-
-    fn proptest_cases() -> u32 {
-        if let Ok(value) = std::env::var("EVOLVE_PROPTEST_CASES") {
-            if let Ok(parsed) = value.parse::<u32>() {
-                if parsed > 0 {
-                    return parsed;
-                }
-            }
-        }
-        if std::env::var("EVOLVE_CI").is_ok() || std::env::var("CI").is_ok() {
-            return CI_CASES;
-        }
-        DEFAULT_CASES
-    }
-
-    fn proptest_config() -> proptest::test_runner::Config {
-        proptest::test_runner::Config {
-            cases: proptest_cases(),
-            ..Default::default()
-        }
-    }
 
     #[derive(Clone, Debug, BorshSerialize, BorshDeserialize)]
     struct TestMsg {
@@ -361,9 +339,19 @@ mod model_tests {
     }
 
     fn account_storage_key(account: AccountId, key: &[u8]) -> Vec<u8> {
-        let mut out = account.as_bytes().to_vec();
+        let mut out = vec![ACCOUNT_STORAGE_PREFIX];
+        out.extend_from_slice(&account.as_bytes());
         out.extend_from_slice(key);
         out
+    }
+
+    /// Model the gas a single set(key, value) costs, matching `GasCounter::consume_set_gas`.
+    fn model_set_gas(config: &StorageGasConfig, storage_key: &[u8], value: &[u8]) -> u64 {
+        let total_size = (storage_key.len() as u64)
+            .saturating_add(1)
+            .saturating_add(value.len() as u64)
+            .saturating_add(1);
+        config.storage_set_charge.saturating_mul(total_size)
     }
 
     fn account_code_key(account: AccountId) -> Vec<u8> {
@@ -508,13 +496,7 @@ mod model_tests {
                 });
 
                 let storage_key = account_storage_key(test_account, &key);
-                // Use storage_set_charge for set operations
-                let gas_needed = gas_config.storage_set_charge.saturating_mul(
-                    (storage_key.len() as u64)
-                        .saturating_add(1)
-                        .saturating_add(value.len() as u64)
-                        .saturating_add(1),
-                );
+                let gas_needed = model_set_gas(&gas_config, &storage_key, &value);
                 let out_of_gas = gas_needed > gas_limit;
 
                 if !fail_validate && !fail_after_write && !out_of_gas {
@@ -531,13 +513,7 @@ mod model_tests {
                 let tx = &block.txs[idx];
                 let msg: TestMsg = tx.request.get().unwrap();
                 let storage_key = account_storage_key(tx.recipient, &msg.key);
-                // Use storage_set_charge for set operations
-                let gas_needed = gas_config.storage_set_charge.saturating_mul(
-                    (storage_key.len() as u64)
-                        .saturating_add(1)
-                        .saturating_add(msg.value.len() as u64)
-                        .saturating_add(1),
-                );
+                let gas_needed = model_set_gas(&gas_config, &storage_key, &msg.value);
                 let out_of_gas = gas_needed > tx.gas_limit;
 
                 if tx.fail_validate {

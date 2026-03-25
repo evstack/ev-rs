@@ -53,7 +53,8 @@ pub mod proto {
 pub use error::EvnodeError;
 pub use runner::run_external_consensus_node_eth;
 pub use server::{
-    start_evnode_server, start_evnode_server_with_mempool, EvnodeServer, EvnodeServerConfig,
+    make_auth_interceptor, start_evnode_server, start_evnode_server_with_mempool, EvnodeServer,
+    EvnodeServerConfig, AUTH_TOKEN_METADATA_KEY,
 };
 pub use service::{
     compute_state_root, BlockExecutedInfo, EvnodeStfExecutor, ExecutorServiceConfig,

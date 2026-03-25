@@ -40,6 +40,7 @@ r2d2_sqlite = "0.32"
 [dev-dependencies]
 proptest = "1.4"
 tempfile = "3"
+evolve_testing = { workspace = true, features = ["proptest"] }
 
 [lints]
 workspace = true
