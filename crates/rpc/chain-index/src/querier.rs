@@ -566,7 +566,9 @@ mod tests {
     use borsh::{BorshDeserialize, BorshSerialize};
     use evolve_core::encoding::Decodable;
     use evolve_core::low_level::{exec_account, query_account};
-    use evolve_core::runtime_api::{ACCOUNT_IDENTIFIER_PREFIX, RUNTIME_ACCOUNT_ID};
+    use evolve_core::runtime_api::{
+        ACCOUNT_IDENTIFIER_PREFIX, ACCOUNT_STORAGE_PREFIX, RUNTIME_ACCOUNT_ID,
+    };
     use evolve_core::schema::AccountSchema;
     use evolve_core::storage_api::{
         StorageGetRequest, StorageGetResponse, StorageSetRequest, StorageSetResponse,
@@ -808,28 +810,32 @@ mod tests {
     }
 
     fn eoa_forward_key(address: Address) -> Vec<u8> {
-        let mut key = RUNTIME_ACCOUNT_ID.as_bytes().to_vec();
+        let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+        key.extend_from_slice(&RUNTIME_ACCOUNT_ID.as_bytes());
         key.extend_from_slice(EOA_ADDR_TO_ID_PREFIX);
         key.extend_from_slice(address.as_slice());
         key
     }
 
     fn eoa_reverse_key(account_id: AccountId) -> Vec<u8> {
-        let mut key = RUNTIME_ACCOUNT_ID.as_bytes().to_vec();
+        let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+        key.extend_from_slice(&RUNTIME_ACCOUNT_ID.as_bytes());
         key.extend_from_slice(EOA_ID_TO_ADDR_PREFIX);
         key.extend_from_slice(&account_id.as_bytes());
         key
     }
 
     fn contract_forward_key(address: Address) -> Vec<u8> {
-        let mut key = RUNTIME_ACCOUNT_ID.as_bytes().to_vec();
+        let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+        key.extend_from_slice(&RUNTIME_ACCOUNT_ID.as_bytes());
         key.extend_from_slice(CONTRACT_ADDR_TO_ID_PREFIX);
         key.extend_from_slice(address.as_slice());
         key
     }
 
     fn contract_reverse_key(account_id: AccountId) -> Vec<u8> {
-        let mut key = RUNTIME_ACCOUNT_ID.as_bytes().to_vec();
+        let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+        key.extend_from_slice(&RUNTIME_ACCOUNT_ID.as_bytes());
         key.extend_from_slice(CONTRACT_ID_TO_ADDR_PREFIX);
         key.extend_from_slice(&account_id.as_bytes());
         key
