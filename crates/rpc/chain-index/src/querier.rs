@@ -849,7 +849,6 @@ mod tests {
 
     fn runtime_account_slot_key(account_id: AccountId, slot: u8) -> Vec<u8> {
         let mut key = vec![ACCOUNT_STORAGE_PREFIX];
-        key.extend_from_slice(&RUNTIME_ACCOUNT_ID.as_bytes());
         key.extend_from_slice(&account_id.as_bytes());
         key.push(slot);
         key
