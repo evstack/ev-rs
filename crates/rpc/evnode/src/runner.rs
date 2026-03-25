@@ -18,7 +18,7 @@ use commonware_runtime::tokio::{Config as TokioConfig, Context as TokioContext, 
 use commonware_runtime::{Runner as RunnerTrait, Spawner};
 use evolve_chain_index::{
     build_index_data, BlockMetadata, ChainIndex, ChainStateProvider, ChainStateProviderConfig,
-    PersistentChainIndex, StateQuerier, StorageStateQuerier,
+    PersistentChainIndex, RpcExecutionContext, StateQuerier, StorageStateQuerier,
 };
 use evolve_core::{AccountId, ReadonlyKV};
 use evolve_eth_jsonrpc::{start_server_with_subscriptions, RpcServerConfig, SubscriptionManager};
@@ -334,17 +334,19 @@ async fn run_server_with_shutdown<F, E>(
     }
 }
 
-async fn start_external_consensus_rpc_server<S, Codes, BuildCodes>(
+async fn start_external_consensus_rpc_server<S, Codes, Exec, BuildCodes>(
     config: &NodeConfig,
     storage: S,
     mempool: SharedMempool<Mempool<TxContext>>,
     chain_index: &Option<SharedChainIndex>,
     token_account_id: AccountId,
+    executor: Arc<Exec>,
     build_codes: &BuildCodes,
 ) -> Option<RpcRuntimeHandle>
 where
     S: ReadonlyKV + Clone + Send + Sync + 'static,
     Codes: AccountsCodeStorage + Send + Sync + 'static,
+    Exec: RpcExecutionContext + Send + Sync + 'static,
     BuildCodes: Fn() -> Codes + Clone + Send + Sync + 'static,
 {
     if !config.rpc.enabled {
@@ -360,8 +362,12 @@ where
         gas_price: U256::ZERO,
         sync_status: SyncStatus::NotSyncing(false),
     };
-    let state_querier: Arc<dyn StateQuerier> =
-        Arc::new(StorageStateQuerier::new(storage, token_account_id));
+    let state_querier: Arc<dyn StateQuerier> = Arc::new(StorageStateQuerier::new(
+        storage,
+        token_account_id,
+        Arc::clone(&codes_for_rpc),
+        executor,
+    ));
     let state_provider = ChainStateProvider::with_mempool(
         Arc::clone(&chain_index),
         state_provider_config,
@@ -369,6 +375,9 @@ where
         mempool,
     )
     .with_state_querier(state_querier);
+    state_provider
+        .ensure_rpc_compatibility()
+        .expect("external consensus RPC requires mempool, verifier, and state querier");
 
     let rpc_addr = config.parsed_rpc_addr();
     let server_config = RpcServerConfig {
@@ -413,7 +422,12 @@ pub fn run_external_consensus_node_eth<
 ) where
     Codes: AccountsCodeStorage + Send + Sync + 'static,
     S: ReadonlyKV + Storage + Clone + Send + Sync + 'static,
-    Stf: StfExecutor<TxContext, S, Codes> + EvnodeStfExecutor<S, Codes> + Send + Sync + 'static,
+    Stf: StfExecutor<TxContext, S, Codes>
+        + EvnodeStfExecutor<S, Codes>
+        + RpcExecutionContext
+        + Send
+        + Sync
+        + 'static,
     G: BorshSerialize
         + BorshDeserialize
         + Clone
@@ -509,15 +523,21 @@ pub fn run_external_consensus_node_eth<
                 Path::new(&config.storage.path),
                 config.rpc.enabled || config.rpc.enable_block_indexing,
             );
-            let rpc_handle = start_external_consensus_rpc_server(
-                &config,
-                storage.clone(),
-                mempool.clone(),
-                &chain_index,
-                genesis_result.token_account_id(),
-                build_codes.as_ref(),
-            )
-            .await;
+            let rpc_handle = if config.rpc.enabled {
+                let query_executor = Arc::new((build_stf)(&genesis_result));
+                start_external_consensus_rpc_server(
+                    &config,
+                    storage.clone(),
+                    mempool.clone(),
+                    &chain_index,
+                    genesis_result.token_account_id(),
+                    query_executor,
+                    build_codes.as_ref(),
+                )
+                .await
+            } else {
+                None
+            };
 
             let executor_config = ExecutorServiceConfig::default();
             let commit_sink = ExternalConsensusCommitSink::spawn(
