@@ -847,6 +847,14 @@ mod tests {
         key
     }
 
+    fn runtime_account_slot_key(account_id: AccountId, slot: u8) -> Vec<u8> {
+        let mut key = vec![ACCOUNT_STORAGE_PREFIX];
+        key.extend_from_slice(&RUNTIME_ACCOUNT_ID.as_bytes());
+        key.extend_from_slice(&account_id.as_bytes());
+        key.push(slot);
+        key
+    }
+
     fn setup_querier() -> (
         StorageStateQuerier<TestStorage, TestCodeStorage, TestStf>,
         Address,
@@ -909,11 +917,25 @@ mod tests {
                 .expect("nonce bytes"),
         );
         storage.state.insert(
+            runtime_account_slot_key(sender_account_id, 0),
+            Message::new(&0u64)
+                .expect("runtime nonce should encode")
+                .into_bytes()
+                .expect("runtime nonce bytes"),
+        );
+        storage.state.insert(
             account_slot_key(contract_account_id, 7),
             Message::new(&77u64)
                 .expect("query value should encode")
                 .into_bytes()
                 .expect("query value bytes"),
+        );
+        storage.state.insert(
+            runtime_account_slot_key(contract_account_id, 7),
+            Message::new(&77u64)
+                .expect("runtime query value should encode")
+                .into_bytes()
+                .expect("runtime query value bytes"),
         );
 
         let mut codes = TestCodeStorage::default();
